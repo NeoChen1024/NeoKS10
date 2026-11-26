@@ -1,10 +1,16 @@
 //! The PDP-10 parts of the emulator that do not depend on the machine.
 //!
+//! - [`word`]: words of 1 to 63 bits with the carries of the PDP-10, two's
+//!   and one's complement; the 36-bit guest word [`W36`] and the half word
+//!   [`Half`].
 //! - [`instructions`]: the opcodes of the KS10 with the ITS microcode, from
 //!   `spec/instructions.toml` through `make gen`.
 
 #[rustfmt::skip]
 pub mod instructions;
+pub mod word;
+
+pub use word::{Half, OnesSum, Sum, W36, Word};
 
 #[cfg(test)]
 mod tests {
