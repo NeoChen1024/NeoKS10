@@ -84,6 +84,11 @@ register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
 - A data checker with the pattern of the note "Data pattern".
 - Counters: transactions, stall cycles, response errors, data errors.
 
+If the MMCM loses the lock during a run, the domain of `clk_m` goes into
+reset, and the run ends without DONE. The HP port can then keep a
+transaction that the design started. Thus the PS program loads the PL again
+after a loss of the lock.
+
 The first version has one transaction in progress, sequential addresses,
 64-bit beats and HP0 only. `CAPS` shows the features of a bitstream. The PS
 program must not start a measurement that needs a feature that `CAPS` does

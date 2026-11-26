@@ -241,10 +241,14 @@ module memprobe_core #(
     always_comb
         for (int i = 0; i < 32; i++) clkm_count_s[i] = ^(clkm_gray_s >> i);
 
-    // ---- Domain of clk_s: reads of the results -------------------------------------------
-    // HIST_DROPS is the sum of the three counters; each one stops at 0xFFFFFFFF.
+    // HIST_DROPS is the sum of the three counters; it stops at 0xFFFFFFFF. The
+    // sum is a register of clk_m, so that only a stable value crosses.
     wire [33:0] drops_sum = 34'(h_drops[0]) + 34'(h_drops[1]) + 34'(h_drops[2]);
-    wire [31:0] drops_total = (drops_sum[33:32] != 2'b00) ? 32'hFFFF_FFFF : drops_sum[31:0];
+    logic [31:0] drops_total;
+    always_ff @(posedge clk_m)
+        drops_total <= (drops_sum[33:32] != 2'b00) ? 32'hFFFF_FFFF : drops_sum[31:0];
+
+    // ---- Domain of clk_s: reads of the results -------------------------------------------
 
     localparam [31:0] HIST_MASK = ~(HIST_RD_FIRST_DEPTH * 4 - 1);
     wire [31:0] a = 32'(ext_addr);

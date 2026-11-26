@@ -219,6 +219,11 @@ struct Hp {
 
     // Before the edge: read the outputs of the design and of the model.
     void pre_edge() {
+        // A reset of clk_m ends all transactions of the design; no rule applies.
+        if (d->rst_m) {
+            ar_wait = aw_wait = w_wait = r_wait = b_wait = false;
+            return;
+        }
         const bool arv = d->hp_arvalid, awv = d->hp_awvalid, wv = d->hp_wvalid;
         const bool arr = d->hp_arready, awr = d->hp_awready, wr = d->hp_wready;
         const bool rv = d->hp_rvalid, rr = d->hp_rready, bv = d->hp_bvalid, br = d->hp_bready;
@@ -306,9 +311,13 @@ struct Hp {
     // After the edge: the outputs of the model for the next cycle.
     void post_edge() {
         n++;
-        d->hp_arready = rng.chance(cfg.p_arready);
-        d->hp_awready = rng.chance(cfg.p_awready);
-        d->hp_wready = rng.chance(cfg.p_wready);
+        // While clk_m is in reset, the model takes no transaction. (After a
+        // loss of the MMCM lock during a run, the real HP port can keep a
+        // transaction; the PS program then loads the PL again.)
+        const bool in_reset = d->rst_m;
+        d->hp_arready = !in_reset && rng.chance(cfg.p_arready);
+        d->hp_awready = !in_reset && rng.chance(cfg.p_awready);
+        d->hp_wready = !in_reset && rng.chance(cfg.p_wready);
 
         // A beat that waits for RREADY stays. Otherwise present the next beat, or none.
         if (!r_wait) {
@@ -531,6 +540,7 @@ struct Sim {
     void unlock() {
         d->mmcm_locked = 0;
         d->rst_m = 1;
+        d->hp_arready = d->hp_awready = d->hp_wready = 0;
         d->clk_m = 0;
         d->eval();
         clk_m_on = false;
@@ -580,8 +590,9 @@ static void run(Sim& s, const Run& r) {
     uint32_t st = s.status();
     CHECK(st & BIT(STATUS, DONE), "no DONE, STATUS %08x", st);
     CHECK(!(st & BIT(STATUS, CFG_ERR)), "CFG_ERR, STATUS %08x", st);
-    // With one transaction in progress, a histogram gets at most one sample in
-    // 3 cycles: the FIFO never fills.
+    // With one transaction in progress, a histogram gets one sample for each
+    // transaction (3 cycles or more): the FIFO of 16 samples does not fill in
+    // these tests.
     CHECK(!(st & BIT(STATUS, HIST_DROP)), "HIST_DROP, STATUS %08x", st);
     CHECK(s.hp.idle(), "transactions in progress after the run");
     CHECK(s.hp.issued == r.total(), "issued %llu, expected %llu", (unsigned long long)s.hp.issued,
@@ -589,11 +600,14 @@ static void run(Sim& s, const Run& r) {
     s.wr(MEMPROBE_STATUS_OFFSET, BIT(STATUS, DONE));
 }
 
+static void check_initial_results(Sim& s, bool with_status);
+
 static void clear(Sim& s) {
     s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, CLEAR));
     s.wait_idle();
     s.hp.clear();
     CHECK(!(s.status() & BIT(STATUS, DONE)), "CLEAR set DONE");
+    check_initial_results(s, false);
 }
 
 static void check_results(Sim& s) {
@@ -659,9 +673,9 @@ static void test_identity(Sim& s) {
     CHECK(s.rd(MEMPROBE_CTRL_OFFSET) == 0, "CTRL reads not 0");
 }
 
-// Before any command: the results have the reset values of spec/regmap.toml.
-static void test_reset_values(Sim& s) {
-    g_step = "reset values";
+// The results have the reset values of spec/regmap.toml: after a reset, and
+// after CLEAR.
+static void check_initial_results(Sim& s, bool with_status) {
 #define R(name) {MEMPROBE_##name##_OFFSET, MEMPROBE_##name##_RESET, #name}
     struct { uint32_t off, reset; const char* name; } regs[] = {
         R(STATUS), R(RUN_CYCLES_LO), R(RUN_CYCLES_HI), R(READS_LO), R(READS_HI), R(WRITES_LO),
@@ -673,13 +687,19 @@ static void test_reset_values(Sim& s) {
     };
 #undef R
     for (auto& r : regs) {
+        if (r.off == MEMPROBE_STATUS_OFFSET && !with_status) continue;
         uint32_t v = s.rd(r.off);
         if (r.off == MEMPROBE_STATUS_OFFSET) v &= ~BIT(STATUS, MMCM_LOCKED);
-        CHECK(v == r.reset, "%s after reset: %08x, expected %08x", r.name, v, r.reset);
+        CHECK(v == r.reset, "%s: %08x, expected %08x", r.name, v, r.reset);
     }
     for (int h = 0; h < 3; h++)
         for (int b = 0; b < BINS; b += 16)
-            for (uint32_t v : s.rd_burst(HIST_OFFSET[h] + 4 * b, 16)) CHECK(v == 0, "hist %d bin after reset", h);
+            for (uint32_t v : s.rd_burst(HIST_OFFSET[h] + 4 * b, 16)) CHECK(v == 0, "hist %d bin not 0", h);
+}
+
+static void test_reset_values(Sim& s) {
+    g_step = "reset values";
+    check_initial_results(s, true);
 }
 
 static void test_registers(Sim& s) {

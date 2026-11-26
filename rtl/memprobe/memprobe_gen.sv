@@ -58,8 +58,9 @@ module memprobe_gen #(
     input  logic             bvalid,
     output logic             bready,
 
-    // Latency samples (spec/regmap.toml, note "Latency"). One value for all
-    // three: with one transaction in progress, they have the same start.
+    // Latency samples (spec/regmap.toml, note "Latency"), one cycle after the
+    // handshake. One value for all three: with one transaction in progress,
+    // they have the same start.
     output logic             smp_rd_first,
     output logic             smp_rd_last,
     output logic             smp_wr_resp,
@@ -115,7 +116,15 @@ module memprobe_gen #(
     logic             aw_done, w_done, r_first, err_seen;
 
     wire [63:0] expect_beat;
-    wire [1:0]  bad_words = 2'(rdata[31:0] != expect_beat[31:0]) + 2'(rdata[63:32] != expect_beat[63:32]);
+
+    // The data check is one cycle after the R beat, for the timing from the
+    // PS7 cell at 150 MHz.
+    logic             chk_v;
+    logic [63:0]      chk_data, chk_expect;
+    logic [OFF_W-1:0] chk_off;
+    wire        bad_lo = chk_data[31:0] != chk_expect[31:0];
+    wire        bad_hi = chk_data[63:32] != chk_expect[63:32];
+    wire [32:0] errors_sum = 33'(data_errors) + 33'(bad_lo) + 33'(bad_hi);
     memprobe_pattern #(.OFF_W(OFF_W)) pat (
         .seed(cfg_seed), .index(beat_off[OFF_W-1:3]), .beat(expect_beat));
 
@@ -130,7 +139,7 @@ module memprobe_gen #(
     assign wdata   = expect_beat;
     assign wlast   = (wbeat == cfg_len);
     assign bready  = (state == S_B);
-    assign busy    = (state != S_IDLE);
+    assign busy    = (state != S_IDLE) || chk_v || smp_rd_last || smp_wr_resp;
 
     wire ar_hs = arvalid && arready;
     wire r_hs  = rvalid && rready;
@@ -141,10 +150,14 @@ module memprobe_gen #(
     wire gap_ok = (since >= cfg_gap);
     wire more = (remaining != 0) && !stop;
 
-    assign smp_latency  = now - t_addr;
-    assign smp_rd_first = r_hs && r_first;
-    assign smp_rd_last  = r_hs && rlast;
-    assign smp_wr_resp  = b_hs;
+    // The samples are registers: they come one cycle after the handshake,
+    // with the latency of the handshake.
+    always_ff @(posedge clk) begin
+        smp_rd_first <= !rst && r_hs && r_first;
+        smp_rd_last  <= !rst && r_hs && rlast;
+        smp_wr_resp  <= !rst && b_hs;
+        smp_latency  <= now - t_addr;
+    end
 
     // A stall: the next transaction could issue, but the bus or the limit of one
     // transaction in progress stops it.
@@ -177,7 +190,27 @@ module memprobe_gen #(
             aw_done        <= 1'b0;
             w_done         <= 1'b0;
             r_first        <= 1'b0;
+            chk_v          <= 1'b0;
+            chk_data       <= '0;
+            chk_expect     <= '0;
+            chk_off        <= '0;
         end else begin
+            chk_v      <= r_hs && cfg_op == OP_CHECK;
+            chk_data   <= rdata;
+            chk_expect <= expect_beat;
+            chk_off    <= beat_off;
+            if (chk_v && (bad_lo || bad_hi)) begin
+                // Count 32-bit words; stop at 0xFFFFFFFF.
+                data_errors  <= errors_sum[32] ? 32'hFFFF_FFFF : errors_sum[31:0];
+                run_data_err <= 1'b1;
+                if (!err_seen) begin
+                    err_seen       <= 1'b1;
+                    // The first word of the beat that differs.
+                    first_err_addr <= 32'(chk_off) | (bad_lo ? 32'd0 : 32'd4);
+                    first_err_data <= chk_data;
+                end
+            end
+
             now <= now + 1'b1;
             if (since != '1) since <= since + 1'b1;
             if (busy) run_cycles <= run_cycles + 1'b1;
@@ -235,19 +268,6 @@ module memprobe_gen #(
                         if (rresp != 2'b00) begin
                             if (resp_errors != '1) resp_errors <= resp_errors + 1'b1;
                             run_resp_err <= 1'b1;
-                        end
-                        if (cfg_op == OP_CHECK && rdata != expect_beat) begin
-                            // Count 32-bit words; stop at 0xFFFFFFFF.
-                            data_errors <= (32'hFFFF_FFFF - data_errors < 32'(bad_words))
-                                         ? 32'hFFFF_FFFF : data_errors + 32'(bad_words);
-                            run_data_err <= 1'b1;
-                            if (!err_seen) begin
-                                err_seen <= 1'b1;
-                                // The first word of the beat that differs.
-                                first_err_addr <= 32'(beat_off)
-                                                | ((rdata[31:0] == expect_beat[31:0]) ? 32'd4 : 32'd0);
-                                first_err_data <= rdata;
-                            end
                         end
                         if (rlast) begin
                             reads <= reads + 1'b1;

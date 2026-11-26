@@ -30,16 +30,16 @@ module memprobe_top #(
     BUFG clk_m_bufg (.I(clk_m_mmcm), .O(clk_m));
 
     // Resets: FCLKRESETN[0] is 0 while FPGA_RST_CTRL[0] is 1. Each domain
-    // releases its reset on its clock. clk_m also stays in reset while the MMCM
-    // is not locked.
+    // releases its reset on its clock. FCLKRESETN[0] also resets the MMCM, so
+    // LOCKED is 0 then; clk_m is in reset while LOCKED is 0. (No gate between
+    // the two signals: a gate output on an asynchronous clear can glitch.)
     logic [1:0] rst_s_sync, rst_m_sync;
     always_ff @(posedge clk_s or negedge fclk_resetn[0])
         if (!fclk_resetn[0]) rst_s_sync <= '0;
         else                 rst_s_sync <= {rst_s_sync[0], 1'b1};
-    wire rst_m_n = fclk_resetn[0] && mmcm_locked;
-    always_ff @(posedge clk_m or negedge rst_m_n)
-        if (!rst_m_n) rst_m_sync <= '0;
-        else          rst_m_sync <= {rst_m_sync[0], 1'b1};
+    always_ff @(posedge clk_m or negedge mmcm_locked)
+        if (!mmcm_locked) rst_m_sync <= '0;
+        else              rst_m_sync <= {rst_m_sync[0], 1'b1};
 
     // M_AXI_GP0
     logic [31:0] gp_awaddr, gp_araddr, gp_wdata, gp_rdata;

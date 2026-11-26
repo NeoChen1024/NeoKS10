@@ -6,6 +6,9 @@
 /* verilator lint_off DECLFILENAME */
 /* verilator lint_off MULTITOP */
 /* verilator lint_off UNUSEDPARAM */
+// LOCKED goes to the reset synchronizer of clk_m and, through memprobe_sync,
+// to STATUS.MMCM_LOCKED.
+/* verilator lint_off SYNCASYNCNET */
 module BUFG (input logic I, output logic O);
     assign O = I;
 endmodule

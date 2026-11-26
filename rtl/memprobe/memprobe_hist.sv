@@ -3,8 +3,8 @@
 // Domain of clk (clk_m): samples, the statistics and the update of the bins.
 // Domain of rd_clk (FCLK0): one read port for the register window.
 //
-// A sample goes into a FIFO. The update of a bin takes two cycles: a read
-// of the block RAM, then a write. If the FIFO is full, the sample is not put
+// A sample goes into a FIFO. The update of a bin takes four cycles: a read
+// of the block RAM, its output register, the increment, then the write. If the FIFO is full, the sample is not put
 // into the histogram, and drops counts it. The statistics (minimum, maximum,
 // sum) use all samples, also the dropped samples.
 // Bin n counts the samples with latency n; the last bin counts the samples
@@ -48,22 +48,28 @@ module memprobe_hist #(
                                                             : smp_value[BINS_LOG2-1:0];
 
     // Port A: clearing, or the update of one bin.
-    localparam [1:0] U_IDLE = 2'd0, U_READ = 2'd1, U_WRITE = 2'd2, U_CLEAR = 2'd3;
-    logic [1:0]           ustate;
+    localparam [2:0] U_IDLE = 3'd0, U_READ = 3'd1, U_HOLD = 3'd2, U_INC = 3'd3, U_WRITE = 3'd4,
+                     U_CLEAR = 3'd5;
+    logic [2:0]           ustate;
     logic [BINS_LOG2-1:0] a_addr;
-    logic [31:0]          a_rdata;
+    logic [31:0]          a_rdata, a_q, a_inc;
     logic                 a_we;
     logic [31:0]          a_wdata;
 
+    // Port A does not read in a cycle with a write (NO_CHANGE). Thus port A
+    // never reads and writes in the same cycle, and the rules for a READ_FIRST
+    // port with an independent clock on the other port do not apply. A read on
+    // port B of a bin that port A writes in the same moment can give a wrong
+    // value; the register window reads the bins only when no run is in progress.
     always_ff @(posedge clk) begin
         if (a_we) mem[a_addr] <= a_wdata;
-        a_rdata <= mem[a_addr];
+        else      a_rdata <= mem[a_addr];
+        a_q <= a_rdata;     // the output register of the block RAM
+        a_inc <= (a_q == '1) ? a_q : a_q + 1'b1;
     end
 
     assign a_we    = (ustate == U_WRITE) || (ustate == U_CLEAR);
-    assign a_wdata = (ustate == U_CLEAR) ? 32'd0
-                   : (a_rdata == '1)     ? a_rdata
-                   :                       a_rdata + 1'b1;
+    assign a_wdata = (ustate == U_CLEAR) ? 32'd0 : a_inc;
     assign busy = (ustate != U_IDLE) || !fifo_empty;
 
     always_ff @(posedge clk) begin
@@ -104,7 +110,9 @@ module memprobe_hist #(
                         rp     <= rp + 1'b1;
                         ustate <= U_READ;
                     end
-                U_READ:  ustate <= U_WRITE;    // a_rdata is valid in U_WRITE
+                U_READ:  ustate <= U_HOLD;     // a_rdata is valid in U_HOLD
+                U_HOLD:  ustate <= U_INC;      // a_q is valid in U_INC
+                U_INC:   ustate <= U_WRITE;    // a_inc is valid in U_WRITE
                 // The write uses a_addr of this cycle. The read of the next
                 // bin is in the next cycle, after the write.
                 U_WRITE:
@@ -117,6 +125,7 @@ module memprobe_hist #(
                     a_addr <= a_addr + 1'b1;
                     if (a_addr == '1) ustate <= U_IDLE;
                 end
+                default: ustate <= U_IDLE;
             endcase
         end
     end

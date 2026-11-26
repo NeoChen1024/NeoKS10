@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate
+.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -80,3 +80,12 @@ formal:
 MUTANTS ?= 20
 mutate:
 	$(PYTHON) tb/mutate.py --module $(MODULE) --count $(MUTANTS)
+
+# Vivado builds of rtl/memprobe at the three clocks of the HP side. Set VIVADO
+# if vivado is not in PATH. Read build/fpga/memprobe-<MHz>/timing.rpt after it.
+SYNTH_CLOCKS ?= 50 100 150
+synth:
+	@for c in $(SYNTH_CLOCKS); do \
+	    echo "memprobe $$c MHz:"; \
+	    CLK_MHZ=$$c OUT=$(CURDIR)/$(BUILD_DIR)/fpga/memprobe-$$c sh fpga/memprobe/build.sh || exit 1; \
+	done

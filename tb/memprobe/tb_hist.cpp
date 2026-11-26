@@ -2,7 +2,8 @@
 // latency histogram with its FIFO, statistics and read port.
 //
 // The expected values come from a model in this file:
-//   - At a low sample rate the FIFO never fills: each bin must be exact.
+//   - At one sample in 4 cycles or less, the FIFO never fills: each bin must
+//     be exact.
 //   - At one sample per cycle the FIFO fills: the statistics (MIN, MAX, SUM)
 //     must still be exact, each bin must be at most the model value, and the
 //     missing samples must be equal to the drop counter and the drop pulses.
@@ -164,7 +165,7 @@ int main(int argc, char** argv) {
     g_step = "low rate";
     for (int i = 0; i < 3000; i++) {
         t.cycle(true);
-        for (unsigned k = 2 + t.rng.below(6); k > 0; k--) t.cycle(false);
+        for (unsigned k = 3 + t.rng.below(6); k > 0; k--) t.cycle(false);
     }
     t.wait_idle();
     t.check_exact();
@@ -176,6 +177,8 @@ int main(int argc, char** argv) {
         t.m.add(7);
         t.tick();
         t.d->smp_valid = 0;
+        t.cycle(false);
+        t.cycle(false);
         t.cycle(false);
     }
     t.wait_idle();

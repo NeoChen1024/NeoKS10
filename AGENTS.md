@@ -61,7 +61,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | `emu/` | The Rust workspace: emulator, software processor, image tools. `plio` is the access to the PL |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
-| `fpga/` | Vivado scripts and constraints for the PYNQ-Z2 |
+| `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
 | `oracle/` | Pinned commits and patch files for the reference emulators |
 | `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data |
 | `its/` | The files that PDP-10/its needs under `build/<emulator>/` |
