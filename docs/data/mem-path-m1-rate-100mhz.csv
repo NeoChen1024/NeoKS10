@@ -1,0 +1,17 @@
+# Memory path, Part B, milestone M1 (docs/mem-path-experiment.md): rate of B1 to B3.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit 6fd9cc11 (BUILD register),
+# clk_m 100 MHz, HP0, 64-bit beats, one transaction in progress, sequential addresses in the
+# first 4 MiB of the reserved region, GAP 0, PS idle; Linux 6.18.64-pynq-z2.
+# Method: emu/memprobe "latency read|write --beats N --count 10000". Latency definition:
+# spec/regmap.toml, note "Latency" (clk_m edges from the address handshake).
+op,count,beats,run_cycles,transactions_per_s,mib_per_s,stall_cycles,samples_dropped
+read,10000,1,220936,4526198,34.5,200916,0
+read,10000,2,231012,4328779,66.1,210991,0
+read,10000,4,253406,3946236,120.4,233383,0
+read,10000,8,289863,3449906,210.6,269836,0
+read,10000,16,371973,2688367,328.2,351938,0
+write,10000,1,140002,7142755,54.5,119989,0
+write,10000,2,150044,6664712,101.7,130030,0
+write,10000,4,180020,5554938,169.5,160003,0
+write,10000,8,230014,4347561,265.4,209992,0
+write,10000,16,330007,3030239,369.9,309975,0

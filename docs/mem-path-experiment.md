@@ -1,7 +1,8 @@
 # Experiment: the memory path between the PL and the PS
 
-This document is a plan. It contains no result. Each number in it is an
-**[estimate]** or a parameter to measure.
+The sections before "Record of results" are the plan. Each number in them
+is an **[estimate]** or a parameter to measure. The results are in "Record
+of results".
 
 ## Purpose
 
@@ -178,3 +179,52 @@ design, the kernel version, and the method. Small tables of data go to
 Do not replace a planned value with a result silently. If a result
 contradicts an estimate in README.md or in a design note, correct that text
 in the same commit.
+
+### M1: first version of the test design, 100 MHz, PS idle
+
+**[measured]** 2026-11-26. Design `rtl/memprobe` at commit 6fd9cc11 (the
+`BUILD` register gave this value). Linux 6.18.64-pynq-z2. The bitstream was
+loaded over JTAG. Conditions: `clk_m` 100 MHz (FCLK0 and `clk_m` measured
+100.004 MHz against the monotonic clock of Linux), HP0, 64-bit beats, one
+transaction in progress, sequential addresses in the first 4 MiB of the
+reserved region, no other load on the PS.
+
+**B9, short run.** Method: `memprobe consistency --words 10000000`. The PS
+wrote 10485760 words and the PL checked them: 0 mismatches. The PL wrote
+10485760 words and the PS checked them: 0 mismatches. The full B9 needs
+10^9 words in each direction; it is not done yet.
+
+**B1 to B3.** Method: `memprobe latency read|write --beats N --count 10000`,
+GAP 0. The latency is in `clk_m` cycles (note "Latency" of the register
+map); at 100 MHz, one cycle is 10 ns. All data is in
+`docs/data/mem-path-m1-latency-100mhz.csv`, and the rates are in
+`docs/data/mem-path-m1-rate-100mhz.csv`.
+
+| Measure | Beats | Minimum | Median | 99th percentile | Maximum |
+|---|---|---|---|---|---|
+| Read, first beat (B1) | 1 | 19 | 19 | 38 | 75 |
+| Read, first beat | 16 | 19 | 19 | 36 | 74 |
+| Read, last beat (B3) | 16 | 34 | 34 | 51 | 89 |
+| Write response (B2) | 1 | 12 | 12 | 12 | 13 |
+| Write response (B3) | 16 | 31 | 31 | 31 | 32 |
+
+- The first read beat comes after 19 cycles (190 ns) at the median, for all
+  burst lengths. Then one beat comes in each cycle: the median of the last
+  beat is 19 + (beats - 1) cycles.
+- The write response comes after 12, 13, 16, 21 and 31 cycles at the median
+  for 1, 2, 4, 8 and 16 beats: about 1.3 cycles for each more beat. The
+  spread is 1 cycle or less.
+- **[estimate]** The write response comes before the data is in the DDR
+  memory. Basis: the writes have AxCACHE 0011 (bufferable), and the write
+  latency does not vary as the read latency does. B6 must show if a read
+  can pass such a write.
+- With 16-beat writes, the rate was 369.9 MiB/s. This is equal to the
+  write rate that the board repository gives for its test design, which
+  also has one burst at a time (`docs/pl-interface.md` there, section "HP
+  ports"). With 16-beat reads, the rate was 328.2 MiB/s.
+- The stall counters count the cycles in which the next transaction waits
+  for the one in progress. With one transaction in progress, this is
+  nearly all cycles of a run.
+
+Not done yet: B1 and B2 with a load on the PS, B4 to B8, the full B9, and
+B7 at 50 MHz and 150 MHz.

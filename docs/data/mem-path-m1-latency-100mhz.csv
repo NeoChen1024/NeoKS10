@@ -1,0 +1,22 @@
+# Memory path, Part B, milestone M1 (docs/mem-path-experiment.md, B1 to B3).
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit 6fd9cc11 (BUILD register),
+# clk_m 100 MHz, HP0, 64-bit beats, one transaction in progress, sequential addresses in the
+# first 4 MiB of the reserved region, GAP 0, PS idle; Linux 6.18.64-pynq-z2.
+# Method: emu/memprobe "latency read|write --beats N --count 10000". Latency definition:
+# spec/regmap.toml, note "Latency" (clk_m edges from the address handshake).
+measure,op,beats,count,gap,clk_mhz,samples,min_cyc,median_cyc,p99_cyc,max_cyc,mean_cyc,min_ns,median_ns,p99_ns,max_ns,mean_ns
+rd_first,read,1,10000,0,100,10000,19,19,38,75,20.09,190.0,190.0,380.0,750.0,200.9
+rd_last,read,1,10000,0,100,10000,19,19,38,75,20.09,190.0,190.0,380.0,750.0,200.9
+rd_first,read,2,10000,0,100,10000,19,19,45,70,20.10,190.0,190.0,450.0,700.0,201.0
+rd_last,read,2,10000,0,100,10000,20,20,46,71,21.10,200.0,200.0,460.0,710.0,211.0
+rd_first,read,4,10000,0,100,10000,19,19,49,66,20.34,190.0,190.0,490.0,660.0,203.4
+rd_last,read,4,10000,0,100,10000,22,22,52,69,23.34,220.0,220.0,520.0,690.0,233.4
+rd_first,read,8,10000,0,100,10000,19,19,37,77,19.96,190.0,190.0,370.0,770.0,199.6
+rd_last,read,8,10000,0,100,10000,26,26,44,84,26.99,260.0,260.0,440.0,840.0,269.9
+rd_first,read,16,10000,0,100,10000,19,19,36,74,20.11,190.0,190.0,360.0,740.0,201.1
+rd_last,read,16,10000,0,100,10000,34,34,51,89,35.20,340.0,340.0,510.0,890.0,352.0
+wr_resp,write,1,10000,0,100,10000,12,12,12,13,12.00,120.0,120.0,120.0,130.0,120.0
+wr_resp,write,2,10000,0,100,10000,13,13,13,14,13.00,130.0,130.0,130.0,140.0,130.0
+wr_resp,write,4,10000,0,100,10000,16,16,16,17,16.00,160.0,160.0,160.0,170.0,160.0
+wr_resp,write,8,10000,0,100,10000,21,21,21,22,21.00,210.0,210.0,210.0,220.0,210.0
+wr_resp,write,16,10000,0,100,10000,31,31,31,32,31.00,310.0,310.0,310.0,320.0,310.0
