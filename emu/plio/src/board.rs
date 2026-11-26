@@ -13,23 +13,34 @@ use std::path::{Path, PathBuf};
 use crate::mmio::{self, Mapping};
 
 /// `INT_STS` of the devcfg: bit 2 is `PCFG_DONE`, 1 when the PL is configured.
-/// **[manual]** UG585, register `INT_STS` of the devcfg (0xF800700C); used in
-/// `examples/pl-interface/pltest.c` of the board repository.
+/// Source: `examples/pl-interface/pltest.c` of the board repository, which
+/// makes the same check before its first register read.
 const DEVCFG_INT_STS: u64 = 0xF800_700C;
 const PCFG_DONE: u32 = 1 << 2;
 
 /// `FPGA0_THR_CNT` of the SLCR: bit 0 is 1 while Linux stops FCLK0.
-/// **[manual]** UG585 page 1584, and **[measured]** in the board repository,
-/// `docs/pl-interface.md` (writes to this register stopped `FCLK_CLK0`).
+/// **[measured]** in the board repository, `docs/pl-interface.md`, section
+/// "Why fclk-enable is necessary".
 const FPGA0_THR_CNT: u64 = 0xF800_0178;
+
+/// `FPGA_RST_CTRL` of the SLCR: bit 0 is 1 while `FCLKRESETN[0]` holds the PL
+/// in reset. The registers of the design do not answer then. Source: the
+/// board repository, `docs/pl-interface.md`, section "PL reset"; after a JTAG
+/// load the register is 0 **[measured]** there.
+const FPGA_RST_CTRL: u64 = 0xF800_0240;
 
 /// Error of the board interface.
 #[derive(Debug)]
 pub enum BoardError {
     /// A system call or a file failed.
     Io(String, io::Error),
-    /// The PL is not configured or FCLK0 is off: no register read is safe.
-    PlNotReady { int_sts: u32, thr_cnt: u32 },
+    /// The PL is not configured, FCLK0 is off, or the PL is in reset: no
+    /// register read is safe.
+    PlNotReady {
+        int_sts: u32,
+        thr_cnt: u32,
+        rst_ctrl: u32,
+    },
     /// No UIO device has the name.
     NoUio(String),
     /// The device tree has no reserved region with this base and size.
@@ -42,10 +53,15 @@ impl std::fmt::Display for BoardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BoardError::Io(what, e) => write!(f, "{what}: {e}"),
-            BoardError::PlNotReady { int_sts, thr_cnt } => write!(
+            BoardError::PlNotReady {
+                int_sts,
+                thr_cnt,
+                rst_ctrl,
+            } => write!(
                 f,
-                "the PL is not configured, or FCLK0 is off (devcfg INT_STS {int_sts:#010x}, \
-                 FPGA0_THR_CNT {thr_cnt:#010x}): no register read"
+                "the PL is not configured, FCLK0 is off, or the PL is in reset (devcfg INT_STS \
+                 {int_sts:#010x}, FPGA0_THR_CNT {thr_cnt:#010x}, FPGA_RST_CTRL {rst_ctrl:#010x}): \
+                 no register read"
             ),
             BoardError::NoUio(name) => write!(f, "no UIO device with the name {name:?}"),
             BoardError::NoRegion { base, size } => {
@@ -66,15 +82,24 @@ fn io_err(what: impl Into<String>) -> impl FnOnce(io::Error) -> BoardError {
     move |e| BoardError::Io(what, e)
 }
 
-/// Check that the PL is configured and that FCLK0 runs. Reads two PS
-/// registers through `/dev/mem`.
+/// Check that the PL is configured, that FCLK0 runs, and that the PL is not in
+/// reset. Reads three PS registers through `/dev/mem`.
 pub fn check_pl_ready() -> Result<(), BoardError> {
     let int_sts = mmio::read_phys32(DEVCFG_INT_STS).map_err(io_err("read of devcfg INT_STS"))?;
     let thr_cnt = mmio::read_phys32(FPGA0_THR_CNT).map_err(io_err("read of FPGA0_THR_CNT"))?;
-    if int_sts & PCFG_DONE == 0 || thr_cnt & 1 != 0 {
-        return Err(BoardError::PlNotReady { int_sts, thr_cnt });
+    let rst_ctrl = mmio::read_phys32(FPGA_RST_CTRL).map_err(io_err("read of FPGA_RST_CTRL"))?;
+    if !pl_ready(int_sts, thr_cnt, rst_ctrl) {
+        return Err(BoardError::PlNotReady {
+            int_sts,
+            thr_cnt,
+            rst_ctrl,
+        });
     }
     Ok(())
+}
+
+fn pl_ready(int_sts: u32, thr_cnt: u32, rst_ctrl: u32) -> bool {
+    int_sts & PCFG_DONE != 0 && thr_cnt & 1 == 0 && rst_ctrl & 1 == 0
 }
 
 /// Find the UIO device with `name` under `sysfs` (normally `/sys/class/uio`).
@@ -337,6 +362,15 @@ mod tests {
             find_uio(&t.0, "pl"),
             Err(BoardError::Unexpected(_))
         ));
+    }
+
+    #[test]
+    fn readiness() {
+        assert!(pl_ready(PCFG_DONE, 0, 0));
+        assert!(pl_ready(0xFFFF_FFFF, 0xFFFF_FFFE, 0xE));
+        assert!(!pl_ready(0, 0, 0)); // not configured
+        assert!(!pl_ready(PCFG_DONE, 1, 0)); // FCLK0 stopped
+        assert!(!pl_ready(PCFG_DONE, 0, 1)); // PL in reset
     }
 
     #[test]

@@ -92,7 +92,7 @@ fails.
 - `make check` is: format, lint, unit tests, a check that the generated
   files are current, and a short random differential run.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
-  static).
+  static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example
   `gen` or `regs`. `make mutate MODULE=<file>` mutates
   `rtl/memprobe/<file>.sv`, for example `memprobe_gen`.

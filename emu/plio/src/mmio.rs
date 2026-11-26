@@ -207,6 +207,29 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    // read_phys32 maps PS registers at offsets above 2 GiB of /dev/mem; the
+    // offset must survive the 32-bit ABI of the board.
+    #[test]
+    fn mapping_above_2_gib() {
+        let path = std::env::temp_dir().join(format!("plio-mmio-sparse-{}", std::process::id()));
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        f.set_len(0xF800_8000).unwrap();
+        let m = Mapping::new(&f, 0xF800_7000, 0x1000).unwrap();
+        m.write32(0xC, 0x0000_0004);
+        drop(m);
+        let m = Mapping::new(&f, 0xF800_7000, 0x1000).unwrap();
+        assert_eq!(m.read32(0xC), 4);
+        drop(m);
+        drop(f);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     #[should_panic(expected = "outside a mapping")]
     fn access_outside_panics() {

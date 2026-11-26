@@ -92,7 +92,12 @@ synth:
 
 # The programs of emu/ for the board: a static armv7 musl binary in
 # emu/target/armv7-unknown-linux-musleabihf/release/. The linker is in
-# emu/.cargo/config.toml.
+# emu/.cargo/config.toml. Also the lint and the unit tests for that target,
+# the tests under qemu-arm (32-bit ABI, code only for ARM).
 CROSS_TARGET = armv7-unknown-linux-musleabihf
+QEMU_ARM ?= qemu-arm
 cross:
+	cd emu && $(NICE) $(CARGO) clippy --locked --all-targets --target $(CROSS_TARGET) -- -D warnings
+	cd emu && CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER=$(QEMU_ARM) \
+	    $(NICE) $(CARGO) test --locked --target $(CROSS_TARGET)
 	cd emu && $(NICE) $(CARGO) build --locked --release --target $(CROSS_TARGET)
