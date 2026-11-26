@@ -93,9 +93,9 @@ register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
   mode of the AFI: the data is in bits 31:0, and WSTRB is 0x0F (UG585
   v1.7, section 5.3.6). The AFI has a `32BitEn` bit for each channel of
   each port. These bits are PS registers, so a new bitstream does not
-  change them. Before each run, the PS program sets the bits of the two
-  channels of the run to the width of `MODE.SIZE`. After the run, it sets
-  the earlier values again.
+  change them. Before a 32-bit run, the PS program sets the bits of the two
+  channels of the run. It never sets them back to 0 (results of M2c), so a
+  64-bit run after a 32-bit run needs a reset of the PS.
 - The bus address is the base of the reserved region plus an offset of
   24 bits. Thus no configuration can make an access outside the region.
 - Timers count `clk_m` cycles from the address handshake to the first R
@@ -481,7 +481,89 @@ write, GAP 0):
   The PS was idle, the seed was the same, and the system repeats its timing
   closely; the reverse runs and B4 show that the port setting works.
 
-Not done yet: the 32-bit width of B7 (M2c).
+### M2c: 32-bit beats (B7)
+
+**[measured]** 2026-11-26. Design `rtl/memprobe` at commit a4249ad7
+(`BUILD` register), 100 MHz, the first 4 MiB, Linux 6.18.64-pynq-z2, PS
+idle. 32-bit beats use the 32-bit mode of the AFI. Data:
+`docs/data/mem-path-m2c-latency-100mhz.csv`,
+`docs/data/mem-path-m2c-rate-100mhz.csv` and
+`docs/data/mem-path-m2c-order-100mhz.csv`.
+
+**The AFI cannot go back to 64-bit data.** In the first board session,
+the program wrote 0 to `32BitEn` after each 32-bit run. The next run with
+64-bit writes on HP0 stopped after three or four writes. Then the whole PS
+stopped. This happened twice in two attempts. A change of `32BitEn` without
+32-bit traffic had no effect. `docs/unknowns.md` has the details. The
+program now sets `32BitEn` only from 0 to 1. It refuses a 64-bit run on a
+channel with `32BitEn` 1. In the second session, all 64-bit runs came
+first, and the PS did not stop.
+
+- A design must use one data width on an HP port from a reset of the PS.
+- A write that gets no response stops the whole PS, not only the design.
+  The KS10 memory bridge must not depend on the PS to recover from it.
+
+**B9 at 32 bits.** 1-beat, 2-beat and 16-beat bursts each gave 0
+mismatches for 4194304 words in each direction. Thus the lanes of the
+32-bit mode are as the register map gives them.
+
+**B1 to B3 at 32 bits, one transaction in progress.** Latency in cycles,
+the median; the minimum was the same:
+
+| Beats | Read, first beat | Read, last beat | Write response | 64-bit: read last, write |
+|---|---|---|---|---|
+| 1 | 19 | 19 | 13 | 19, 12 |
+| 2 | 19 | 20 | 14 | |
+| 4 | 19 | 22 | 16 | |
+| 8 | 19 | 26 | 21 | |
+| 16 | 19 | 34 | 30 | 34, 31 |
+
+**B4 at 32 bits, random addresses.** Transactions in each second, in
+millions; in brackets the median of the latency in cycles:
+
+| In progress | 1-beat writes | 1-beat reads | 2-beat writes | 2-beat reads | 64-bit 2-beat reads |
+|---|---|---|---|---|---|
+| 1 | 6.67 (13) | 4.12 (22) | 6.25 (14) | 3.99 (23) | 4.03 (22) |
+| 2 | 13.33 (13) | 4.90 (38) | 12.50 (14) | 7.86 (23) | 7.99 (22) |
+| 4 | 26.67 (13) | 4.90 (78) | 25.00 (14) | 15.47 (23) | 15.93 (22) |
+| 8 | 50.38 (13) | 4.89 (135) | 48.40 (14) | 29.43 (23) | 29.30 (23) |
+| 16 | 52.84 (24) | 4.90 (135) | 48.48 (29) | 44.29 (29) | 44.06 (29) |
+
+- 1-beat reads do not go faster with more transactions in progress: about
+  4.9 million in each second (18.7 MiB/s). Their latency grows with the
+  queue. UG585 v1.7, Table 5-8, row 6, gives the cause: the AFI expands a
+  1-beat 32-bit read and blocks it until all earlier reads are complete.
+- 1-beat writes are also expanded, but they are not blocked (row 8).
+- 2-beat bursts are upsized (rows 5 and 7). Their read rates are the
+  rates of 64-bit 2-beat reads within 3 %, with half of the data. Their
+  write rates are 6 % lower with 1 to 4 in progress (64-bit: 6.67, 13.33
+  and 26.66 million), because the write latency is 14 cycles, not 13.
+- 16-beat bursts: reads and writes stop at 381.5 MiB/s. This is one
+  32-bit beat in each cycle at 100 MHz.
+
+**B5 at 32 bits, with VERIFY.** Random addresses, 100000 transactions for
+each row, 0 data errors in all rows. With 1-beat bursts, the rate was
+4.2 to 9.3 million in each second. With 2-beat bursts and 8 in progress, it
+was 29.6 to 32.2 million. VERIFY with 16 reads in progress gave 0 data
+errors for 1, 2 and 16 beats.
+
+**B6 at 32 bits.** Random 1-beat addresses, 100000 iterations for each
+row, writes on HP0:
+
+| Read port | GAP 0 | GAP 4 | ORDER_REVERSE |
+|---|---|---|---|
+| HP0 | 0 | 0 | 8923 |
+| HP2 | 0 | 0 | 8923 |
+
+- No read gave the value from before the write, as with 64-bit beats.
+- The reverse runs: about 91 % of the reads that went before the write gave
+  the new value. With 64-bit beats, it was 16 % on one port and 83 % on two
+  ports.
+- The rows of HP0 and HP2 are equal in each column. The 1-beat reads are
+  expanded and blocked, which can make the timing repeat closely. These
+  runs do not show by themselves that the reads used HP2. The port setting
+  is the same logic as in M2b, where the results of the two ports were
+  different.
 
 The test design is a probe: its checks and measurements use 100 MHz. The
 M1 results give B7 at 50 MHz and 150 MHz. Builds at those clocks are

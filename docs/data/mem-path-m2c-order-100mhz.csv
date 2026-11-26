@@ -1,0 +1,16 @@
+# Memory path, Part B, milestone M2c (docs/mem-path-experiment.md): B6 at 32 bits.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit a4249ad7 (BUILD register),
+# clk_m 100 MHz, first 4 MiB of the reserved region, Linux 6.18.64-pynq-z2, PS idle.
+# The width column gives the bits of a beat: 32 is the 32-bit mode of the AFI (MODE.SIZE B4,
+# 32BitEn of the channels of the run 1). All 64-bit rows ran before the first 32-bit row,
+# in the same boot (docs/unknowns.md, AFI). Latencies in clk_m cycles (10 ns).
+# Method: emu/memprobe "order --width 32 --count 100000 --pattern random --rd-port R --wr-port 0
+# --gap G [--reverse 1]".
+
+pattern,beats,width,count,gap,rd_port,wr_port,reverse,clk_mhz,mismatches,mismatch_share,rd_last_median_cyc,rd_last_p99_cyc,wr_resp_median_cyc,wr_resp_p99_cyc
+random,1,32,100000,0,0,0,0,100,0,0.0000,25,51,13,13
+random,1,32,100000,4,0,0,0,100,0,0.0000,22,48,13,13
+random,1,32,100000,0,0,0,1,100,8923,0.0892,22,42,13,13
+random,1,32,100000,0,2,0,0,100,0,0.0000,25,51,13,13
+random,1,32,100000,4,2,0,0,100,0,0.0000,22,48,13,13
+random,1,32,100000,0,2,0,1,100,8923,0.0892,22,42,13,13

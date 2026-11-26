@@ -1,0 +1,31 @@
+# Memory path, Part B, milestone M2c (docs/mem-path-experiment.md): B1 to B3 and B7 at 32 bits.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit a4249ad7 (BUILD register),
+# clk_m 100 MHz, first 4 MiB of the reserved region, Linux 6.18.64-pynq-z2, PS idle.
+# The width column gives the bits of a beat: 32 is the 32-bit mode of the AFI (MODE.SIZE B4,
+# 32BitEn of the channels of the run 1). All 64-bit rows ran before the first 32-bit row,
+# in the same boot (docs/unknowns.md, AFI). Latencies in clk_m cycles (10 ns).
+# Method: emu/memprobe "latency read|write --beats N [--width 32] --count 10000"; HP0, one transaction
+# in progress, sequential addresses, GAP 0.
+
+measure,op,beats,width,count,gap,clk_mhz,samples,min_cyc,median_cyc,p99_cyc,max_cyc,mean_cyc,min_ns,median_ns,p99_ns,max_ns,mean_ns
+rd_first,read,1,64,10000,0,100,10000,19,19,41,68,20.16,190.0,190.0,410.0,680.0,201.6
+rd_last,read,1,64,10000,0,100,10000,19,19,41,68,20.16,190.0,190.0,410.0,680.0,201.6
+rd_first,read,16,64,10000,0,100,10000,19,19,38,71,20.44,190.0,190.0,380.0,710.0,204.4
+rd_last,read,16,64,10000,0,100,10000,34,34,58,86,35.60,340.0,340.0,580.0,860.0,356.0
+wr_resp,write,1,64,10000,0,100,10000,12,12,12,12,12.00,120.0,120.0,120.0,120.0,120.0
+wr_resp,write,16,64,10000,0,100,10000,31,31,31,40,31.00,310.0,310.0,310.0,400.0,310.0
+rd_first,read,1,32,10000,0,100,10000,19,19,39,64,20.02,190.0,190.0,390.0,640.0,200.2
+rd_last,read,1,32,10000,0,100,10000,19,19,39,64,20.02,190.0,190.0,390.0,640.0,200.2
+rd_first,read,2,32,10000,0,100,10000,19,19,45,70,20.28,190.0,190.0,450.0,700.0,202.8
+rd_last,read,2,32,10000,0,100,10000,20,20,46,71,21.28,200.0,200.0,460.0,710.0,212.8
+rd_first,read,4,32,10000,0,100,10000,19,19,49,73,20.32,190.0,190.0,490.0,730.0,203.2
+rd_last,read,4,32,10000,0,100,10000,22,22,52,76,23.32,220.0,220.0,520.0,760.0,233.2
+rd_first,read,8,32,10000,0,100,10000,19,19,37,73,20.03,190.0,190.0,370.0,730.0,200.3
+rd_last,read,8,32,10000,0,100,10000,26,26,44,80,27.03,260.0,260.0,440.0,800.0,270.3
+rd_first,read,16,32,10000,0,100,10000,19,19,37,63,20.17,190.0,190.0,370.0,630.0,201.7
+rd_last,read,16,32,10000,0,100,10000,34,34,52,78,35.19,340.0,340.0,520.0,780.0,351.9
+wr_resp,write,1,32,10000,0,100,10000,13,13,13,33,13.01,130.0,130.0,130.0,330.0,130.1
+wr_resp,write,2,32,10000,0,100,10000,14,14,14,14,14.00,140.0,140.0,140.0,140.0,140.0
+wr_resp,write,4,32,10000,0,100,10000,16,16,16,17,16.00,160.0,160.0,160.0,170.0,160.0
+wr_resp,write,8,32,10000,0,100,10000,21,21,21,22,21.00,210.0,210.0,210.0,220.0,210.0
+wr_resp,write,16,32,10000,0,100,10000,30,30,30,30,30.00,300.0,300.0,300.0,300.0,300.0
