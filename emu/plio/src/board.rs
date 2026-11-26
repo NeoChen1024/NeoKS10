@@ -258,6 +258,21 @@ impl Region {
         Ok(Region { map, base })
     }
 
+    /// Check that the device tree reserves (`base`, `size`), then map only
+    /// `len` bytes from byte `off` of it. `off` is a multiple of the page size.
+    /// `base` of the result is the physical address of byte 0 of this part.
+    pub fn open_part(base: u64, size: usize, off: usize, len: usize) -> Result<Self, BoardError> {
+        if off.checked_add(len).is_none_or(|end| end > size) {
+            return Err(BoardError::Unexpected(format!(
+                "part {off:#x}+{len:#x} outside the region"
+            )));
+        }
+        check_region(Path::new("/proc/device-tree"), base, size as u64)?;
+        let addr = base + off as u64;
+        let map = mmio::map_phys(addr, len).map_err(io_err("mmap of /dev/mem"))?;
+        Ok(Region { map, base: addr })
+    }
+
     /// Size in bytes.
     pub fn len(&self) -> usize {
         self.map.len()
@@ -281,6 +296,11 @@ impl Region {
     /// The mapping, for [`Mapping::pread_from`].
     pub fn mapping(&self) -> &Mapping {
         &self.map
+    }
+
+    /// The mapping, for a thread that owns it.
+    pub fn into_mapping(self) -> Mapping {
+        self.map
     }
 }
 

@@ -101,6 +101,27 @@ impl Mapping {
         }
     }
 
+    /// Read the 64-bit word at byte offset `off` with one access. Panics if
+    /// `off` is outside the mapping or not a multiple of 8.
+    pub fn read64(&self, off: usize) -> u64 {
+        self.check(off, 8);
+        // SAFETY: check() keeps the access inside the mapping and aligned.
+        unsafe { self.ptr.as_ptr().add(off).cast::<u64>().read_volatile() }
+    }
+
+    /// Write the 64-bit word at byte offset `off`. Panics as [`Self::read64`].
+    pub fn write64(&self, off: usize, value: u64) {
+        self.check(off, 8);
+        // SAFETY: check() keeps the access inside the mapping and aligned.
+        unsafe {
+            self.ptr
+                .as_ptr()
+                .add(off)
+                .cast::<u64>()
+                .write_volatile(value)
+        }
+    }
+
     /// Read `len` bytes of `file` from `file_offset` into the mapping at
     /// `off`, with one `pread` call. Returns the number of bytes read.
     pub fn pread_from(
@@ -228,6 +249,32 @@ mod tests {
         drop(m);
         drop(f);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn words_of_64_bits() {
+        let (f, path) = temp_file("w64", 4096);
+        let m = Mapping::new(&f, 0, 4096).unwrap();
+        m.write64(8, 0x0123_4567_89AB_CDEF);
+        assert_eq!(m.read64(8), 0x0123_4567_89AB_CDEF);
+        assert_eq!(
+            m.read32(8),
+            u32::from_ne_bytes(
+                0x0123_4567_89AB_CDEFu64.to_ne_bytes()[..4]
+                    .try_into()
+                    .unwrap()
+            )
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "not aligned")]
+    fn unaligned_64_bit_access_panics() {
+        let (f, path) = temp_file("u64", 4096);
+        let m = Mapping::new(&f, 0, 4096).unwrap();
+        std::fs::remove_file(path).unwrap();
+        m.read64(4);
     }
 
     #[test]

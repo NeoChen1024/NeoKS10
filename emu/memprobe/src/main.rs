@@ -7,6 +7,8 @@
 //!   memprobe consistency [--words N] [--seed N]
 //!   memprobe run read|write|fill|check [--beats N] [--count N] [--gap N]
 //!                [--base N] [--span-log2 N] [--seed N]
+//!   memprobe ps-access [--threads N] [--passes N]
+//!   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]
 //!
 //! Numbers can be decimal or hexadecimal with 0x. The output is CSV; lines
 //! that start with '#' are comments.
@@ -23,6 +25,7 @@ mod device;
 mod load;
 mod measure;
 mod pattern;
+mod psaccess;
 mod stats;
 
 use device::{Error, Memprobe, Op, RunConfig};
@@ -31,7 +34,9 @@ const USAGE: &str = "usage:
   memprobe info
   memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
   memprobe consistency [--words N] [--seed N]
-  memprobe run read|write|fill|check [--beats N] [--count N] [--gap N] [--base N] [--span-log2 N] [--seed N]";
+  memprobe run read|write|fill|check [--beats N] [--count N] [--gap N] [--base N] [--span-log2 N] [--seed N]
+  memprobe ps-access [--threads N] [--passes N]
+  memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]";
 
 fn parse_number(s: &str) -> Option<u64> {
     match s.strip_prefix("0x") {
@@ -76,6 +81,36 @@ fn header(dev: &Memprobe, out: &mut impl Write) -> io::Result<()> {
         "# memprobe: design build {:08x}, clk_m {} MHz, kernel {}, time {now} s after 1970",
         dev.build,
         dev.caps.clk_mhz,
+        kernel.trim()
+    )
+}
+
+/// The first 4 MiB of the reserved region in `threads` equal parts, one
+/// mapping for each part.
+fn region_parts(threads: u32) -> Result<Vec<plio::mmio::Mapping>, String> {
+    if !(1..=4).contains(&threads) {
+        return Err("--threads must be 1 to 4".into());
+    }
+    let span = 1usize << measure::SPAN_LOG2;
+    let part = span / threads as usize;
+    (0..threads as usize)
+        .map(|i| {
+            Region::open_part(u64::from(mp::HP_BASE), mp::HP_SIZE as usize, i * part, part)
+                .map(Region::into_mapping)
+                .map_err(|e| e.to_string())
+        })
+        .collect()
+}
+
+fn plain_header(what: &str, out: &mut impl Write) -> io::Result<()> {
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    writeln!(
+        out,
+        "# memprobe {what}: kernel {}, time {now} s after 1970",
         kernel.trim()
     )
 }
@@ -213,6 +248,79 @@ fn run_command(args: &[String]) -> Result<(), String> {
                 r.first_err_data,
                 r.resp_errors,
                 r.hist_drops
+            )
+            .map_err(|e| e.to_string())
+        }
+        "ps-access" => {
+            let o = parse_options(&args[1..], &["threads", "passes"])?;
+            let threads = opt_u32(&o, "threads", 1)?;
+            let passes = opt_u32(&o, "passes", 8)?;
+            let mut out = io::stdout().lock();
+            let io_e = |e: io::Error| e.to_string();
+            plain_header("ps-access (B8)", &mut out).map_err(io_e)?;
+            writeln!(out, "{}", psaccess::HEADER).map_err(io_e)?;
+            for access in psaccess::Access::ALL {
+                let parts = region_parts(threads)?;
+                let w = psaccess::parallel(parts, |_, m| Ok(psaccess::words(m, access, passes)))
+                    .map_err(io_e)?;
+                let unit = if matches!(access, psaccess::Access::Read32 | psaccess::Access::Write32)
+                {
+                    4
+                } else {
+                    8
+                };
+                writeln!(
+                    out,
+                    "{}",
+                    psaccess::row(access.name(), threads as usize, unit, &w)
+                )
+                .map_err(io_e)?;
+            }
+            Ok(())
+        }
+        "pread" => {
+            // --file takes a path; the other options take numbers.
+            let mut rest: Vec<String> = Vec::new();
+            let mut file = String::from("/dev/mmcblk0");
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                if a == "--file" {
+                    file = it.next().ok_or("--file needs a value")?.clone();
+                } else {
+                    rest.push(a.clone());
+                }
+            }
+            let o = parse_options(&rest, &["chunk", "bytes", "threads", "drop-caches"])?;
+            let threads = opt_u32(&o, "threads", 1)?;
+            let chunk = opt_u32(&o, "chunk", 65536)? as usize;
+            let bytes = o.get("bytes").copied().unwrap_or(256 << 20);
+            let io_e = |e: io::Error| format!("{file}: {e}");
+            let mut files = Vec::new();
+            let mut len = 0;
+            for _ in 0..threads {
+                let mut f = std::fs::File::open(&file).map_err(io_e)?;
+                len = psaccess::file_len(&mut f).map_err(io_e)?;
+                files.push(f);
+            }
+            if o.get("drop-caches").copied().unwrap_or(0) != 0 {
+                // Clean pages only; the page cache then reads the file again.
+                std::fs::write("/proc/sys/vm/drop_caches", "3\n")
+                    .map_err(|e| format!("drop_caches: {e}"))?;
+            }
+            let parts = region_parts(threads)?;
+            let per_thread = bytes / u64::from(threads.max(1));
+            let w = psaccess::parallel(parts, |i, m| {
+                let start = len / u64::from(threads) * i as u64;
+                psaccess::pread(m, &files[i], len, start, chunk, per_thread)
+            })
+            .map_err(io_e)?;
+            let mut out = io::stdout().lock();
+            plain_header(&format!("pread (B8) of {file}"), &mut out).map_err(|e| e.to_string())?;
+            writeln!(out, "{}", psaccess::HEADER).map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "{}",
+                psaccess::row("pread", threads as usize, chunk, &w)
             )
             .map_err(|e| e.to_string())
         }
