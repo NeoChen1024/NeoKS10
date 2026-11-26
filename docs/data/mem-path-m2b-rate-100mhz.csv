@@ -1,0 +1,23 @@
+# Memory path, Part B, milestone M2b (docs/mem-path-experiment.md): B4 again.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit 4f237f1e (BUILD register),
+# clk_m 100 MHz, 64-bit beats, first 4 MiB of the reserved region, Linux 6.18.64-pynq-z2.
+# The design sets up to one ARVALID or AWVALID in each cycle. Latencies in clk_m cycles (10 ns).
+# Method: emu/memprobe "rate read|write --pattern random --outstanding N --count 200000 [--rd-port 2 --wr-port 2]"; PS idle.
+
+op,pattern,beats,count,outstanding,read_share,verify,gap,clk_mhz,reads,writes,cycles,transactions_per_s,mib_per_s,stall_share,rd_last_median_cyc,rd_last_p99_cyc,rd_last_max_cyc,wr_resp_median_cyc,wr_resp_p99_cyc,wr_resp_max_cyc,data_errors,samples_dropped
+write,random,1,200000,1,32768,0,0,100,0,200000,2800004,7142847,54.5,0.857,,,,12,12,13,0,0
+write,random,1,200000,2,32768,0,0,100,0,200000,1400006,14285653,109.0,0.714,,,,12,12,13,0,0
+write,random,1,200000,4,32768,0,0,100,0,200000,700011,28570980,218.0,0.430,,,,12,12,14,0,0
+write,random,1,200000,8,32768,0,0,100,0,200000,376773,53082360,405.0,0.341,,,,12,35,105,0,0
+write,random,1,200000,16,32768,0,0,100,0,200000,351848,56842728,433.7,0.252,,,,22,71,156,0,0
+read,random,1,200000,1,32768,0,0,100,200000,0,4843175,4129522,31.5,0.917,22,43,72,,,,0,0
+read,random,1,200000,2,32768,0,0,100,200000,0,2462025,8123394,62.0,0.843,22,53,85,,,,0,0
+read,random,1,200000,4,32768,0,0,100,200000,0,1250824,15989460,122.0,0.699,22,52,94,,,,0,0
+read,random,1,200000,8,32768,0,0,100,200000,0,652404,30655851,233.9,0.500,22,56,103,,,,0,0
+read,random,1,200000,16,32768,0,0,100,200000,0,432472,46245769,352.8,0.300,28,66,134,,,,0,0
+write,random,1,200000,1,32768,0,0,100,0,200000,2800026,7142791,54.5,0.857,,,,12,12,33,0,0
+write,random,1,200000,8,32768,0,0,100,0,200000,370548,53974114,411.8,0.332,,,,12,32,93,0,0
+write,random,1,200000,16,32768,0,0,100,0,200000,355969,56184668,428.7,0.258,,,,22,71,135,0,0
+read,random,1,200000,1,32768,0,0,100,200000,0,4844026,4128797,31.5,0.917,22,43,76,,,,0,0
+read,random,1,200000,8,32768,0,0,100,200000,0,652867,30634111,233.7,0.501,22,56,95,,,,0,0
+read,random,1,200000,16,32768,0,0,100,200000,0,429962,46515739,354.9,0.295,28,66,115,,,,0,0

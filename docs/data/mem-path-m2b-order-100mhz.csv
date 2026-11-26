@@ -1,0 +1,36 @@
+# Memory path, Part B, milestone M2b (docs/mem-path-experiment.md): B6, order of a write and a read.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit 4f237f1e (BUILD register),
+# clk_m 100 MHz, 64-bit beats, first 4 MiB of the reserved region, Linux 6.18.64-pynq-z2.
+# The design sets up to one ARVALID or AWVALID in each cycle. Latencies in clk_m cycles (10 ns).
+# Method: emu/memprobe "order --pattern random --rd-port R --wr-port W --gap G [--beats 16] [--reverse 1] [--load-threads 2]".
+# Without --reverse: write, then the read of the same address GAP cycles after the WLAST handshake,
+# no wait for B; a mismatch is a read that did not give the written value. --reverse 1: the read
+# goes first (the check of the comparison). load_threads: the PS memory load of "memprobe latency".
+
+pattern,beats,count,gap,rd_port,wr_port,reverse,clk_mhz,mismatches,mismatch_share,rd_last_median_cyc,rd_last_p99_cyc,wr_resp_median_cyc,wr_resp_p99_cyc,load_threads
+random,1,100000,0,0,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,1,0,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,4,0,0,0,100,0,0.0000,21,42,12,12,0
+random,1,100000,16,0,0,0,100,0,0.0000,19,52,12,12,0
+random,1,100000,0,1,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,1,1,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,4,1,0,0,100,0,0.0000,21,42,12,12,0
+random,1,100000,16,1,0,0,100,0,0.0000,19,52,12,12,0
+random,1,100000,0,0,1,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,1,0,1,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,4,0,1,0,100,0,0.0000,21,42,12,12,0
+random,1,100000,16,0,1,0,100,0,0.0000,19,52,12,12,0
+random,1,100000,0,2,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,1,2,0,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,4,2,0,0,100,0,0.0000,21,42,12,12,0
+random,1,100000,16,2,0,0,100,0,0.0000,19,52,12,12,0
+random,1,100000,0,0,2,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,1,0,2,0,100,0,0.0000,24,45,12,12,0
+random,1,100000,4,0,2,0,100,0,0.0000,21,42,12,12,0
+random,1,100000,16,0,2,0,100,0,0.0000,19,52,12,12,0
+random,16,50000,0,0,0,0,100,0,0.0000,45,58,31,31,0
+random,16,50000,0,2,0,0,100,0,0.0000,45,58,31,31,0
+random,1,100000,0,0,0,1,100,84316,0.8432,22,42,12,12,0
+random,1,100000,0,2,0,1,100,17190,0.1719,22,42,12,12,0
+random,1,100000,0,0,0,0,100,0,0.0000,30,68,12,13,2
+random,1,100000,0,2,0,0,100,0,0.0000,30,71,12,13,2

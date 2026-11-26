@@ -405,5 +405,72 @@ gave 0 mismatches.
 - Each read of these runs was compared with the pattern: 0 data errors.
   Also 200000 random reads with 16 in progress gave 0 data errors.
 
-Not done yet: B6 (order of a write and a read, HP1 to HP3), the 32-bit
-width of B7, and B4 and B5 at 50 MHz and 150 MHz.
+### M2b: one address in each cycle (B4), order (B6)
+
+**[measured]** 2026-11-26. Design `rtl/memprobe` at commit 4f237f1e
+(`BUILD` register), 100 MHz, 64-bit beats, the first 4 MiB, Linux
+6.18.64-pynq-z2. The design can set one ARVALID or AWVALID in each cycle.
+Data: `docs/data/mem-path-m2b-rate-100mhz.csv` and
+`docs/data/mem-path-m2b-order-100mhz.csv`.
+
+**Regression against M1.** One transaction in progress: read 19 cycles
+(16 beats: 34), write 12 cycles (16 beats: 31), 16-beat writes 369.9 MiB/s,
+16-beat reads 326.2 MiB/s (M1: 328.2). The short B9 gave 0 mismatches.
+
+**B4 again, random 1-beat, PS idle.** Transactions in each second, in
+millions; in brackets the median and the 99th percentile of the latency in
+cycles:
+
+| In progress | Writes on HP0 | Reads on HP0 | Writes on HP2 |
+|---|---|---|---|
+| 1 | 7.14 (12, 12) | 4.13 (22, 43) | 7.14 (12, 12) |
+| 2 | 14.29 (12, 12) | 8.12 (22, 53) | not measured |
+| 4 | 28.57 (12, 12) | 15.99 (22, 52) | not measured |
+| 8 | 53.08 (12, 35) | 30.66 (22, 56) | 53.97 (12, 32) |
+| 16 | 56.84 (22, 71) | 46.25 (28, 66) | 56.18 (22, 71) |
+
+- 1-beat writes reach about 57 million in each second (434 MiB/s). The
+  design waits then for AWREADY in 25 % of the cycles: the port, not the
+  design, limits the rate. In M2a the design limited it to 48.5 million.
+- With 16 writes in progress, the median write latency grows from 12 to 22
+  cycles.
+- HP2 gave the same results as HP0 within 2 %.
+
+**B6, a write and then a read of the same address.** Random 1-beat
+addresses, 100000 iterations for each row; no wait for the write response.
+
+| Write port | Read port | GAP (cycles) | Reads that did not give the written value |
+|---|---|---|---|
+| HP0 | HP0 | 0, 1, 4, 16 | 0 of 100000 for each GAP |
+| HP0 | HP1 | 0, 1, 4, 16 | 0 of 100000 for each GAP |
+| HP1 | HP0 | 0, 1, 4, 16 | 0 of 100000 for each GAP |
+| HP0 | HP2 | 0, 1, 4, 16 | 0 of 100000 for each GAP |
+| HP2 | HP0 | 0, 1, 4, 16 | 0 of 100000 for each GAP |
+| HP0 | HP0 | 0, 16-beat bursts | 0 of 50000 |
+| HP0 | HP2 | 0, 16-beat bursts | 0 of 50000 |
+| HP0 | HP0 | 0, PS memory load (2 threads) | 0 of 100000 |
+| HP0 | HP2 | 0, PS memory load (2 threads) | 0 of 100000 |
+
+The check of the comparison (ORDER_REVERSE: the read goes before the
+write, GAP 0):
+
+| Write port | Read port | Reads that did not give the written value |
+|---|---|---|
+| HP0 | HP0 | 84316 of 100000 |
+| HP0 | HP2 | 17190 of 100000 |
+
+- In these conditions no read gave the value from before a write that
+  preceded it. HP0 and HP1 share a port of the DDR controller, and HP0 and
+  HP2 do not (UG585 v1.7, Table 5-11); the result is the same for both.
+  This is an observation, not a guarantee of the order: AXI does not order
+  a read and a write. The cache design must decide if it relies on it.
+- The reverse runs show that the comparison finds a wrong value. They also
+  show that a read that goes before a write often gives the new value: in
+  16 % of the iterations on one port, and in 83 % on two ports. A later
+  write can pass an earlier read.
+- For one GAP, the latency results of the five pairs of ports were equal.
+  The PS was idle, the seed was the same, and the system repeats its timing
+  closely; the reverse runs and B4 show that the port setting works.
+
+Not done yet: the 32-bit width of B7 (M2c), and B4, B5 and B6 at 50 MHz
+and 150 MHz.
