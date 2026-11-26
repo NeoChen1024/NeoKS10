@@ -11,8 +11,8 @@ tapes"). Not known yet:
 - Which of them apply to the ITS microcode behaviour. They are for the DEC
   microcode. `DSKEA` and `DSKEC` test DEC paging, which the ITS microcode
   does not have.
-- How the diagnostic monitor `SMMON` loads and runs them on a KS10 without
-  TOPS-10, and what the 8080 does for it.
+- How a pass of a program with `SUBSM` ends, and what it prints then. A
+  60 s run of `DSKCA` in sims showed no end of a pass.
 
 ## KS10 processor and devices
 
@@ -20,7 +20,9 @@ tapes"). Not known yet:
   level from the adapter status register, and the use of the vector
   (`src/kshack/inout`, not read yet). docs/emulator.md.
 - The value of `APRID` for the ITS microcode (`src/system/ksdefs.194` gives
-  the fields only). docs/emulator.md.
+  the fields only). sims `pdp10-ks` in ITS mode gives microcode version 416
+  and options 570 (octal), from the title of `DSKCA` **[emulator]**; that is
+  not a source for the value. docs/emulator.md.
 - The register address of the `SSIMP` IMP interface (`%LHVEC`,
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
 - The instruction times of the KS10, for the virtual time of the emulator.

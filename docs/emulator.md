@@ -321,13 +321,65 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
 
 - Each instruction: differential runs against the instruction records of
   the reference emulator, with a trace patch in `oracle/` (AGENTS.md).
-- The DEC KS10 diagnostics (`make diag`), from the tapes in
-  [Documents and tapes](#documents-and-tapes). They are for the DEC
-  microcode. Which of them apply to the ITS microcode behaviour is an open
-  item.
+- The DEC KS10 diagnostics (`make diag`); see [Diagnostics](#diagnostics).
 - `make its-boot`: boot the step 0 disk image with a replay file of
   console input, to the ITS prompt.
 - `make its-build`: build ITS from source with the scripts of `its/`.
+
+### Diagnostics
+
+The diagnostics come from `ks_diag_gs.tap.bz2` (third-party.lock). They
+stay in `references/` and in build output, never in git: their files
+carry the license text of DEC.
+
+**How a diagnostic runs.** On a real KS10, the diagnostic monitor `SMMON`
+loads the programs from a TOPS-10 or TOPS-20 disk pack, or `SMMAG` loads
+them from the diagnostic magnetic tape `DSXLA` **[manual]** (`SMMON.TXT`
+and `DSXLA.INP` on the tapes). This project has neither medium. The
+programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
+3.2; `DSKCA.TXT`, section 3.1):
+
+- The programs of the `DSKAA` to `DSKAM` group need only the console. They
+  start at 30000. An error is a `HALT`, and word 30047 (`PASCNT`) counts the
+  passes. The program runs until it is stopped.
+- The other programs need the subroutine program `SUBSM` in memory. It
+  prints the messages on the console terminal through the 8080 words.
+  `SUBSM.SAV` ends with `JRST 2000`; the program is loaded after it.
+- At the start, `SUBSM` asks `TTY SWITCH CONTROL ? - 0,S OR Y <CR> -`.
+  The answer `0` selects all switches 0, which is the full test
+  (`DSKCA.TXT`, sections 3.2 and 3.3).
+- `SMCPU.CMD` lists the processor diagnostics in the order in which the
+  monitor runs them.
+
+**The plan for `make diag`:**
+
+1. Extract the `.SAV` files from the tape into `build/`. A `.SAV` file is a
+   list of blocks (`-count,,address-1`, then the words) and ends with
+   `JRST start`.
+2. For each program of `SMCPU.CMD`: load `SUBSM.SAV` (if the program needs
+   it), then the program, with `neoks10` and a console script.
+3. Start at 30000. Answer the switch question with `0`.
+4. Stop after a fixed number of instructions. The result is a pass if the
+   processor did not halt, `PASCNT` did not decrease, and the console
+   output has no error report. A halt gives the PC, which the listing
+   (`.SEQ` file) explains.
+
+**Reference runs [emulator]** (sims `pdp10-ks` 9556eca0, `set cpu its`,
+`load -c` of the extracted files, 2026-11-26):
+
+- `DSKAA` ran for 120 s of host time without a halt. `PASCNT` was
+  14162641 (octal) at the end.
+- `DSKCA` with `SUBSM` printed its title, took the answer `0` and ran for
+  60 s without a halt or an error message. The end of a pass was not seen
+  in that time.
+- The title of `DSKCA` gave `MCV=416` and `MCO=570`, the microcode version
+  and options from `APRID`, as sims gives them in ITS mode.
+
+**Which programs apply.** The programs are for the DEC microcode. `DSKEA`
+and `DSKEC` test the paging of the DEC microcode, which the ITS microcode
+does not have; `make diag` leaves them out. For the other programs, a
+difference that comes from the ITS microcode goes into
+`docs/discrepancies.md`, with the instruction and the two behaviours.
 
 ### Order of the work
 
