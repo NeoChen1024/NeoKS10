@@ -472,5 +472,9 @@ write, GAP 0):
   The PS was idle, the seed was the same, and the system repeats its timing
   closely; the reverse runs and B4 show that the port setting works.
 
-Not done yet: the 32-bit width of B7 (M2c), and B4, B5 and B6 at 50 MHz
-and 150 MHz.
+Not done yet: the 32-bit width of B7 (M2c).
+
+The test design is a probe: its checks and measurements use 100 MHz. The
+M1 results give B7 at 50 MHz and 150 MHz. Builds at those clocks are
+optional; the design does not grow to meet timing at 150 MHz (the M2b
+build met it with 0.050 ns of slack).

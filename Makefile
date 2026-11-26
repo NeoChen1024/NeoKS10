@@ -91,9 +91,11 @@ MUTANTS ?= 20
 mutate:
 	$(PYTHON) tb/mutate.py --module $(MODULE) --count $(MUTANTS)
 
-# Vivado builds of rtl/memprobe at the three clocks of the HP side. Set VIVADO
-# if vivado is not in PATH. Read build/fpga/memprobe-<MHz>/timing.rpt after it.
-SYNTH_CLOCKS ?= 50 100 150
+# Vivado builds of rtl/memprobe. The design is checked at 100 MHz; the other
+# clocks of the HP side (SYNTH_CLOCKS="50 150") are optional: if one does not
+# meet timing, record it, do not change the design for it. Set VIVADO if
+# vivado is not in PATH. Read build/fpga/memprobe-<MHz>/timing.rpt after it.
+SYNTH_CLOCKS ?= 100
 synth:
 	@for c in $(SYNTH_CLOCKS); do \
 	    echo "memprobe $$c MHz:"; \

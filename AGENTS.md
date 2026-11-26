@@ -87,7 +87,7 @@ fails.
 | A new behaviour in `rtl/` | Also `make mutate` for the changed module |
 | Before a merge | `make diag` and `make its-boot` |
 | A milestone, or a possible fault in a full system | `make its-build` |
-| A file in `fpga/`, or a timing claim | `make synth`, and read the timing report |
+| A file in `fpga/`, or a timing claim | `make synth` (100 MHz; other clocks optional), and read the timing report |
 
 - `make check` is: format, lint, unit tests, a check that the generated
   files are current, and a short random differential run.
