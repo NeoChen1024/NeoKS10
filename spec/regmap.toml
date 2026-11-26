@@ -450,7 +450,7 @@ name = "STALLS_LO"
 offset = 0x098
 access = "ro"
 reset = 0
-description = "Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0."
+description = "Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. A cycle in which it waits for a free ID (an ID is free two cycles after its RLAST or B handshake) is not a stall. Bits 31:0."
 
 [[block.register]]
 name = "STALLS_HI"

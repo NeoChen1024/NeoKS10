@@ -148,7 +148,7 @@ pub mod memprobe {
         reset: 0x0000_0000,
     };
 
-    /// Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0. Access: ro.
+    /// Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. A cycle in which it waits for a free ID (an ID is free two cycles after its RLAST or B handshake) is not a stall. Bits 31:0. Access: ro.
     pub const STALLS_LO: Reg = Reg {
         offset: 0x098,
         reset: 0x0000_0000,

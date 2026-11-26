@@ -71,18 +71,27 @@ pub enum Op {
     Read,
     Write,
     Mixed,
+    Order,
     Fill,
     Check,
 }
 
 impl Op {
-    const ALL: [Op; 5] = [Op::Read, Op::Write, Op::Mixed, Op::Fill, Op::Check];
+    const ALL: [Op; 6] = [
+        Op::Read,
+        Op::Write,
+        Op::Mixed,
+        Op::Order,
+        Op::Fill,
+        Op::Check,
+    ];
 
     fn value(self) -> u32 {
         match self {
             Op::Read => mp::mode::op::READ,
             Op::Write => mp::mode::op::WRITE,
             Op::Mixed => mp::mode::op::MIXED,
+            Op::Order => mp::mode::op::ORDER,
             Op::Fill => mp::mode::op::FILL,
             Op::Check => mp::mode::op::CHECK,
         }
@@ -93,6 +102,7 @@ impl Op {
             Op::Read => "read",
             Op::Write => "write",
             Op::Mixed => "mixed",
+            Op::Order => "order",
             Op::Fill => "fill",
             Op::Check => "check",
         }
@@ -147,6 +157,11 @@ pub struct RunConfig {
     pub read_share: u32,
     /// READ and MIXED compare the data with the pattern of `seed`.
     pub verify: bool,
+    /// HP port of the reads and of the writes: 0 to 3.
+    pub rd_port: u32,
+    pub wr_port: u32,
+    /// ORDER: the read goes before the write.
+    pub order_reverse: bool,
     /// Beats in each burst: 1, 2, 4, 8 or 16.
     pub beats: u32,
     pub base: u32,
@@ -166,6 +181,9 @@ impl RunConfig {
             outstanding: 1,
             read_share: 0x8000,
             verify: false,
+            rd_port: 0,
+            wr_port: 0,
+            order_reverse: false,
             beats,
             base: 0,
             span_log2,
@@ -175,7 +193,7 @@ impl RunConfig {
         }
     }
 
-    /// The value of MODE: 64-bit beats, HP0.
+    /// The value of MODE: 64-bit beats.
     pub fn mode(&self) -> Result<u32, Error> {
         let len = self.beats.wrapping_sub(1);
         if !matches!(self.beats, 1 | 2 | 4 | 8 | 16) {
@@ -193,9 +211,10 @@ impl RunConfig {
         m = put(m, mp::mode::PATTERN, self.pattern.value())?;
         m = put(m, mp::mode::LEN, len)?;
         m = put(m, mp::mode::SIZE, mp::mode::size::B8)?;
-        m = put(m, mp::mode::RD_PORT, mp::mode::rd_port::HP0)?;
-        m = put(m, mp::mode::WR_PORT, mp::mode::wr_port::HP0)?;
+        m = put(m, mp::mode::RD_PORT, self.rd_port)?;
+        m = put(m, mp::mode::WR_PORT, self.wr_port)?;
         m = put(m, mp::mode::VERIFY, u32::from(self.verify))?;
+        m = put(m, mp::mode::ORDER_REVERSE, u32::from(self.order_reverse))?;
         Ok(m)
     }
 
@@ -204,6 +223,7 @@ impl RunConfig {
         match self.op {
             Op::Fill | Op::Check => (1u64 << self.span_log2) / (u64::from(self.beats) * 8),
             Op::Read | Op::Write | Op::Mixed => u64::from(self.count),
+            Op::Order => 2 * u64::from(self.count),
         }
     }
 }
@@ -228,6 +248,7 @@ pub struct Results {
     pub first_err_addr: u32,
     pub first_err_data: u64,
     pub resp_errors: u32,
+    pub order_mismatches: u32,
     pub hist_drops: u32,
     pub rd_first: Hist,
     pub rd_last: Hist,
@@ -402,6 +423,7 @@ impl Memprobe {
             first_err_addr: self.rd(mp::FIRST_ERR_ADDR),
             first_err_data: self.rd64(mp::FIRST_ERR_DATA_LO, mp::FIRST_ERR_DATA_HI),
             resp_errors: self.rd(mp::RESP_ERRORS),
+            order_mismatches: self.rd(mp::ORDER_MISMATCHES),
             hist_drops: self.rd(mp::HIST_DROPS),
             rd_first: self.hist(
                 mp::HIST_RD_FIRST,
@@ -455,6 +477,9 @@ pub fn check_caps(c: &Caps, cfg: &RunConfig) -> Result<(), Error> {
     if cfg.op == Op::Mixed && !c.mixed {
         return Err(Error::Unsupported("MIXED".into()));
     }
+    if cfg.op == Op::Order && !c.order {
+        return Err(Error::Unsupported("ORDER".into()));
+    }
     if cfg.pattern != Pattern::Seq && !c.patterns {
         return Err(Error::Unsupported(format!(
             "pattern {}",
@@ -464,8 +489,13 @@ pub fn check_caps(c: &Caps, cfg: &RunConfig) -> Result<(), Error> {
     if cfg.verify && !c.verify {
         return Err(Error::Unsupported("VERIFY".into()));
     }
-    if c.ports & 1 == 0 {
-        return Err(Error::Unsupported("HP0".into()));
+    for (what, p) in [("RD_PORT", cfg.rd_port), ("WR_PORT", cfg.wr_port)] {
+        if p > 3 || c.ports & (1 << p) == 0 {
+            return Err(Error::Unsupported(format!(
+                "{what} HP{p}; CAPS.PORTS is {:#x}",
+                c.ports
+            )));
+        }
     }
     Ok(())
 }
@@ -570,6 +600,38 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn ports_and_order() {
+        // ORDER 3 in bits 2:0, RD_PORT 17:16, WR_PORT 19:18, ORDER_REVERSE 21.
+        let base = RunConfig::simple(Op::Order, 1, 22, 1, 0, 1);
+        let o = RunConfig {
+            rd_port: 2,
+            wr_port: 1,
+            order_reverse: true,
+            ..base
+        };
+        assert_eq!(o.mode().unwrap(), 0x0026_3003);
+        assert_eq!(o.transactions(), 2);
+        assert!(RunConfig { rd_port: 4, ..base }.mode().is_err());
+        let v2a = Caps::from_reg(0x0134_1064); // M2a: HP0 only, no ORDER
+        let v2b = Caps::from_reg(0x0F3C_1064); // M2b: HP0 to HP3, ORDER
+        assert!(check_caps(&v2a, &o).is_err());
+        assert!(check_caps(&v2b, &o).is_ok());
+        let read = RunConfig::simple(Op::Read, 1, 22, 1, 0, 1);
+        assert!(check_caps(&v2a, &RunConfig { rd_port: 2, ..read }).is_err());
+        assert!(
+            check_caps(
+                &v2b,
+                &RunConfig {
+                    rd_port: 3,
+                    wr_port: 2,
+                    ..read
+                }
+            )
+            .is_ok()
         );
     }
 }

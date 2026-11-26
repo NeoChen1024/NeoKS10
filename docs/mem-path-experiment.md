@@ -74,13 +74,21 @@ register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
   MMCM is not locked.
 - An MMCM makes `clk_m` from FCLK0 for the HP side. A bitstream has one
   frequency: 50, 100 or 150 MHz (B7). `CAPS.CLK_MHZ` gives it.
-- A traffic generator is an AXI3 master on an HP port. Registers set the
-  operation (read, write, mixed, fill, check), the address pattern
+- A traffic generator is an AXI3 master. Its reads use the HP port of
+  `MODE.RD_PORT`, and its writes the port of `MODE.WR_PORT` (HP0 to HP3).
+  Registers set the operation (read, write, mixed, order, fill, check), the
+  address pattern
   (sequential, random, fixed), the burst length, the span, the gap between
   transactions, the share of reads, and the number of transactions in
   progress (up to 16, each with its own AXI ID).
 - The R beats of different IDs can come in any order. The design looks up
   the ID of each R and B in a table: start time, address, next beat.
+- In the cycle of an address handshake the design can set the next VALID,
+  so that one address can go in each cycle.
+- ORDER (B6): a write of a value, then a read of the same address GAP cycles
+  after the WLAST handshake, without a wait for B. ORDER_REVERSE puts the
+  read first; its reads must then give the old value, a check that the
+  comparison works.
 - The bus address is the base of the reserved region plus an offset of
   24 bits. Thus no configuration can make an access outside the region.
 - Timers count `clk_m` cycles from the address handshake to the first R
@@ -104,20 +112,24 @@ The versions of the design:
 |---|---|---|
 | 1 | M1 | One transaction in progress, sequential addresses, 64-bit beats, HP0 |
 | 2 | M2a | Up to 16 in progress, random and fixed addresses, mixed operations, VERIFY, HP0 |
+| 2 | M2b | Also one address in each cycle, ORDER, HP0 to HP3 |
 
-ORDER (B6), the ports HP1 to HP3 and 32-bit beats are in the register map of
-version 2, but not yet in a bitstream. `CAPS` shows the features of a
+32-bit beats are in the register map of version 2, but not yet in a
+bitstream. `CAPS` shows the features of a
 bitstream. The PS program does not start a measurement that needs a feature
 that `CAPS` does not have.
 
 Verification of the test design (`tb/memprobe/`):
 
-- `tb_core` simulates the design with an AXI slave model, random latencies,
-  injected errors and two clocks with different periods. The model answers
-  in any order across IDs and interleaves R beats. It computes the expected
+- `tb_core` simulates the design with a model of four HP ports and one
+  memory, random latencies, injected errors and two clocks with different
+  periods. The model answers in any order across IDs and interleaves R
+  beats. It can make a write visible to reads some cycles late, so that an
+  ORDER read sees the old value. It computes the expected
   histograms, counters and data errors from its own record of the
-  handshakes, and checks the IDs, the order of the W beats and the limit of
-  transactions in progress.
+  handshakes, and checks the IDs, the order of the W beats, the limit of
+  transactions in progress, the ports, the ORDER timing and the spread of
+  RANDOM addresses.
 - `tb_hist` tests one histogram: with 4 banks at one sample in each cycle,
   and with 1 bank and a full FIFO.
 - `regs.sby` proves the AXI rules of the GP0 slave: each GP0 request gets

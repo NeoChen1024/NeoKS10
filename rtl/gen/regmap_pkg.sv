@@ -232,7 +232,7 @@ package memprobe_regmap_pkg;
   localparam [31:0] WRITES_HI_RESET = 32'h00000000;
   localparam [31:0] WRITES_HI_MASK = 32'hFFFFFFFF;
 
-  // STALLS_LO (ro): Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0.
+  // STALLS_LO (ro): Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. A cycle in which it waits for a free ID (an ID is free two cycles after its RLAST or B handshake) is not a stall. Bits 31:0.
   localparam [31:0] STALLS_LO_OFFSET = 32'h00000098;
   localparam [31:0] STALLS_LO_RESET = 32'h00000000;
   localparam [31:0] STALLS_LO_MASK = 32'hFFFFFFFF;

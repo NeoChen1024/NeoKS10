@@ -56,7 +56,8 @@ module memprobe_hist #(
     assign drop = |bank_drop;
 
     always_ff @(posedge clk) begin
-        if (rst || (clear && !busy)) begin
+        // clear comes only while busy is 0 (memprobe_core waits for it).
+        if (rst || clear) begin
             next_bank <= '0;
             min       <= '1;
             max       <= '0;

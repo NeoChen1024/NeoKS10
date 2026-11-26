@@ -42,7 +42,7 @@ Test design for the memory path between the PL and the PS DDR (docs/mem-path-exp
 | 0x08C | READS_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
 | 0x090 | WRITES_LO | ro | 0x00000000 | Write transactions with a response, bits 31:0. |
 | 0x094 | WRITES_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
-| 0x098 | STALLS_LO | ro | 0x00000000 | Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0. |
+| 0x098 | STALLS_LO | ro | 0x00000000 | Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. A cycle in which it waits for a free ID (an ID is free two cycles after its RLAST or B handshake) is not a stall. Bits 31:0. |
 | 0x09C | STALLS_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
 | 0x0A0 | DATA_ERRORS | ro | 0x00000000 | Words that are not the expected value. Stops at 0xFFFFFFFF. |
 | 0x0A4 | FIRST_ERR_ADDR | ro | 0x00000000 | Byte offset in the HP memory of the first word that is not the expected value, in the order of the R handshakes. |

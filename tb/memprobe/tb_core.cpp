@@ -24,6 +24,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -129,12 +130,16 @@ struct HpConfig {
     uint32_t lat_min = 3, lat_span = 20;   // latency of the first beat or of B
     double p_long = 0.0;                   // chance of a latency of 1000 to 1199 edges
     double p_switch = 0.3;                 // chance to go to the R beats of another ID
+    uint32_t late = 0;                     // a write reaches the memory 0 to `late` edges after its last W beat
 };
 
-// The model takes transactions with any IDs, answers them in any order across
-// IDs, and interleaves the R beats of different IDs (AXI3 allows both). It
-// checks the rules of spec/regmap.toml (note "Transactions in progress") and
-// computes the expected results from its own record of the handshakes.
+// The model has four HP ports with one memory. Each port takes transactions
+// with any IDs, answers them in any order across IDs, and interleaves the R
+// beats of different IDs (AXI3 allows both). The model checks the rules of
+// spec/regmap.toml (note "Transactions in progress", GAP, the ports of MODE)
+// and computes the expected results from its own record of the handshakes.
+static constexpr int PORTS = 4;
+
 struct Hp {
     Vmemprobe_core* d;
     Rng& rng;
@@ -142,49 +147,53 @@ struct Hp {
     std::vector<uint8_t> mem = std::vector<uint8_t>(HP_SIZE);
     uint64_t n = 0;   // number of the next edge of clk_m
 
-    struct Rd { unsigned id; uint32_t off; unsigned len; uint64_t t_hs, ready_at; unsigned beat; };
+    struct Rd { unsigned id; uint32_t off; unsigned len; uint64_t t_hs, ready_at; unsigned beat; bool bad; };
     struct Wr { unsigned id; uint32_t off; unsigned len; uint64_t t_hs; };
     struct WBeat { uint64_t data; bool last; unsigned id; };
     struct B { unsigned id; uint64_t t_aw, ready_at; };
-    std::vector<Rd> rds;              // after AR, until RLAST
-    std::deque<Wr> aws;               // after AW, waiting for W beats, in AW order
-    std::deque<WBeat> wbeats;         // W beats not yet matched to an AW
-    std::vector<B> bs;                // complete writes, until B
-    int r_cur = -1, b_cur = -1;       // ID of the R beat or B on the bus, or -1
+    struct Pending { uint64_t at; uint32_t off; uint64_t data; };
+    struct Port {
+        std::vector<Rd> rds;          // after AR, until RLAST
+        std::deque<Wr> aws;           // after AW, waiting for W beats, in AW order
+        std::deque<WBeat> wbeats;     // W beats not yet matched to an AW
+        std::vector<B> bs;            // complete writes, until B
+        int r_cur = -1, b_cur = -1;   // ID of the R beat or B on the bus, or -1
+        bool ar_wait = false, aw_wait = false, w_wait = false, r_wait = false, b_wait = false;
+        uint32_t ar_addr = 0, aw_addr = 0;
+        unsigned ar_len = 0, aw_len = 0, ar_id = 0, aw_id = 0, w_id = 0;
+        uint64_t w_data = 0;
+        bool w_last = false;
+    };
+    Port port[PORTS];
+    std::vector<Pending> pending;     // writes not yet in the memory
 
     // Expected results since the last clear().
     Hist hist[3];
     uint64_t reads = 0, writes = 0, stalls = 0;
-    uint32_t resp_errors = 0, data_errors = 0, first_err_addr = 0;
+    uint32_t resp_errors = 0, data_errors = 0, first_err_addr = 0, order_mismatches = 0;
     uint64_t first_err_data = 0;
     bool err_seen = false;
     // The run; the test sets it.
-    unsigned gap = 0, outstanding = 1;
+    unsigned gap = 0, outstanding = 1, rd_port = 0, wr_port = 0;
     uint64_t total = 0;
     uint32_t span_lo = 0, span_hi = HP_SIZE;   // offsets
-    bool check_on = false;
-    uint32_t check_seed = 0;
+    bool check_on = false, order = false, order_reverse = false;
+    uint32_t seed = 0;
     bool exact_stalls = true;
     // State of the run.
-    uint64_t issued = 0, last_addr_hs = 0;
+    uint64_t issued = 0, last_addr_hs = 0, order_mark = 0, order_n = 0;
     unsigned inflight = 0;
     bool any_addr_hs = false;
-    // Coverage: the most transactions in progress, and R beats of a read
-    // between the beats of another read.
+    // Coverage: the most transactions in progress, R beats of a read between
+    // the beats of another read, and VALIDs right after a handshake.
     unsigned max_inflight = 0;
+    uint64_t interleaved = 0, back_to_back = 0;
+    int last_r_id = -1;
     // RUN_CYCLES: the design is busy from START to the end of its pipeline.
     // The model knows the edges from the first address handshake to the last
     // completion of each run; the sum of them is a lower bound.
     uint64_t run_first = 0, run_last = 0, active_sum = 0, runs = 0;
-    uint64_t interleaved = 0;
-    int last_r_id = -1;
-
-    // Previous cycle, for the checks of stability.
-    bool ar_wait = false, aw_wait = false, w_wait = false, r_wait = false, b_wait = false;
-    uint32_t ar_addr = 0, aw_addr = 0;
-    unsigned ar_len = 0, aw_len = 0, ar_id = 0, aw_id = 0, w_id = 0;
-    uint64_t w_data = 0;
-    bool w_last = false;
+    std::set<uint32_t> offsets;   // the burst offsets of the run
 
     Hp(Vmemprobe_core* d_, Rng& r) : d(d_), rng(r) {}
 
@@ -204,20 +213,27 @@ struct Hp {
         for (auto& h : hist) h = Hist();
         reads = writes = stalls = 0;
         active_sum = runs = 0;
-        resp_errors = data_errors = first_err_addr = 0;
+        resp_errors = data_errors = first_err_addr = order_mismatches = 0;
         first_err_data = 0;
         err_seen = false;
     }
 
     void new_run(unsigned gap_, uint64_t total_, unsigned outstanding_, uint32_t base, uint32_t span,
-                 bool check, uint32_t seed) {
+                 bool check, uint32_t seed_, unsigned rd_port_ = 0, unsigned wr_port_ = 0, bool order_ = false,
+                 bool reverse = false) {
         gap = gap_;
-        total = total_;
-        outstanding = outstanding_;
+        total = order_ ? 2 * total_ : total_;
+        outstanding = order_ ? 2 : outstanding_;
         span_lo = base;
         span_hi = base + span;
         check_on = check;
-        check_seed = seed;
+        seed = seed_;
+        rd_port = rd_port_;
+        wr_port = wr_port_;
+        order = order_;
+        order_reverse = reverse;
+        order_n = 0;
+        offsets.clear();
         issued = 0;
         any_addr_hs = false;
         exact_stalls = true;
@@ -225,21 +241,23 @@ struct Hp {
 
     // After a loss of the lock: the reset of clk_m ended all transactions.
     void drop_all() {
-        rds.clear();
-        aws.clear();
-        wbeats.clear();
-        bs.clear();
-        r_cur = b_cur = -1;
+        for (auto& p : port) p = Port();
+        pending.clear();
         inflight = 0;
-        ar_wait = aw_wait = w_wait = r_wait = b_wait = false;
     }
 
-    bool idle() const { return rds.empty() && aws.empty() && wbeats.empty() && bs.empty(); }
+    bool idle() const {
+        for (auto& p : port)
+            if (!p.rds.empty() || !p.aws.empty() || !p.wbeats.empty() || !p.bs.empty()) return false;
+        return pending.empty();
+    }
 
     bool id_in_flight(unsigned id) const {
-        for (auto& r : rds) if (r.id == id) return true;
-        for (auto& w : aws) if (w.id == id) return true;
-        for (auto& b : bs) if (b.id == id) return true;
+        for (auto& p : port) {
+            for (auto& r : p.rds) if (r.id == id) return true;
+            for (auto& w : p.aws) if (w.id == id) return true;
+            for (auto& b : p.bs) if (b.id == id) return true;
+        }
         return false;
     }
 
@@ -255,16 +273,24 @@ struct Hp {
     }
 
     // A new ARVALID or AWVALID.
-    void check_issue(const char* ch) {
-        if (any_addr_hs)
+    void check_issue(const char* ch, bool second_of_order) {
+        if (order) {
+            // ORDER: the second transaction comes GAP + 1 edges or more after the
+            // WLAST handshake of the write (ORDER_REVERSE: the AR handshake).
+            if (second_of_order)
+                CHECK(n - order_mark >= gap + 1, "%s of ORDER %llu edges after the mark, GAP %u", ch,
+                      (unsigned long long)(n - order_mark), gap);
+        } else if (any_addr_hs) {
             CHECK(n - last_addr_hs >= gap, "%s issue %llu edges after the last address handshake, GAP %u", ch,
                   (unsigned long long)(n - last_addr_hs), gap);
+        }
         CHECK(inflight + 1 <= outstanding, "%s issue with %u transactions in progress, OUTSTANDING %u", ch,
               inflight, outstanding);
     }
 
     void addr_hs(unsigned id, const char* ch) {
         CHECK(!id_in_flight(id), "%s ID %u is in use", ch, id);
+        offsets.insert(ch[1] == 'R' ? d->hp_araddr[rd_port] : d->hp_awaddr[wr_port]);
         if (!any_addr_hs) run_first = n;
         last_addr_hs = n;
         any_addr_hs = true;
@@ -273,10 +299,19 @@ struct Hp {
         max_inflight = std::max(max_inflight, inflight);
     }
 
-    void check_beat(const Rd& r, uint64_t data) {
+    uint64_t order_value() const {
+        uint32_t k = uint32_t(order_n);
+        return uint64_t(seed ^ k) | (uint64_t(seed ^ ~k) << 32);
+    }
+
+    void check_beat(Rd& r, uint64_t data) {
+        if (order) {
+            if (data != order_value()) r.bad = true;
+            return;
+        }
         if (!check_on) return;
         uint32_t off = r.off + 8 * r.beat;
-        uint64_t expect = pattern64(check_seed, off);
+        uint64_t expect = pattern64(seed, off);
         bool lo = uint32_t(data) != uint32_t(expect), hi = (data >> 32) != (expect >> 32);
         data_errors += unsigned(lo) + unsigned(hi);
         if ((lo || hi) && !err_seen) {
@@ -288,110 +323,153 @@ struct Hp {
 
     // Before the edge: read the outputs of the design and of the model.
     void pre_edge() {
+        // Writes that reach the memory now.
+        for (size_t i = 0; i < pending.size();) {
+            if (n >= pending[i].at) {
+                wr64(pending[i].off, pending[i].data);
+                pending.erase(pending.begin() + long(i));
+            } else {
+                i++;
+            }
+        }
         // A reset of clk_m ends all transactions of the design; no rule applies.
         if (d->rst_m) {
-            ar_wait = aw_wait = w_wait = r_wait = b_wait = false;
+            for (auto& p : port) p.ar_wait = p.aw_wait = p.w_wait = p.r_wait = p.b_wait = false;
             return;
         }
-        const bool arv = d->hp_arvalid, awv = d->hp_awvalid, wv = d->hp_wvalid;
-        const bool arr = d->hp_arready, awr = d->hp_awready, wr = d->hp_wready;
-        const bool rv = d->hp_rvalid, rr = d->hp_rready, bv = d->hp_bvalid, br = d->hp_bready;
+        bool any_ar = false, any_aw = false;
+        bool stall_valid = false, any_valid = false;
+        for (int pi = 0; pi < PORTS; pi++) {
+            Port& p = port[pi];
+            const bool arv = d->hp_arvalid[pi], awv = d->hp_awvalid[pi], wv = d->hp_wvalid[pi];
+            const bool arr = d->hp_arready[pi], awr = d->hp_awready[pi], wr = d->hp_wready[pi];
+            const bool rv = d->hp_rvalid[pi], rr = d->hp_rready[pi], bv = d->hp_bvalid[pi], br = d->hp_bready[pi];
+            if (arv) CHECK(unsigned(pi) == rd_port, "ARVALID on HP%d, RD_PORT %u", pi, rd_port);
+            if (awv || wv) CHECK(unsigned(pi) == wr_port, "AWVALID or WVALID on HP%d, WR_PORT %u", pi, wr_port);
 
-        // A VALID without READY stays, with the same payload.
-        if (ar_wait)
-            CHECK(arv && d->hp_araddr == ar_addr && d->hp_arlen == ar_len && d->hp_arid == ar_id,
-                  "AR changed before ARREADY");
-        if (aw_wait)
-            CHECK(awv && d->hp_awaddr == aw_addr && d->hp_awlen == aw_len && d->hp_awid == aw_id,
-                  "AW changed before AWREADY");
-        if (w_wait)
-            CHECK(wv && d->hp_wdata == w_data && d->hp_wlast == w_last && d->hp_wid == w_id,
-                  "W changed before WREADY");
-        if (arv && !ar_wait) check_issue("AR");
-        if (awv && !aw_wait) check_issue("AW");
-        CHECK(!(arv && awv), "ARVALID and AWVALID together");
+            // A VALID without READY stays, with the same payload.
+            if (p.ar_wait)
+                CHECK(arv && d->hp_araddr[pi] == p.ar_addr && d->hp_arlen[pi] == p.ar_len && d->hp_arid[pi] == p.ar_id,
+                      "AR changed before ARREADY");
+            if (p.aw_wait)
+                CHECK(awv && d->hp_awaddr[pi] == p.aw_addr && d->hp_awlen[pi] == p.aw_len && d->hp_awid[pi] == p.aw_id,
+                      "AW changed before AWREADY");
+            if (p.w_wait)
+                CHECK(wv && d->hp_wdata[pi] == p.w_data && d->hp_wlast[pi] == p.w_last && d->hp_wid[pi] == p.w_id,
+                      "W changed before WREADY");
+            bool ar_new = arv && !p.ar_wait, aw_new = awv && !p.aw_wait;
+            if (ar_new) {
+                if (any_addr_hs && last_addr_hs + 1 == n) back_to_back++;
+                check_issue("AR", order && !order_reverse);
+            }
+            if (aw_new) {
+                if (any_addr_hs && last_addr_hs + 1 == n) back_to_back++;
+                check_issue("AW", order && order_reverse);
+            }
+            any_ar |= arv;
+            any_aw |= awv;
+            any_valid |= arv || awv;
+            stall_valid |= (arv && !arr) || (awv && !awr);
 
-        // Expected stall (spec/regmap.toml, STALLS_LO).
+            p.ar_wait = arv && !arr;
+            p.aw_wait = awv && !awr;
+            p.w_wait = wv && !wr;
+            p.r_wait = rv && !rr;
+            p.b_wait = bv && !br;
+            p.ar_addr = d->hp_araddr[pi];
+            p.ar_len = d->hp_arlen[pi];
+            p.ar_id = d->hp_arid[pi];
+            p.aw_addr = d->hp_awaddr[pi];
+            p.aw_len = d->hp_awlen[pi];
+            p.aw_id = d->hp_awid[pi];
+            p.w_data = d->hp_wdata[pi];
+            p.w_last = d->hp_wlast[pi];
+            p.w_id = d->hp_wid[pi];
+        }
+        CHECK(!(any_ar && any_aw), "ARVALID and AWVALID together");
+
+        // Expected stall (spec/regmap.toml, STALLS_LO); none in ORDER.
         bool gap_ok = !any_addr_hs || n - last_addr_hs >= gap;
-        bool stall = issued < total && gap_ok
-                  && ((arv && !arr) || (awv && !awr) || (!arv && !awv && inflight >= outstanding));
+        bool stall = !order && issued < total && gap_ok
+                  && (stall_valid || (!any_valid && inflight >= outstanding));
         if (stall) stalls++;
 
-        ar_wait = arv && !arr;
-        aw_wait = awv && !awr;
-        w_wait = wv && !wr;
-        r_wait = rv && !rr;
-        b_wait = bv && !br;
-        ar_addr = d->hp_araddr;
-        ar_len = d->hp_arlen;
-        ar_id = d->hp_arid;
-        aw_addr = d->hp_awaddr;
-        aw_len = d->hp_awlen;
-        aw_id = d->hp_awid;
-        w_data = d->hp_wdata;
-        w_last = d->hp_wlast;
-        w_id = d->hp_wid;
-
-        if (arv && arr) {
-            check_addr(d->hp_araddr, d->hp_arlen, "AR");
-            addr_hs(d->hp_arid, "AR");
-            rds.push_back({d->hp_arid, d->hp_araddr - HP_BASE, d->hp_arlen, n, n + latency(), 0});
-        }
-        if (awv && awr) {
-            check_addr(d->hp_awaddr, d->hp_awlen, "AW");
-            addr_hs(d->hp_awid, "AW");
-            aws.push_back({d->hp_awid, d->hp_awaddr - HP_BASE, d->hp_awlen, n});
-        }
-        if (wv && wr) wbeats.push_back({d->hp_wdata, bool(d->hp_wlast), d->hp_wid});
-        CHECK(wbeats.size() <= 16, "W beats without AW");
-
-        // A write is complete when its AW and all its W beats are here.
-        while (!aws.empty() && wbeats.size() >= aws.front().len + 1) {
-            Wr w = aws.front();
-            aws.pop_front();
-            for (unsigned i = 0; i <= w.len; i++) {
-                WBeat b = wbeats.front();
-                wbeats.pop_front();
-                CHECK(b.last == (i == w.len), "WLAST %d at beat %u of %u", int(b.last), i, w.len + 1);
-                CHECK(b.id == w.id, "WID %u, AWID %u", b.id, w.id);
-                wr64(w.off + 8 * i, b.data);
+        for (int pi = 0; pi < PORTS; pi++) {
+            Port& p = port[pi];
+            const bool arv = d->hp_arvalid[pi], awv = d->hp_awvalid[pi], wv = d->hp_wvalid[pi];
+            const bool arr = d->hp_arready[pi], awr = d->hp_awready[pi], wr = d->hp_wready[pi];
+            const bool rv = d->hp_rvalid[pi], rr = d->hp_rready[pi], bv = d->hp_bvalid[pi], br = d->hp_bready[pi];
+            if (arv && arr) {
+                check_addr(d->hp_araddr[pi], d->hp_arlen[pi], "AR");
+                addr_hs(d->hp_arid[pi], "AR");
+                p.rds.push_back({d->hp_arid[pi], d->hp_araddr[pi] - HP_BASE, d->hp_arlen[pi], n, n + latency(), 0, false});
+                if (order && order_reverse) order_mark = n;
             }
-            bs.push_back({w.id, w.t_hs, n + latency()});
-        }
+            if (awv && awr) {
+                check_addr(d->hp_awaddr[pi], d->hp_awlen[pi], "AW");
+                addr_hs(d->hp_awid[pi], "AW");
+                p.aws.push_back({d->hp_awid[pi], d->hp_awaddr[pi] - HP_BASE, d->hp_awlen[pi], n});
+            }
+            if (wv && wr) {
+                p.wbeats.push_back({d->hp_wdata[pi], bool(d->hp_wlast[pi]), d->hp_wid[pi]});
+                if (order && !order_reverse && d->hp_wlast[pi]) order_mark = n;
+            }
+            CHECK(p.wbeats.size() <= 16, "W beats without AW");
 
-        if (rv && rr) {
-            auto it = std::find_if(rds.begin(), rds.end(), [&](const Rd& r) { return int(r.id) == r_cur; });
-            CHECK(it != rds.end() && d->hp_rid == unsigned(r_cur), "R without AR");
-            if (it != rds.end()) {
-                Rd& r = *it;
-                if (last_r_id >= 0 && last_r_id != int(r.id)
-                    && std::any_of(rds.begin(), rds.end(), [&](const Rd& x) { return int(x.id) == last_r_id; }))
-                    interleaved++;
-                last_r_id = d->hp_rlast ? -1 : int(r.id);
-                if (r.beat == 0) hist[H_RD_FIRST].add(uint32_t(n - r.t_hs));
-                if (d->hp_rresp != 0) resp_errors++;
-                check_beat(r, d->hp_rdata);
-                if (d->hp_rlast) {
-                    hist[H_RD_LAST].add(uint32_t(n - r.t_hs));
-                    reads++;
-                    inflight--;
-                    run_last = n;
-                    rds.erase(it);
-                } else {
-                    r.beat++;
+            // A write is complete when its AW and all its W beats are here.
+            while (!p.aws.empty() && p.wbeats.size() >= p.aws.front().len + 1) {
+                Wr w = p.aws.front();
+                p.aws.pop_front();
+                uint64_t at = n + (cfg.late ? rng.below(cfg.late + 1) : 0);
+                for (unsigned i = 0; i <= w.len; i++) {
+                    WBeat b = p.wbeats.front();
+                    p.wbeats.pop_front();
+                    CHECK(b.last == (i == w.len), "WLAST %d at beat %u of %u", int(b.last), i, w.len + 1);
+                    CHECK(b.id == w.id, "WID %u, AWID %u", b.id, w.id);
+                    if (at <= n) wr64(w.off + 8 * i, b.data);
+                    else pending.push_back({at, w.off + 8 * i, b.data});
+                }
+                p.bs.push_back({w.id, w.t_hs, n + latency()});
+            }
+
+            if (rv && rr) {
+                auto it = std::find_if(p.rds.begin(), p.rds.end(), [&](const Rd& r) { return int(r.id) == p.r_cur; });
+                CHECK(it != p.rds.end() && d->hp_rid[pi] == unsigned(p.r_cur), "R without AR");
+                if (it != p.rds.end()) {
+                    Rd& r = *it;
+                    if (last_r_id >= 0 && last_r_id != int(r.id)
+                        && std::any_of(p.rds.begin(), p.rds.end(), [&](const Rd& x) { return int(x.id) == last_r_id; }))
+                        interleaved++;
+                    last_r_id = d->hp_rlast[pi] ? -1 : int(r.id);
+                    if (r.beat == 0) hist[H_RD_FIRST].add(uint32_t(n - r.t_hs));
+                    if (d->hp_rresp[pi] != 0) resp_errors++;
+                    check_beat(r, d->hp_rdata[pi]);
+                    if (d->hp_rlast[pi]) {
+                        hist[H_RD_LAST].add(uint32_t(n - r.t_hs));
+                        if (order) {
+                            if (r.bad) order_mismatches++;
+                            order_n++;
+                        }
+                        reads++;
+                        inflight--;
+                        run_last = n;
+                        p.rds.erase(it);
+                    } else {
+                        r.beat++;
+                    }
                 }
             }
-        }
-        if (bv && br) {
-            auto it = std::find_if(bs.begin(), bs.end(), [&](const B& b) { return int(b.id) == b_cur; });
-            CHECK(it != bs.end() && d->hp_bid == unsigned(b_cur), "B without write");
-            if (it != bs.end()) {
-                hist[H_WR_RESP].add(uint32_t(n - it->t_aw));
-                if (d->hp_bresp != 0) resp_errors++;
-                writes++;
-                inflight--;
-                run_last = n;
-                bs.erase(it);
+            if (bv && br) {
+                auto it = std::find_if(p.bs.begin(), p.bs.end(), [&](const B& b) { return int(b.id) == p.b_cur; });
+                CHECK(it != p.bs.end() && d->hp_bid[pi] == unsigned(p.b_cur), "B without write");
+                if (it != p.bs.end()) {
+                    hist[H_WR_RESP].add(uint32_t(n - it->t_aw));
+                    if (d->hp_bresp[pi] != 0) resp_errors++;
+                    writes++;
+                    inflight--;
+                    run_last = n;
+                    p.bs.erase(it);
+                }
             }
         }
     }
@@ -403,38 +481,41 @@ struct Hp {
         // loss of the MMCM lock during a run, the real HP port can keep a
         // transaction; the PS program then loads the PL again.)
         const bool in_reset = d->rst_m;
-        d->hp_arready = !in_reset && rng.chance(cfg.p_arready);
-        d->hp_awready = !in_reset && rng.chance(cfg.p_awready);
-        d->hp_wready = !in_reset && rng.chance(cfg.p_wready);
+        for (int pi = 0; pi < PORTS; pi++) {
+            Port& p = port[pi];
+            d->hp_arready[pi] = !in_reset && rng.chance(cfg.p_arready);
+            d->hp_awready[pi] = !in_reset && rng.chance(cfg.p_awready);
+            d->hp_wready[pi] = !in_reset && rng.chance(cfg.p_wready);
 
-        // A beat that waits for RREADY stays. Otherwise present a beat of the
-        // current read, or of another read that is ready, or none.
-        if (!r_wait) {
-            d->hp_rvalid = 0;
-            std::vector<int> ready;
-            for (auto& r : rds)
-                if (n >= r.ready_at) ready.push_back(int(r.id));
-            bool cur_ok = std::find(ready.begin(), ready.end(), r_cur) != ready.end();
-            if (!ready.empty() && !rng.chance(cfg.p_rbubble)) {
-                if (!cur_ok || rng.chance(cfg.p_switch)) r_cur = ready[rng.below(uint32_t(ready.size()))];
-                auto it = std::find_if(rds.begin(), rds.end(), [&](const Rd& r) { return int(r.id) == r_cur; });
-                d->hp_rvalid = 1;
-                d->hp_rid = it->id;
-                d->hp_rdata = rd64(it->off + 8 * it->beat);
-                d->hp_rlast = (it->beat == it->len);
-                d->hp_rresp = rng.chance(cfg.p_rerr) ? 2 : 0;
+            // A beat that waits for RREADY stays. Otherwise present a beat of the
+            // current read, or of another read that is ready, or none.
+            if (!p.r_wait) {
+                d->hp_rvalid[pi] = 0;
+                std::vector<int> ready;
+                for (auto& r : p.rds)
+                    if (n >= r.ready_at) ready.push_back(int(r.id));
+                bool cur_ok = std::find(ready.begin(), ready.end(), p.r_cur) != ready.end();
+                if (!ready.empty() && !rng.chance(cfg.p_rbubble)) {
+                    if (!cur_ok || rng.chance(cfg.p_switch)) p.r_cur = ready[rng.below(uint32_t(ready.size()))];
+                    auto it = std::find_if(p.rds.begin(), p.rds.end(), [&](const Rd& r) { return int(r.id) == p.r_cur; });
+                    d->hp_rvalid[pi] = 1;
+                    d->hp_rid[pi] = it->id;
+                    d->hp_rdata[pi] = rd64(it->off + 8 * it->beat);
+                    d->hp_rlast[pi] = (it->beat == it->len);
+                    d->hp_rresp[pi] = rng.chance(cfg.p_rerr) ? 2 : 0;
+                }
             }
-        }
-        if (!b_wait) {
-            d->hp_bvalid = 0;
-            std::vector<int> ready;
-            for (auto& b : bs)
-                if (n >= b.ready_at) ready.push_back(int(b.id));
-            if (!ready.empty()) {
-                b_cur = ready[rng.below(uint32_t(ready.size()))];
-                d->hp_bvalid = 1;
-                d->hp_bid = unsigned(b_cur);
-                d->hp_bresp = rng.chance(cfg.p_berr) ? 2 : 0;
+            if (!p.b_wait) {
+                d->hp_bvalid[pi] = 0;
+                std::vector<int> ready;
+                for (auto& b : p.bs)
+                    if (n >= b.ready_at) ready.push_back(int(b.id));
+                if (!ready.empty()) {
+                    p.b_cur = ready[rng.below(uint32_t(ready.size()))];
+                    d->hp_bvalid[pi] = 1;
+                    d->hp_bid[pi] = unsigned(p.b_cur);
+                    d->hp_bresp[pi] = rng.chance(cfg.p_berr) ? 2 : 0;
+                }
             }
         }
     }
@@ -640,7 +721,7 @@ struct Sim {
     void unlock() {
         d->mmcm_locked = 0;
         d->rst_m = 1;
-        d->hp_arready = d->hp_awready = d->hp_wready = 0;
+        for (int p = 0; p < PORTS; p++) d->hp_arready[p] = d->hp_awready[p] = d->hp_wready[p] = 0;
         d->clk_m = 0;
         d->eval();
         clk_m_on = false;
@@ -663,11 +744,13 @@ static void clear_status(Sim& s, uint32_t bit) {
 struct Run {
     uint32_t op = MEMPROBE_MODE_OP_READ, len = 15, base = 0, span_log2 = 22, count = 1, gap = 0;
     uint32_t seed = 1, outstanding = 1, pattern = MEMPROBE_MODE_PATTERN_SEQ, read_share = 0x8000;
-    bool verify = false;
+    uint32_t rd_port = 0, wr_port = 0;
+    bool verify = false, reverse = false;
     uint32_t mode() const {
         return (op << MEMPROBE_MODE_OP_LSB) | (pattern << MEMPROBE_MODE_PATTERN_LSB)
              | (len << MEMPROBE_MODE_LEN_LSB) | (MEMPROBE_MODE_SIZE_B8 << MEMPROBE_MODE_SIZE_LSB)
-             | (verify ? BIT(MODE, VERIFY) : 0u);
+             | (rd_port << MEMPROBE_MODE_RD_PORT_LSB) | (wr_port << MEMPROBE_MODE_WR_PORT_LSB)
+             | (verify ? BIT(MODE, VERIFY) : 0u) | (reverse ? BIT(MODE, ORDER_REVERSE) : 0u);
     }
     bool checks() const {
         return op == MEMPROBE_MODE_OP_CHECK
@@ -693,7 +776,8 @@ static void configure(Sim& s, const Run& r) {
 
 static void start(Sim& s, const Run& r) {
     configure(s, r);
-    s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed);
+    s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed, r.rd_port,
+                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse);
     s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START));
 }
 
@@ -706,9 +790,12 @@ static void run(Sim& s, const Run& r) {
     // A histogram gets at most one sample in each cycle, and takes one sample
     // in each cycle with its four banks: no sample is dropped.
     CHECK(!(st & BIT(STATUS, HIST_DROP)), "HIST_DROP, STATUS %08x", st);
+    // Late writes of the model reach its memory some edges after the run.
+    for (int i = 0; i < 100000 && !s.hp.pending.empty(); i++) s.step();
     CHECK(s.hp.idle(), "transactions in progress after the run");
-    CHECK(s.hp.issued == r.total(), "issued %llu, expected %llu", (unsigned long long)s.hp.issued,
-          (unsigned long long)r.total());
+    uint64_t expect_issued = r.op == MEMPROBE_MODE_OP_ORDER ? 2 * r.total() : r.total();
+    CHECK(s.hp.issued == expect_issued, "issued %llu, expected %llu", (unsigned long long)s.hp.issued,
+          (unsigned long long)expect_issued);
     if (s.hp.issued > 0) s.hp.active_sum += s.hp.run_last - s.hp.run_first;
     s.hp.runs++;
     clear_status(s, BIT(STATUS, DONE));
@@ -738,6 +825,8 @@ static void check_results(Sim& s) {
     CHECK(s.rd(MEMPROBE_FIRST_ERR_ADDR_OFFSET) == hp.first_err_addr, "FIRST_ERR_ADDR %06x, expected %06x",
           s.rd(MEMPROBE_FIRST_ERR_ADDR_OFFSET), hp.first_err_addr);
     CHECK(s.rd64(MEMPROBE_FIRST_ERR_DATA_LO_OFFSET) == hp.first_err_data, "FIRST_ERR_DATA");
+    CHECK(s.rd(MEMPROBE_ORDER_MISMATCHES_OFFSET) == hp.order_mismatches, "ORDER_MISMATCHES %u, expected %u",
+          s.rd(MEMPROBE_ORDER_MISMATCHES_OFFSET), hp.order_mismatches);
     if (hp.exact_stalls) {
         // At most 40 edges more for each run: the command, the first VALID,
         // and the pipeline after the last completion.
@@ -784,6 +873,10 @@ static Run random_run(Rng& rng, uint32_t op) {
         r.pattern = pats[rng.below(3)];
     }
     r.read_share = rng.below(0x10001);
+    if (rng.chance(0.4)) {
+        r.rd_port = rng.below(4);
+        r.wr_port = rng.below(4);
+    }
     return r;
 }
 
@@ -795,8 +888,8 @@ static void test_identity(Sim& s) {
     uint32_t caps = s.rd(MEMPROBE_CAPS_OFFSET);
     CHECK(FIELD(caps, CAPS, CLK_MHZ) == 100, "CAPS.CLK_MHZ %u", FIELD(caps, CAPS, CLK_MHZ));
     CHECK(FIELD(caps, CAPS, MAX_OUTSTANDING) == 16, "CAPS.MAX_OUTSTANDING %u", FIELD(caps, CAPS, MAX_OUTSTANDING));
-    CHECK(FIELD(caps, CAPS, PORTS) == 1, "CAPS.PORTS %u", FIELD(caps, CAPS, PORTS));
-    uint32_t flags = BIT(CAPS, MIXED) | BIT(CAPS, PATTERNS) | BIT(CAPS, VERIFY);
+    CHECK(FIELD(caps, CAPS, PORTS) == 0xF, "CAPS.PORTS %u", FIELD(caps, CAPS, PORTS));
+    uint32_t flags = BIT(CAPS, MIXED) | BIT(CAPS, PATTERNS) | BIT(CAPS, VERIFY) | BIT(CAPS, ORDER);
     CHECK((caps & ~(MEMPROBE_CAPS_CLK_MHZ_MASK | MEMPROBE_CAPS_MAX_OUTSTANDING_MASK | MEMPROBE_CAPS_PORTS_MASK))
               == flags, "CAPS %08x", caps);
     // A burst reads consecutive registers.
@@ -890,7 +983,6 @@ static void test_refusals(Sim& s) {
     auto with = [&](std::function<void(Run&)> f) { Run r = ok; f(r); return r; };
     expect_refused(s, with([](Run& r) { r.len = 2; }), "LEN 2");
     expect_refused(s, with([](Run& r) { r.len = 14; }), "LEN 14");
-    expect_refused(s, with([](Run& r) { r.op = MEMPROBE_MODE_OP_ORDER; }), "ORDER");
     expect_refused(s, with([](Run& r) { r.op = 6; }), "OP 6");
     expect_refused(s, with([](Run& r) { r.seed = 0; }), "SEED 0");
     expect_refused(s, with([](Run& r) { r.outstanding = 0; }), "OUTSTANDING 0");
@@ -905,11 +997,8 @@ static void test_refusals(Sim& s) {
     expect_refused(s, with([](Run& r) { r.base = 0x18000; }), "BASE not a multiple of the span");
     expect_refused(s, with([](Run& r) { r.base = HP_SIZE; r.span_log2 = 12; }), "BASE at the end");
     expect_refused(s, with([](Run& r) { r.base = 0xFFFFF000; r.span_log2 = 12; }), "BASE far outside");
-    // Ports that this design does not have (CAPS.PORTS = HP0), and ORDER_REVERSE
-    // without ORDER.
-    for (uint32_t extra : {1u << MEMPROBE_MODE_RD_PORT_LSB, 2u << MEMPROBE_MODE_RD_PORT_LSB,
-                           3u << MEMPROBE_MODE_RD_PORT_LSB, 1u << MEMPROBE_MODE_WR_PORT_LSB,
-                           3u << MEMPROBE_MODE_WR_PORT_LSB, BIT(MODE, ORDER_REVERSE)}) {
+    // ORDER_REVERSE without ORDER.
+    for (uint32_t extra : {BIT(MODE, ORDER_REVERSE)}) {
         configure(s, ok);
         s.wr(MEMPROBE_MODE_OFFSET, ok.mode() | extra);
         s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START));
@@ -987,7 +1076,8 @@ static void test_fill_check(Sim& s) {
     CHECK(s.status() & BIT(STATUS, DATA_ERR), "no DATA_ERR");
     clear_status(s, BIT(STATUS, DATA_ERR));
     // A second run adds to the counters.
-    s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed);
+    s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed, r.rd_port,
+                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse);
     run(s, r);
     CHECK(s.rd(MEMPROBE_DATA_ERRORS_OFFSET) == 2 * errors, "DATA_ERRORS after two runs");
     check_results(s);
@@ -1091,12 +1181,21 @@ static void test_concurrent(Sim& s, int runs) {
         check_results(s);
         CHECK(s.rd(MEMPROBE_DATA_ERRORS_OFFSET) == 0, "run %d: DATA_ERRORS %u with VERIFY", i,
               s.rd(MEMPROBE_DATA_ERRORS_OFFSET));
+        // RANDOM spreads the bursts over the span; FIXED uses one address.
+        uint64_t places = (uint64_t(1) << r.span_log2) / ((r.len + 1) * 8);
+        if (r.pattern == MEMPROBE_MODE_PATTERN_RANDOM)
+            CHECK(s.hp.offsets.size() * 4 >= std::min<uint64_t>(places, r.count),
+                  "RANDOM: %zu addresses for %u bursts in %llu places", s.hp.offsets.size(), r.count,
+                  (unsigned long long)places);
+        if (r.pattern == MEMPROBE_MODE_PATTERN_FIXED)
+            CHECK(s.hp.offsets.size() == 1, "FIXED: %zu addresses", s.hp.offsets.size());
     }
 
     CHECK(s.hp.max_inflight >= 8, "at most %u transactions were in progress", s.hp.max_inflight);
     CHECK(s.hp.interleaved > 0, "no R beats were interleaved");
-    std::printf("concurrent: up to %u in progress, %llu interleaved R beats\n", s.hp.max_inflight,
-                (unsigned long long)s.hp.interleaved);
+    CHECK(s.hp.back_to_back > 0, "no VALID right after an address handshake");
+    std::printf("concurrent: up to %u in progress, %llu interleaved R beats, %llu back-to-back VALIDs\n",
+                s.hp.max_inflight, (unsigned long long)s.hp.interleaved, (unsigned long long)s.hp.back_to_back);
 
     g_step = "concurrent with errors";
     Run r = random_run(s.rng, MEMPROBE_MODE_OP_READ);
@@ -1135,6 +1234,45 @@ static void test_concurrent(Sim& s, int runs) {
     clear_status(s, BIT(STATUS, DATA_ERR));
 }
 
+// ORDER (B6): a write and then a read of the same address, on the same port
+// or on two ports. The model can make a write visible to reads only some
+// edges after its last W beat ("late"), so that a read can see the old value.
+// ORDER_REVERSE is the check of the comparison: the read goes first.
+static void test_order(Sim& s) {
+    g_step = "order";
+    HpConfig saved = s.hp.cfg;
+    struct Case { uint32_t rd, wr; bool reverse; uint32_t late, gap; };
+    const Case cases[] = {
+        {0, 0, false, 0, 0},  {0, 0, false, 60, 0}, {2, 0, false, 60, 0}, {1, 0, false, 60, 3},
+        {0, 2, false, 60, 1}, {0, 0, true, 0, 0},   {3, 1, true, 30, 5},  {0, 0, false, 60, 40},
+    };
+    uint64_t late_mismatches = 0, reverse_mismatches = 0;
+    for (const Case& c : cases) {
+        s.hp.cfg.late = c.late;
+        Run r = random_run(s.rng, MEMPROBE_MODE_OP_READ);
+        r.op = MEMPROBE_MODE_OP_ORDER;
+        r.count = 30 + s.rng.below(50);
+        r.gap = c.gap;
+        r.rd_port = c.rd;
+        r.wr_port = c.wr;
+        r.reverse = c.reverse;
+        r.verify = false;
+        clear(s);
+        run(s, r);
+        check_results(s);
+        CHECK(s.hp.reads == r.count && s.hp.writes == r.count, "ORDER: %llu reads and %llu writes for %u iterations",
+              (unsigned long long)s.hp.reads, (unsigned long long)s.hp.writes, r.count);
+        if (c.reverse) reverse_mismatches += s.hp.order_mismatches;
+        else if (c.late > 0) late_mismatches += s.hp.order_mismatches;
+        else CHECK(s.hp.order_mismatches == 0, "ORDER without late writes: %u mismatches", s.hp.order_mismatches);
+    }
+    CHECK(late_mismatches > 0, "no ORDER mismatch with late writes");
+    CHECK(reverse_mismatches > 0, "no ORDER mismatch with ORDER_REVERSE");
+    std::printf("order: %llu mismatches with late writes, %llu with ORDER_REVERSE\n",
+                (unsigned long long)late_mismatches, (unsigned long long)reverse_mismatches);
+    s.hp.cfg = saved;
+}
+
 static void test_unlock(Sim& s) {
     g_step = "MMCM not locked";
     Run r = random_run(s.rng, MEMPROBE_MODE_OP_READ);
@@ -1154,8 +1292,7 @@ static void test_unlock(Sim& s) {
     clear_status(s, BIT(STATUS, CFG_ERR));
     // The model drops the transaction that the reset ended.
     s.hp.drop_all();
-    s.d->hp_rvalid = 0;
-    s.d->hp_bvalid = 0;
+    for (int p = 0; p < PORTS; p++) s.d->hp_rvalid[p] = s.d->hp_bvalid[p] = 0;
     s.restart_clk_m();
     s.lock(1);
     CHECK(s.status() & BIT(STATUS, MMCM_LOCKED), "no MMCM_LOCKED");
@@ -1198,6 +1335,7 @@ int main(int argc, char** argv) {
     test_read_write(s, true, false);
     test_read_write(s, false, true);
     test_concurrent(s, 12);
+    test_order(s);
     test_abort_and_busy(s);
     test_irq(s);
     test_clocks(s);

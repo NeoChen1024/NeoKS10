@@ -7,9 +7,11 @@
 //!   memprobe consistency [--words N] [--seed N]
 //!   memprobe run read|write|mixed|fill|check [RUN OPTIONS]
 //!   memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]   (B4, B5)
+//!   memprobe order [RUN OPTIONS] [--reverse 0|1] [--load-threads N]      (B6)
 //!     RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
 //!                  --outstanding N --pattern seq|random|fixed
 //!                  --read-percent P | --read-share N --verify 0|1
+//!                  --rd-port 0..3 --wr-port 0..3
 //!   memprobe ps-access [--threads N] [--passes N]
 //!   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]
 //!
@@ -39,8 +41,10 @@ const USAGE: &str = "usage:
   memprobe consistency [--words N] [--seed N]
   memprobe run read|write|mixed|fill|check [RUN OPTIONS]
   memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]
+  memprobe order [RUN OPTIONS] [--reverse 0|1] [--load-threads N]
     RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
                  --outstanding N --pattern seq|random|fixed --read-percent P | --read-share N --verify 0|1
+                 --rd-port 0..3 --wr-port 0..3
   memprobe ps-access [--threads N] [--passes N]
   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]";
 
@@ -147,6 +151,9 @@ fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunCon
             "read-percent",
             "verify",
             "load-threads",
+            "rd-port",
+            "wr-port",
+            "reverse",
         ],
     )?;
     // READ_SHARE has 16 bits: 100 % gives 65535 of 65536.
@@ -161,6 +168,9 @@ fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunCon
         outstanding: opt_u32(&o, "outstanding", 1)?,
         read_share,
         verify: opt_u32(&o, "verify", 0)? != 0,
+        rd_port: opt_u32(&o, "rd-port", 0)?,
+        wr_port: opt_u32(&o, "wr-port", 0)?,
+        order_reverse: opt_u32(&o, "reverse", 0)? != 0,
         beats: opt_u32(&o, "beats", beats)?,
         base: opt_u32(&o, "base", 0)?,
         span_log2: opt_u32(&o, "span-log2", measure::SPAN_LOG2)?,
@@ -307,6 +317,25 @@ fn run_command(args: &[String]) -> Result<(), String> {
                 r.hist_drops
             )
             .map_err(|e| e.to_string())
+        }
+        "order" => {
+            let (cfg, threads) = run_config(Op::Order, &args[1..], 1, 10_000)?;
+            let dev = Memprobe::open().map_err(e)?;
+            let mut out = io::stdout().lock();
+            header(&dev, &mut out).map_err(|e| e.to_string())?;
+            writeln!(out, "{}", measure::ORDER_HEADER).map_err(|e| e.to_string())?;
+            let load = load::Load::start(threads);
+            std::thread::sleep(Duration::from_millis(if threads > 0 { 200 } else { 0 }));
+            let result = measure::order(&dev, &cfg, &mut out);
+            let copied = load.stop();
+            if threads > 0 {
+                writeln!(
+                    out,
+                    "# PS memory load: {threads} threads, {copied:.0} MiB/s copied"
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            result.map(|_| ()).map_err(e)
         }
         "rate" => {
             let op = match args.get(1).map(String::as_str) {
@@ -495,7 +524,7 @@ mod tests {
                 .contains("read or write")
         );
         assert!(
-            run_command(&s(&["run", "order"]))
+            run_command(&s(&["run", "zigzag"]))
                 .unwrap_err()
                 .contains("run needs")
         );

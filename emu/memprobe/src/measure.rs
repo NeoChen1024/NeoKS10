@@ -202,6 +202,55 @@ pub fn rate(dev: &Memprobe, cfg: &RunConfig, out: &mut impl Write) -> Result<Res
     Ok(r)
 }
 
+/// The CSV header of [`order`].
+pub const ORDER_HEADER: &str = "pattern,beats,count,gap,rd_port,wr_port,reverse,clk_mhz,\
+mismatches,mismatch_share,rd_last_median_cyc,rd_last_p99_cyc,wr_resp_median_cyc,wr_resp_p99_cyc";
+
+/// One CSV row of [`order`].
+fn order_row(cfg: &RunConfig, clk_mhz: u32, r: &Results) -> String {
+    let (rm, rp, _) = quantiles(&r.rd_last, r.reads);
+    let (wm, wp, _) = quantiles(&r.wr_resp, r.writes);
+    format!(
+        "{},{},{},{},{},{},{},{clk_mhz},{},{:.4},{rm},{rp},{wm},{wp}",
+        cfg.pattern.name(),
+        cfg.beats,
+        cfg.count,
+        cfg.gap,
+        cfg.rd_port,
+        cfg.wr_port,
+        u8::from(cfg.order_reverse),
+        r.order_mismatches,
+        f64::from(r.order_mismatches) / f64::from(cfg.count.max(1)),
+    )
+}
+
+/// B6: COUNT iterations of a write and a read of the same address; GAP
+/// cycles from the WLAST handshake to the ARVALID (ORDER_REVERSE: the read
+/// first). Writes one CSV row.
+pub fn order(dev: &Memprobe, cfg: &RunConfig, out: &mut impl Write) -> Result<Results, Error> {
+    if cfg.op != Op::Order {
+        return Err(Error::Device("order needs the operation ORDER".into()));
+    }
+    dev.supports(cfg)?;
+    dev.clear()?;
+    let st = dev.run(cfg, timeout(cfg.transactions()))?;
+    let r = dev.results();
+    if st.resp_err || r.resp_errors != 0 {
+        return Err(Error::Device(format!(
+            "{} responses were not OKAY",
+            r.resp_errors
+        )));
+    }
+    if r.reads != u64::from(cfg.count) || r.writes != u64::from(cfg.count) {
+        return Err(Error::Device(format!(
+            "{} reads and {} writes, expected {} of each",
+            r.reads, r.writes, cfg.count
+        )));
+    }
+    writeln!(out, "{}", order_row(cfg, dev.caps.clk_mhz, &r)).map_err(io)?;
+    Ok(r)
+}
+
 /// The result of [`consistency`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Consistency {
@@ -345,6 +394,37 @@ mod tests {
             "mixed,seq,2,100,8,32768,0,0,100,60,40,1000,10000000,152.6,0.250,2,2,2,1,1,1,0,0"
         );
         assert_eq!(RATE_HEADER.split(',').count(), row.split(',').count());
+    }
+
+    #[test]
+    fn order_rows() {
+        let cfg = RunConfig {
+            rd_port: 2,
+            gap: 3,
+            order_reverse: true,
+            ..RunConfig::simple(Op::Order, 1, 22, 200, 3, 1)
+        };
+        let mut r = Results {
+            reads: 200,
+            writes: 200,
+            order_mismatches: 50,
+            ..Results::default()
+        };
+        r.rd_last = Hist {
+            bins: vec![0, 200, 0],
+            min: 1,
+            max: 1,
+            sum: 200,
+        };
+        r.wr_resp = Hist {
+            bins: vec![0, 0, 200, 0],
+            min: 2,
+            max: 2,
+            sum: 400,
+        };
+        let row = order_row(&cfg, 100, &r);
+        assert_eq!(row, "seq,1,200,3,2,0,1,100,50,0.2500,1,1,2,2");
+        assert_eq!(ORDER_HEADER.split(',').count(), row.split(',').count());
     }
 
     #[test]

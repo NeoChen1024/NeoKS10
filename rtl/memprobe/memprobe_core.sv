@@ -57,31 +57,33 @@ module memprobe_core #(
     input  logic        clk_m,
     input  logic        rst_m,
     input  logic        mmcm_locked,   // asynchronous
-    output logic [31:0] hp_araddr,
-    output logic [3:0]  hp_arlen,
-    output logic [5:0]  hp_arid,
-    output logic        hp_arvalid,
-    input  logic        hp_arready,
-    input  logic [63:0] hp_rdata,
-    input  logic [1:0]  hp_rresp,
-    input  logic        hp_rlast,
-    input  logic [5:0]  hp_rid,
-    input  logic        hp_rvalid,
-    output logic        hp_rready,
-    output logic [31:0] hp_awaddr,
-    output logic [3:0]  hp_awlen,
-    output logic [5:0]  hp_awid,
-    output logic        hp_awvalid,
-    input  logic        hp_awready,
-    output logic [63:0] hp_wdata,
-    output logic        hp_wlast,
-    output logic [5:0]  hp_wid,
-    output logic        hp_wvalid,
-    input  logic        hp_wready,
-    input  logic [1:0]  hp_bresp,
-    input  logic [5:0]  hp_bid,
-    input  logic        hp_bvalid,
-    output logic        hp_bready
+    // S_AXI_HP0 to S_AXI_HP3. The reads use the port of MODE.RD_PORT, the
+    // writes the port of MODE.WR_PORT; the other ports have no VALID.
+    output logic [31:0] hp_araddr  [0:3],
+    output logic [3:0]  hp_arlen   [0:3],
+    output logic [5:0]  hp_arid    [0:3],
+    output logic        hp_arvalid [0:3],
+    input  logic        hp_arready [0:3],
+    input  logic [63:0] hp_rdata   [0:3],
+    input  logic [1:0]  hp_rresp   [0:3],
+    input  logic        hp_rlast   [0:3],
+    input  logic [5:0]  hp_rid     [0:3],
+    input  logic        hp_rvalid  [0:3],
+    output logic        hp_rready  [0:3],
+    output logic [31:0] hp_awaddr  [0:3],
+    output logic [3:0]  hp_awlen   [0:3],
+    output logic [5:0]  hp_awid    [0:3],
+    output logic        hp_awvalid [0:3],
+    input  logic        hp_awready [0:3],
+    output logic [63:0] hp_wdata   [0:3],
+    output logic        hp_wlast   [0:3],
+    output logic [5:0]  hp_wid     [0:3],
+    output logic        hp_wvalid  [0:3],
+    input  logic        hp_wready  [0:3],
+    input  logic [1:0]  hp_bresp   [0:3],
+    input  logic [5:0]  hp_bid     [0:3],
+    input  logic        hp_bvalid  [0:3],
+    output logic        hp_bready  [0:3]
 );
     localparam OFF_W = HP_SIZE_LOG2;
     localparam IDS = 16;
@@ -108,8 +110,8 @@ module memprobe_core #(
     memprobe_sync sync_ack    (.clk(clk_s), .rst(rst_s), .d(ack_toggle),  .q(ack_s));
 
     memprobe_regs #(
-        .BUILD(BUILD), .CLK_MHZ(CLK_MHZ), .MAX_OUTSTANDING(IDS), .CAP_PORTS(4'b0001),
-        .CAP_SIZE32(0), .CAP_MIXED(1), .CAP_ORDER(0), .CAP_PATTERNS(1), .CAP_VERIFY(1)
+        .BUILD(BUILD), .CLK_MHZ(CLK_MHZ), .MAX_OUTSTANDING(IDS), .CAP_PORTS(4'b1111),
+        .CAP_SIZE32(0), .CAP_MIXED(1), .CAP_ORDER(1), .CAP_PATTERNS(1), .CAP_VERIFY(1)
     ) regs (
         .clk(clk_s), .rst(rst_s),
         .awaddr(gp_awaddr), .awid(gp_awid), .awlen(gp_awlen), .awvalid(gp_awvalid),
@@ -143,7 +145,8 @@ module memprobe_core #(
     logic [4:0]       m_span_log2, m_outstanding;
     logic [31:0]      m_count, m_seed;
     logic [15:0]      m_gap, m_read_share;
-    logic             m_verify;
+    logic             m_verify, m_order_reverse;
+    logic [1:0]       m_rd_port, m_wr_port;
     logic             gen_start, gen_clear, gen_busy;
     logic [2:0]       hist_busy;
 
@@ -164,6 +167,9 @@ module memprobe_core #(
             m_outstanding <= 5'd1;
             m_read_share  <= '0;
             m_verify    <= 1'b0;
+            m_order_reverse <= 1'b0;
+            m_rd_port   <= '0;
+            m_wr_port   <= '0;
             m_len       <= '0;
             m_base      <= '0;
             m_span_log2 <= '0;
@@ -183,6 +189,9 @@ module memprobe_core #(
                         m_outstanding <= cfg_outstanding;
                         m_read_share  <= cfg_read_share;
                         m_verify    <= cfg_verify;
+                        m_order_reverse <= cfg_order_reverse;
+                        m_rd_port   <= cfg_rd_port;
+                        m_wr_port   <= cfg_wr_port;
                         m_len       <= cfg_len;
                         m_base      <= cfg_base;
                         m_span_log2 <= cfg_span_log2;
@@ -206,6 +215,45 @@ module memprobe_core #(
     logic        smp_rd_first, smp_rd_last, smp_wr_resp;
     logic [31:0] smp_r_latency, smp_b_latency;
     logic [GEN_ID_W-1:0] gen_arid, gen_awid, gen_wid;
+    logic [31:0] order_mismatches;
+
+    // The channels of the generator, and the ports.
+    logic [31:0] g_araddr, g_awaddr;
+    logic [3:0]  g_arlen, g_awlen;
+    logic [63:0] g_rdata, g_wdata;
+    logic [1:0]  g_rresp, g_bresp;
+    logic [5:0]  g_rid, g_bid;
+    logic        g_arvalid, g_arready, g_rlast, g_rvalid, g_rready;
+    logic        g_awvalid, g_awready, g_wlast, g_wvalid, g_wready, g_bvalid, g_bready;
+    always_comb begin
+        for (int p = 0; p < 4; p++) begin
+            hp_araddr[p]  = g_araddr;
+            hp_arlen[p]   = g_arlen;
+            hp_arid[p]    = 6'(gen_arid);
+            hp_arvalid[p] = g_arvalid && m_rd_port == 2'(p);
+            hp_rready[p]  = g_rready;
+            hp_awaddr[p]  = g_awaddr;
+            hp_awlen[p]   = g_awlen;
+            hp_awid[p]    = 6'(gen_awid);
+            hp_awvalid[p] = g_awvalid && m_wr_port == 2'(p);
+            hp_wdata[p]   = g_wdata;
+            hp_wlast[p]   = g_wlast;
+            hp_wid[p]     = 6'(gen_wid);
+            hp_wvalid[p]  = g_wvalid && m_wr_port == 2'(p);
+            hp_bready[p]  = g_bready;
+        end
+        g_arready = hp_arready[m_rd_port];
+        g_rdata   = hp_rdata[m_rd_port];
+        g_rresp   = hp_rresp[m_rd_port];
+        g_rlast   = hp_rlast[m_rd_port];
+        g_rid     = hp_rid[m_rd_port];
+        g_rvalid  = hp_rvalid[m_rd_port];
+        g_awready = hp_awready[m_wr_port];
+        g_wready  = hp_wready[m_wr_port];
+        g_bresp   = hp_bresp[m_wr_port];
+        g_bid     = hp_bid[m_wr_port];
+        g_bvalid  = hp_bvalid[m_wr_port];
+    end
     logic [63:0] run_cycles, reads, writes, stalls, first_err_data;
     logic [31:0] data_errors, first_err_addr, resp_errors;
 
@@ -215,14 +263,14 @@ module memprobe_core #(
         .cfg_op(m_op), .cfg_pattern(m_pattern), .cfg_len(m_len), .cfg_base(m_base),
         .cfg_span_log2(m_span_log2), .cfg_count(m_count), .cfg_gap(m_gap),
         .cfg_outstanding(m_outstanding), .cfg_read_share(m_read_share), .cfg_seed(m_seed),
-        .cfg_verify(m_verify),
-        .araddr(hp_araddr), .arlen(hp_arlen), .arid(gen_arid), .arvalid(hp_arvalid),
-        .arready(hp_arready), .rdata(hp_rdata), .rresp(hp_rresp), .rlast(hp_rlast),
-        .rid(hp_rid[GEN_ID_W-1:0]), .rvalid(hp_rvalid), .rready(hp_rready),
-        .awaddr(hp_awaddr), .awlen(hp_awlen), .awid(gen_awid), .awvalid(hp_awvalid),
-        .awready(hp_awready), .wdata(hp_wdata), .wid(gen_wid), .wlast(hp_wlast),
-        .wvalid(hp_wvalid), .wready(hp_wready), .bresp(hp_bresp), .bid(hp_bid[GEN_ID_W-1:0]),
-        .bvalid(hp_bvalid), .bready(hp_bready),
+        .cfg_verify(m_verify), .cfg_order_reverse(m_order_reverse),
+        .araddr(g_araddr), .arlen(g_arlen), .arid(gen_arid), .arvalid(g_arvalid),
+        .arready(g_arready), .rdata(g_rdata), .rresp(g_rresp), .rlast(g_rlast),
+        .rid(g_rid[GEN_ID_W-1:0]), .rvalid(g_rvalid), .rready(g_rready),
+        .awaddr(g_awaddr), .awlen(g_awlen), .awid(gen_awid), .awvalid(g_awvalid),
+        .awready(g_awready), .wdata(g_wdata), .wid(gen_wid), .wlast(g_wlast),
+        .wvalid(g_wvalid), .wready(g_wready), .bresp(g_bresp), .bid(g_bid[GEN_ID_W-1:0]),
+        .bvalid(g_bvalid), .bready(g_bready), .order_mismatches(order_mismatches),
         .smp_rd_first(smp_rd_first), .smp_rd_last(smp_rd_last), .smp_r_latency(smp_r_latency),
         .smp_wr_resp(smp_wr_resp), .smp_b_latency(smp_b_latency),
         .run_cycles(run_cycles), .reads(reads), .writes(writes), .stalls(stalls),
@@ -242,13 +290,9 @@ module memprobe_core #(
     assign h_val[0] = smp_r_latency;
     assign h_val[1] = smp_r_latency;
     assign h_val[2] = smp_b_latency;
-    assign hp_arid = 6'(gen_arid);
-    assign hp_awid = 6'(gen_awid);
-    assign hp_wid  = 6'(gen_wid);
     // The design uses IDs below IDS; the upper bits of RID and BID are 0. The
-    // configuration fields of the next versions are not used yet.
-    wire unused_cfg = &{1'b0, hp_rid[5:GEN_ID_W], hp_bid[5:GEN_ID_W], cfg_size, cfg_rd_port,
-                        cfg_wr_port, cfg_order_reverse};
+    // configuration field of the next version is not used yet.
+    wire unused_cfg = &{1'b0, g_rid[5:GEN_ID_W], g_bid[5:GEN_ID_W], cfg_size};
 
     genvar g;
     generate for (g = 0; g < 3; g++) begin : hist
@@ -309,7 +353,7 @@ module memprobe_core #(
             FIRST_ERR_ADDR_OFFSET:    ext_data <= first_err_addr;
             FIRST_ERR_DATA_LO_OFFSET: ext_data <= first_err_data[31:0];
             FIRST_ERR_DATA_HI_OFFSET: ext_data <= first_err_data[63:32];
-            ORDER_MISMATCHES_OFFSET:  ext_data <= 32'd0;
+            ORDER_MISMATCHES_OFFSET:  ext_data <= order_mismatches;
             HIST_DROPS_OFFSET:        ext_data <= drops_total;
             RESP_ERRORS_OFFSET:       ext_data <= resp_errors;
             CLKM_COUNT_OFFSET:        ext_data <= clkm_count_s;

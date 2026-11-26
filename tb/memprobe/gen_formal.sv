@@ -39,6 +39,7 @@ module gen_formal #(
     input logic [15:0]     cfg_read_share,
     input logic [31:0]     cfg_seed,
     input logic            cfg_verify,
+    input logic            cfg_order_reverse,
     input logic            arready, rlast, rvalid, awready, wready, bvalid,
     input logic [ID_W-1:0] rid, bid,
     input logic [63:0]     rdata,
@@ -61,7 +62,7 @@ module gen_formal #(
         .cfg_op(cfg_op), .cfg_pattern(cfg_pattern), .cfg_len(cfg_len), .cfg_base(cfg_base),
         .cfg_span_log2(cfg_span_log2), .cfg_count(cfg_count), .cfg_gap(cfg_gap),
         .cfg_outstanding(cfg_outstanding), .cfg_read_share(cfg_read_share), .cfg_seed(cfg_seed),
-        .cfg_verify(cfg_verify),
+        .cfg_verify(cfg_verify), .cfg_order_reverse(cfg_order_reverse),
         .araddr(araddr), .arlen(arlen), .arid(arid), .arvalid(arvalid), .arready(arready),
         .rdata(rdata), .rresp(rresp), .rlast(rlast), .rid(rid), .rvalid(rvalid), .rready(rready),
         .awaddr(awaddr), .awlen(awlen), .awid(awid), .awvalid(awvalid), .awready(awready),
@@ -69,7 +70,7 @@ module gen_formal #(
         .bresp(bresp), .bid(bid), .bvalid(bvalid), .bready(bready),
         .smp_rd_first(), .smp_rd_last(), .smp_r_latency(), .smp_wr_resp(), .smp_b_latency(),
         .run_cycles(), .reads(), .writes(), .stalls(), .data_errors(), .first_err_addr(),
-        .first_err_data(), .resp_errors(), .run_resp_err(), .run_data_err()
+        .first_err_data(), .resp_errors(), .order_mismatches(), .run_resp_err(), .run_data_err()
     );
 
     // ---- Assumptions on the configuration ------------------------------------------
@@ -81,7 +82,8 @@ module gen_formal #(
         assume(cfg_len == 4'd0 || cfg_len == 4'd1 || cfg_len == 4'd3 || cfg_len == 4'd7
                || cfg_len == 4'd15);
         assume(cfg_op == memprobe_regmap_pkg::MODE_OP_READ || cfg_op == memprobe_regmap_pkg::MODE_OP_WRITE
-               || cfg_op == memprobe_regmap_pkg::MODE_OP_MIXED || whole_span);
+               || cfg_op == memprobe_regmap_pkg::MODE_OP_MIXED || cfg_op == memprobe_regmap_pkg::MODE_OP_ORDER
+               || whole_span);
         assume(cfg_pattern == memprobe_regmap_pkg::MODE_PATTERN_SEQ
                || (!whole_span && (cfg_pattern == memprobe_regmap_pkg::MODE_PATTERN_RANDOM
                                    || cfg_pattern == memprobe_regmap_pkg::MODE_PATTERN_FIXED)));
@@ -96,6 +98,7 @@ module gen_formal #(
             assume(cfg_count == $past(cfg_count) && cfg_gap == $past(cfg_gap));
             assume(cfg_outstanding == $past(cfg_outstanding) && cfg_read_share == $past(cfg_read_share));
             assume(cfg_seed == $past(cfg_seed) && cfg_verify == $past(cfg_verify));
+            assume(cfg_order_reverse == $past(cfg_order_reverse));
         end
 
     // ---- Record of the transactions ------------------------------------------------
@@ -209,7 +212,9 @@ module gen_formal #(
             if (ar_new) assert(!in_use[arid]);
             if (aw_new) assert(!in_use[awid]);
             // In progress: the recorded ones and a VALID of this cycle.
-            assert(n_in_use + (ID_W+2)'(ar_new) + (ID_W+2)'(aw_new) <= (ID_W+2)'(cfg_outstanding));
+            // ORDER has its write and its read in progress: 2.
+            assert(n_in_use + (ID_W+2)'(ar_new) + (ID_W+2)'(aw_new)
+                   <= (cfg_op == memprobe_regmap_pkg::MODE_OP_ORDER ? (ID_W+2)'(2) : (ID_W+2)'(cfg_outstanding)));
             if (wvalid) assert(w_order_ok && wlast == (wbeat == cfg_len));
             assert(wbeat <= cfg_len);
         end
