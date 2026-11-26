@@ -3,15 +3,16 @@
 //! a memprobe bitstream in the PL.
 //!
 //!   memprobe info
-//!   memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
-//!   memprobe consistency [--words N] [--seed N]
+//!   memprobe latency read|write [--beats N] [--width 32|64] [--count N] [--gap N] [--load-threads N]
+//!   memprobe consistency [--words N] [--seed N] [--beats N] [--width 32|64]
 //!   memprobe run read|write|mixed|fill|check [RUN OPTIONS]
 //!   memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]   (B4, B5)
 //!   memprobe order [RUN OPTIONS] [--reverse 0|1] [--load-threads N]      (B6)
-//!     RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
+//!     RUN OPTIONS: --beats N --width 32|64 --count N --gap N --base N --span-log2 N --seed N
 //!                  --outstanding N --pattern seq|random|fixed
 //!                  --read-percent P | --read-share N --verify 0|1
 //!                  --rd-port 0..3 --wr-port 0..3
+//!   memprobe afi-clear      (32BitEn of all HP ports to 0: 64-bit data)
 //!   memprobe ps-access [--threads N] [--passes N]
 //!   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]
 //!
@@ -37,14 +38,15 @@ use device::{Error, Memprobe, Op, Pattern, RunConfig};
 
 const USAGE: &str = "usage:
   memprobe info
-  memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
-  memprobe consistency [--words N] [--seed N]
+  memprobe latency read|write [--beats N] [--width 32|64] [--count N] [--gap N] [--load-threads N]
+  memprobe consistency [--words N] [--seed N] [--beats N] [--width 32|64]
   memprobe run read|write|mixed|fill|check [RUN OPTIONS]
   memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]
   memprobe order [RUN OPTIONS] [--reverse 0|1] [--load-threads N]
-    RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
+    RUN OPTIONS: --beats N --width 32|64 --count N --gap N --base N --span-log2 N --seed N
                  --outstanding N --pattern seq|random|fixed --read-percent P | --read-share N --verify 0|1
                  --rd-port 0..3 --wr-port 0..3
+  memprobe afi-clear
   memprobe ps-access [--threads N] [--passes N]
   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]";
 
@@ -128,6 +130,15 @@ fn take_word(args: &mut Vec<String>, name: &str) -> Result<Option<String>, Strin
     }
 }
 
+/// --width: 32 for 32-bit beats, 64 (default) for 64-bit beats.
+fn width32(o: &HashMap<String, u64>) -> Result<bool, String> {
+    match o.get("width") {
+        None | Some(64) => Ok(false),
+        Some(32) => Ok(true),
+        Some(w) => Err(format!("--width {w}: use 32 or 64")),
+    }
+}
+
 /// The configuration of a run from the options, and the number of threads of
 /// the PS memory load (--load-threads).
 fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunConfig, u32), String> {
@@ -141,6 +152,7 @@ fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunCon
         &rest,
         &[
             "beats",
+            "width",
             "count",
             "gap",
             "base",
@@ -172,6 +184,7 @@ fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunCon
         wr_port: opt_u32(&o, "wr-port", 0)?,
         order_reverse: opt_u32(&o, "reverse", 0)? != 0,
         beats: opt_u32(&o, "beats", beats)?,
+        width32: width32(&o)?,
         base: opt_u32(&o, "base", 0)?,
         span_log2: opt_u32(&o, "span-log2", measure::SPAN_LOG2)?,
         count: opt_u32(&o, "count", count)?,
@@ -221,6 +234,15 @@ fn info(dev: &Memprobe) -> Result<(), Error> {
             region.len()
         ),
     )?;
+    // 1: 32-bit data. A run sets the bits that it needs and restores them.
+    let afi = dev
+        .afi_state()?
+        .iter()
+        .enumerate()
+        .map(|(p, (r, w))| format!("HP{p} rd {} wr {}", u8::from(*r), u8::from(*w)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    w(&mut out, format!("afi 32BitEn: {afi}"))?;
     Ok(())
 }
 
@@ -232,13 +254,20 @@ fn run_command(args: &[String]) -> Result<(), String> {
             parse_options(&args[1..], &[])?;
             info(&Memprobe::open().map_err(e)?).map_err(e)
         }
+        "afi-clear" => {
+            parse_options(&args[1..], &[])?;
+            Memprobe::open().map_err(e)?.afi_clear().map_err(e)
+        }
         "latency" => {
             let op = match args.get(1).map(String::as_str) {
                 Some("read") => Op::Read,
                 Some("write") => Op::Write,
                 _ => return Err("latency needs read or write".into()),
             };
-            let o = parse_options(&args[2..], &["beats", "count", "gap", "load-threads"])?;
+            let o = parse_options(
+                &args[2..],
+                &["beats", "width", "count", "gap", "load-threads"],
+            )?;
             let dev = Memprobe::open().map_err(e)?;
             let mut out = io::stdout().lock();
             header(&dev, &mut out).map_err(|e| e.to_string())?;
@@ -251,6 +280,7 @@ fn run_command(args: &[String]) -> Result<(), String> {
                 &dev,
                 op,
                 opt_u32(&o, "beats", 1)?,
+                width32(&o)?,
                 opt_u32(&o, "count", 10_000)?,
                 opt_u32(&o, "gap", 0)?,
                 &mut out,
@@ -266,20 +296,31 @@ fn run_command(args: &[String]) -> Result<(), String> {
             result.map_err(e)
         }
         "consistency" => {
-            let o = parse_options(&args[1..], &["words", "seed"])?;
+            let o = parse_options(&args[1..], &["words", "seed", "beats", "width"])?;
             let words = o.get("words").copied().unwrap_or(10_000_000);
             let seed = opt_u32(&o, "seed", 1)?;
+            let beats = opt_u32(&o, "beats", 16)?;
+            let w32 = width32(&o)?;
             let dev = Memprobe::open().map_err(e)?;
             let region = Region::open(u64::from(mp::HP_BASE), mp::HP_SIZE as usize)
                 .map_err(|x| x.to_string())?;
             let mut out = io::stdout().lock();
             header(&dev, &mut out).map_err(|e| e.to_string())?;
-            let c = measure::consistency(&dev, &region, words, seed).map_err(e)?;
-            writeln!(out, "direction,words,mismatches").map_err(|e| e.to_string())?;
-            writeln!(out, "ps_to_pl,{},{}", c.ps_to_pl_words, c.ps_to_pl_errors)
-                .map_err(|e| e.to_string())?;
-            writeln!(out, "pl_to_ps,{},{}", c.pl_to_ps_words, c.pl_to_ps_errors)
-                .map_err(|e| e.to_string())?;
+            let c = measure::consistency(&dev, &region, words, seed, beats, w32).map_err(e)?;
+            let width = if w32 { 32 } else { 64 };
+            writeln!(out, "direction,beats,width,words,mismatches").map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "ps_to_pl,{beats},{width},{},{}",
+                c.ps_to_pl_words, c.ps_to_pl_errors
+            )
+            .map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "pl_to_ps,{beats},{width},{},{}",
+                c.pl_to_ps_words, c.pl_to_ps_errors
+            )
+            .map_err(|e| e.to_string())?;
             if c.ps_to_pl_errors + c.pl_to_ps_errors != 0 {
                 return Err("mismatches found".into());
             }
@@ -503,6 +544,20 @@ mod tests {
         assert!(run_config(Op::Read, &s(&["--pattern", "zigzag"]), 1, 1).is_err());
         assert!(run_config(Op::Read, &s(&["--pattern"]), 1, 1).is_err());
         assert!(run_config(Op::Read, &s(&["--read-percent", "101"]), 1, 1).is_err());
+        assert!(!run_config(Op::Read, &[], 1, 1).unwrap().0.width32);
+        assert!(
+            run_config(Op::Read, &s(&["--width", "32"]), 1, 1)
+                .unwrap()
+                .0
+                .width32
+        );
+        assert!(
+            !run_config(Op::Read, &s(&["--width", "64"]), 1, 1)
+                .unwrap()
+                .0
+                .width32
+        );
+        assert!(run_config(Op::Read, &s(&["--width", "16"]), 1, 1).is_err());
     }
 
     #[test]

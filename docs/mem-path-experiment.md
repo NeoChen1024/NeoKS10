@@ -89,6 +89,13 @@ register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
   after the WLAST handshake, without a wait for B. ORDER_REVERSE puts the
   read first; its reads must then give the old value, a check that the
   comparison works.
+- `MODE.SIZE` selects 64-bit or 32-bit beats. 32-bit beats use the 32-bit
+  mode of the AFI: the data is in bits 31:0, and WSTRB is 0x0F (UG585
+  v1.7, section 5.3.6). The AFI has a `32BitEn` bit for each channel of
+  each port. These bits are PS registers, so a new bitstream does not
+  change them. Before each run, the PS program sets the bits of the two
+  channels of the run to the width of `MODE.SIZE`. After the run, it sets
+  the earlier values again.
 - The bus address is the base of the reserved region plus an offset of
   24 bits. Thus no configuration can make an access outside the region.
 - Timers count `clk_m` cycles from the address handshake to the first R
@@ -113,10 +120,9 @@ The versions of the design:
 | 1 | M1 | One transaction in progress, sequential addresses, 64-bit beats, HP0 |
 | 2 | M2a | Up to 16 in progress, random and fixed addresses, mixed operations, VERIFY, HP0 |
 | 2 | M2b | Also one address in each cycle, ORDER, HP0 to HP3 |
+| 2 | M2c | Also 32-bit beats |
 
-32-bit beats are in the register map of version 2, but not yet in a
-bitstream. `CAPS` shows the features of a
-bitstream. The PS program does not start a measurement that needs a feature
+`CAPS` shows the features of a bitstream. The PS program does not start a measurement that needs a feature
 that `CAPS` does not have.
 
 Verification of the test design (`tb/memprobe/`):
@@ -129,7 +135,10 @@ Verification of the test design (`tb/memprobe/`):
   histograms, counters and data errors from its own record of the
   handshakes, and checks the IDs, the order of the W beats, the limit of
   transactions in progress, the ports, the ORDER timing and the spread of
-  RANDOM addresses.
+  RANDOM addresses. For 32-bit beats, the model checks AxSIZE and WSTRB,
+  writes only bits 31:0, and puts random values in bits 63:32 of RDATA. It
+  also holds WREADY at 0 until the AW handshake of the burst, as the AFI
+  can do in the 32-bit mode (UG585 v1.7, section 5.3.9).
 - `tb_hist` tests one histogram: with 4 banks at one sample in each cycle,
   and with 1 bank and a full FIFO.
 - `regs.sby` proves the AXI rules of the GP0 slave: each GP0 request gets

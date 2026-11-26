@@ -4,6 +4,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use plio::afi::Afi;
 use plio::board::{self, BoardError, RegWindow};
 use plio::regmap::memprobe as mp;
 use plio::{Field, Reg};
@@ -164,6 +165,8 @@ pub struct RunConfig {
     pub order_reverse: bool,
     /// Beats in each burst: 1, 2, 4, 8 or 16.
     pub beats: u32,
+    /// 32-bit beats (MODE.SIZE B4, the 32-bit mode of the AFI), else 64-bit.
+    pub width32: bool,
     pub base: u32,
     pub span_log2: u32,
     pub count: u32,
@@ -185,6 +188,7 @@ impl RunConfig {
             wr_port: 0,
             order_reverse: false,
             beats,
+            width32: false,
             base: 0,
             span_log2,
             count,
@@ -193,7 +197,12 @@ impl RunConfig {
         }
     }
 
-    /// The value of MODE: 64-bit beats.
+    /// Bytes in each beat: 4 or 8.
+    pub fn beat_bytes(&self) -> u32 {
+        if self.width32 { 4 } else { 8 }
+    }
+
+    /// The value of MODE.
     pub fn mode(&self) -> Result<u32, Error> {
         let len = self.beats.wrapping_sub(1);
         if !matches!(self.beats, 1 | 2 | 4 | 8 | 16) {
@@ -210,7 +219,12 @@ impl RunConfig {
         m = put(m, mp::mode::OP, self.op.value())?;
         m = put(m, mp::mode::PATTERN, self.pattern.value())?;
         m = put(m, mp::mode::LEN, len)?;
-        m = put(m, mp::mode::SIZE, mp::mode::size::B8)?;
+        let size = if self.width32 {
+            mp::mode::size::B4
+        } else {
+            mp::mode::size::B8
+        };
+        m = put(m, mp::mode::SIZE, size)?;
         m = put(m, mp::mode::RD_PORT, self.rd_port)?;
         m = put(m, mp::mode::WR_PORT, self.wr_port)?;
         m = put(m, mp::mode::VERIFY, u32::from(self.verify))?;
@@ -221,7 +235,9 @@ impl RunConfig {
     /// The number of transactions of the run.
     pub fn transactions(&self) -> u64 {
         match self.op {
-            Op::Fill | Op::Check => (1u64 << self.span_log2) / (u64::from(self.beats) * 8),
+            Op::Fill | Op::Check => {
+                (1u64 << self.span_log2) / (u64::from(self.beats) * u64::from(self.beat_bytes()))
+            }
             Op::Read | Op::Write | Op::Mixed => u64::from(self.count),
             Op::Order => 2 * u64::from(self.count),
         }
@@ -266,6 +282,7 @@ pub struct RunStatus {
 /// The design in the PL.
 pub struct Memprobe {
     regs: RegWindow,
+    afi: Afi,
     pub caps: Caps,
     pub build: u32,
 }
@@ -292,7 +309,13 @@ impl Memprobe {
         }
         let caps = Caps::from_reg(regs.read(mp::CAPS.offset));
         let build = regs.read(mp::BUILD.offset);
-        Ok(Memprobe { regs, caps, build })
+        let afi = Afi::open().map_err(|e| BoardError::Io("map of the AFI registers".into(), e))?;
+        Ok(Memprobe {
+            regs,
+            afi,
+            caps,
+            build,
+        })
     }
 
     fn rd(&self, r: Reg) -> u32 {
@@ -325,7 +348,18 @@ impl Memprobe {
                 return Ok(st);
             }
             if t0.elapsed() > timeout {
+                // Wait for the end of the transactions after ABORT, so that
+                // the caller can change the AFI after the error.
                 self.wr(mp::CTRL, mp::ctrl::ABORT.mask());
+                let t1 = Instant::now();
+                while mp::status::BUSY.get(self.status()) != 0 {
+                    if t1.elapsed() > Duration::from_secs(1) {
+                        return Err(Error::Device(format!(
+                            "no end after {timeout:?}, and BUSY 1 s after ABORT: load the PL again"
+                        )));
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
                 return Err(Error::Device(format!(
                     "no end after {timeout:?}; ABORT written"
                 )));
@@ -369,11 +403,46 @@ impl Memprobe {
         check_caps(&self.caps, cfg)
     }
 
+    /// `32BitEn` of the AFI of each HP port: (read channel, write channel).
+    pub fn afi_state(&self) -> Result<[(bool, bool); plio::afi::PORTS], Error> {
+        self.afi
+            .state()
+            .map_err(|e| Error::Board(BoardError::Io("read of the AFI".into(), e)))
+    }
+
+    /// Set the AFI of all ports to 64-bit data. Only while no run is in
+    /// progress.
+    pub fn afi_clear(&self) -> Result<(), Error> {
+        if mp::status::BUSY.get(self.status()) != 0 {
+            return Err(Error::Device("a run is in progress".into()));
+        }
+        for port in 0..plio::afi::PORTS {
+            for ch in [plio::afi::Channel::Read, plio::afi::Channel::Write] {
+                self.afi
+                    .set_32bit(port, ch, false)
+                    .map_err(|e| Error::Board(BoardError::Io("write of the AFI".into(), e)))?;
+            }
+        }
+        Ok(())
+    }
+
     /// One run. The caller makes a barrier after its own writes to the
     /// region (plio::mmio::barrier), before this call.
+    ///
+    /// The AFI of RD_PORT (read channel) and WR_PORT (write channel) gets the
+    /// width of MODE.SIZE before START, for 32-bit and for 64-bit runs: an
+    /// earlier program that stopped can have left 32BitEn set. After the run,
+    /// the earlier values come back.
     pub fn run(&self, cfg: &RunConfig, timeout: Duration) -> Result<RunStatus, Error> {
         let mode = cfg.mode()?;
         self.supports(cfg)?;
+        if mp::status::BUSY.get(self.status()) != 0 {
+            return Err(Error::Device("a run is in progress".into()));
+        }
+        let _width = self
+            .afi
+            .set_width(cfg.rd_port as usize, cfg.wr_port as usize, cfg.width32)
+            .map_err(|e| Error::Board(BoardError::Io("AFI width".into(), e)))?;
         self.wr(mp::MODE, mode);
         self.wr(mp::BASE, cfg.base);
         self.wr(mp::SPAN_LOG2, cfg.span_log2);
@@ -489,6 +558,9 @@ pub fn check_caps(c: &Caps, cfg: &RunConfig) -> Result<(), Error> {
     if cfg.verify && !c.verify {
         return Err(Error::Unsupported("VERIFY".into()));
     }
+    if cfg.width32 && !c.size32 {
+        return Err(Error::Unsupported("32-bit beats (SIZE32)".into()));
+    }
     for (what, p) in [("RD_PORT", cfg.rd_port), ("WR_PORT", cfg.wr_port)] {
         if p > 3 || c.ports & (1 << p) == 0 {
             return Err(Error::Unsupported(format!(
@@ -533,6 +605,34 @@ mod tests {
         assert_eq!(c.transactions(), (4 << 20) / 128);
         let r = RunConfig { op: Op::Mixed, ..c };
         assert_eq!(r.transactions(), 5);
+    }
+
+    #[test]
+    fn width32() {
+        // SIZE 13:12: B4 = 2, B8 = 3 (docs/regmap.md).
+        let c = RunConfig {
+            width32: true,
+            ..RunConfig::simple(Op::Read, 16, 22, 1, 0, 1)
+        };
+        assert_eq!(c.mode().unwrap(), 0x0000_2F00);
+        assert_eq!(c.beat_bytes(), 4);
+        let f = RunConfig { op: Op::Fill, ..c };
+        assert_eq!(f.transactions(), (4 << 20) / 64);
+        let v2b = Caps::from_reg(0x0F3C_1064); // M2b: no SIZE32
+        let v2c = Caps::from_reg(0x0F3E_1064); // M2c: SIZE32 (bit 17)
+        assert!(!v2b.size32 && v2c.size32);
+        assert!(check_caps(&v2b, &c).is_err());
+        assert!(check_caps(&v2c, &c).is_ok());
+        assert!(
+            check_caps(
+                &v2b,
+                &RunConfig {
+                    width32: false,
+                    ..c
+                }
+            )
+            .is_ok()
+        );
     }
 
     #[test]

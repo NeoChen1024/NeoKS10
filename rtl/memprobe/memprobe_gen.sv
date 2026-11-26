@@ -45,6 +45,7 @@ module memprobe_gen #(
     input  logic [2:0]       cfg_op,
     input  logic [1:0]       cfg_pattern,
     input  logic [3:0]       cfg_len,     // AxLEN: 0, 1, 3, 7 or 15
+    input  logic [1:0]       cfg_size,    // AxSIZE: B4 or B8
     input  logic [OFF_W-1:0] cfg_base,    // a multiple of the span
     input  logic [4:0]       cfg_span_log2,
     input  logic [31:0]      cfg_count,
@@ -55,7 +56,9 @@ module memprobe_gen #(
     input  logic             cfg_verify,
     input  logic             cfg_order_reverse,
 
-    // AXI3 master: INCR bursts of 8-byte beats.
+    // AXI3 master: INCR bursts of 8-byte beats, or of 4-byte beats in bits
+    // 31:0 (MODE.SIZE B4, the 32-bit mode of the AFI). memprobe_core drives
+    // AxSIZE and WSTRB.
     output logic [31:0]      araddr,
     output logic [3:0]       arlen,
     output logic [ID_W-1:0]  arid,
@@ -110,6 +113,7 @@ module memprobe_gen #(
     localparam [2:0] OP_CHECK = memprobe_regmap_pkg::MODE_OP_CHECK;
     localparam [1:0] PAT_RANDOM = memprobe_regmap_pkg::MODE_PATTERN_RANDOM;
     localparam [1:0] PAT_FIXED  = memprobe_regmap_pkg::MODE_PATTERN_FIXED;
+    localparam [1:0] SIZE_B4    = memprobe_regmap_pkg::MODE_SIZE_B4;
     localparam [31:0] HP_ADDR = memprobe_regmap_pkg::HP_BASE;
     // Galois LFSR, x^32 + x^22 + x^2 + x + 1 (maximum length).
     localparam [31:0] LFSR_TAPS = 32'h8020_0003;
@@ -124,7 +128,9 @@ module memprobe_gen #(
     wire check_en   = (cfg_op == OP_CHECK) || (cfg_verify && (cfg_op == OP_READ || cfg_op == OP_MIXED));
     // For the accepted lengths, log2(len + 1) is the number of 1 bits of len.
     wire [2:0] len_log2 = 3'(cfg_len[0]) + 3'(cfg_len[1]) + 3'(cfg_len[2]) + 3'(cfg_len[3]);
-    wire [5:0] burst_log2 = 6'd3 + 6'(len_log2);
+    wire b4 = (cfg_size == SIZE_B4);
+    wire [OFF_W-1:0] beat_bytes = b4 ? OFF_W'(4) : OFF_W'(8);
+    wire [5:0] burst_log2 = (b4 ? 6'd2 : 6'd3) + 6'(len_log2);
     // The span is at most the HP memory (memprobe_regs checks it).
     wire [OFF_W:0] span_mask_w = ({{OFF_W{1'b0}}, 1'b1} << cfg_span_log2) - 1'b1;
     wire [OFF_W-1:0] span_mask = span_mask_w[OFF_W-1:0];
@@ -209,6 +215,9 @@ module memprobe_gen #(
     logic [OFF_W-1:0] o_off;
     logic             o_second_sent, o_rd_done, o_wr_done, o_bad;
     wire  [63:0]      o_value = {cfg_seed ^ ~o_n, cfg_seed ^ o_n};
+    // The value and the comparison of ORDER; B4 uses bits 31:0 only.
+    wire  [63:0]      o_wvalue = b4 ? {32'd0, o_value[31:0]} : o_value;
+    wire  o_differs = b4 ? (r1_data[31:0] != o_value[31:0]) : (r1_data != o_value);
     wire  o_idle  = !pres_v && inflight == 0 && !w_active && wq_empty && !r1_v && !b1_v;
     // The first transaction: the write, or the read with ORDER_REVERSE.
     wire  o_go    = running && order && ost == O_START && nx_v && !stop && o_idle;
@@ -238,7 +247,9 @@ module memprobe_gen #(
     wire [63:0] w_pattern;
     memprobe_pattern #(.OFF_W(OFF_W)) wpat (.seed(cfg_seed), .index(w_off[OFF_W-1:3]), .beat(w_pattern));
     assign wvalid = w_active;
-    assign wdata  = order ? o_value : w_pattern;
+    // B4: the 32-bit word at w_off, in bits 31:0.
+    wire [63:0] w_word = {32'd0, w_off[2] ? w_pattern[63:32] : w_pattern[31:0]};
+    assign wdata  = order ? o_wvalue : b4 ? w_word : w_pattern;
     assign wlast  = (w_beat == cfg_len);
 
     // ---- Checker stages 3 and 4 ----------------------------------------------------
@@ -246,7 +257,10 @@ module memprobe_gen #(
     logic [63:0]      c_data;
     logic [OFF_W-1:0] c_off;
     wire  [63:0]      c_expect;
-    memprobe_pattern #(.OFF_W(OFF_W)) rpat (.seed(cfg_seed), .index(c_off[OFF_W-1:3]), .beat(c_expect));
+    wire  [63:0]      c_pat;
+    memprobe_pattern #(.OFF_W(OFF_W)) rpat (.seed(cfg_seed), .index(c_off[OFF_W-1:3]), .beat(c_pat));
+    // B4: stage 2 sets bits 63:32 of c_data to 0; the expected word is in bits 31:0.
+    assign c_expect = b4 ? {32'd0, c_off[2] ? c_pat[63:32] : c_pat[31:0]} : c_pat;
     logic             d_v, d_lo, d_hi;
     logic [63:0]      d_data;
     logic [OFF_W-1:0] d_off;
@@ -284,7 +298,7 @@ module memprobe_gen #(
                 id_start[i] <= now;
             end else if (r1_v && r1_id == ID_W'(i)) begin
                 id_first[i] <= 1'b0;
-                id_off[i]   <= id_off[i] + 8;
+                id_off[i]   <= id_off[i] + beat_bytes;
             end
         end
     end
@@ -473,7 +487,7 @@ module memprobe_gen #(
                 end
             end else if (w_hs) begin
                 w_beat <= w_beat + 1'b1;
-                w_off  <= w_off + 8;
+                w_off  <= w_off + beat_bytes;
             end
 
             // ---- Stage 1 ----
@@ -495,7 +509,7 @@ module memprobe_gen #(
             smp_wr_resp   <= b_done;
             smp_b_latency <= b1_time - id_start[b1_id];
             c_v           <= r1_v && check_en;
-            c_data        <= r1_data;
+            c_data        <= b4 ? {32'd0, r1_data[31:0]} : r1_data;
             c_off         <= id_off[r1_id];
             if (r_done) reads <= reads + 1'b1;
             if (b_done) writes <= writes + 1'b1;
@@ -507,9 +521,9 @@ module memprobe_gen #(
             if (order && r1_v) begin
                 if (r_done) begin
                     o_bad <= 1'b0;
-                    if ((o_bad || r1_data != o_value) && order_mismatches != '1)
+                    if ((o_bad || o_differs) && order_mismatches != '1)
                         order_mismatches <= order_mismatches + 1'b1;
-                end else if (r1_data != o_value) begin
+                end else if (o_differs) begin
                     o_bad <= 1'b1;
                 end
             end

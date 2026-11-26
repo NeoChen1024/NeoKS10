@@ -61,6 +61,7 @@ module memprobe_core #(
     // writes the port of MODE.WR_PORT; the other ports have no VALID.
     output logic [31:0] hp_araddr  [0:3],
     output logic [3:0]  hp_arlen   [0:3],
+    output logic [1:0]  hp_arsize  [0:3],
     output logic [5:0]  hp_arid    [0:3],
     output logic        hp_arvalid [0:3],
     input  logic        hp_arready [0:3],
@@ -72,10 +73,12 @@ module memprobe_core #(
     output logic        hp_rready  [0:3],
     output logic [31:0] hp_awaddr  [0:3],
     output logic [3:0]  hp_awlen   [0:3],
+    output logic [1:0]  hp_awsize  [0:3],
     output logic [5:0]  hp_awid    [0:3],
     output logic        hp_awvalid [0:3],
     input  logic        hp_awready [0:3],
     output logic [63:0] hp_wdata   [0:3],
+    output logic [7:0]  hp_wstrb   [0:3],
     output logic        hp_wlast   [0:3],
     output logic [5:0]  hp_wid     [0:3],
     output logic        hp_wvalid  [0:3],
@@ -111,7 +114,7 @@ module memprobe_core #(
 
     memprobe_regs #(
         .BUILD(BUILD), .CLK_MHZ(CLK_MHZ), .MAX_OUTSTANDING(IDS), .CAP_PORTS(4'b1111),
-        .CAP_SIZE32(0), .CAP_MIXED(1), .CAP_ORDER(1), .CAP_PATTERNS(1), .CAP_VERIFY(1)
+        .CAP_SIZE32(1), .CAP_MIXED(1), .CAP_ORDER(1), .CAP_PATTERNS(1), .CAP_VERIFY(1)
     ) regs (
         .clk(clk_s), .rst(rst_s),
         .awaddr(gp_awaddr), .awid(gp_awid), .awlen(gp_awlen), .awvalid(gp_awvalid),
@@ -139,7 +142,7 @@ module memprobe_core #(
     memprobe_sync sync_stop (.clk(clk_m), .rst(rst_m), .d(stop_s),     .q(stop_m));
 
     logic [2:0]       m_op;
-    logic [1:0]       m_pattern;
+    logic [1:0]       m_pattern, m_size;
     logic [3:0]       m_len;
     logic [OFF_W-1:0] m_base;
     logic [4:0]       m_span_log2, m_outstanding;
@@ -171,6 +174,7 @@ module memprobe_core #(
             m_rd_port   <= '0;
             m_wr_port   <= '0;
             m_len       <= '0;
+            m_size      <= MODE_SIZE_B8;
             m_base      <= '0;
             m_span_log2 <= '0;
             m_count     <= '0;
@@ -193,6 +197,7 @@ module memprobe_core #(
                         m_rd_port   <= cfg_rd_port;
                         m_wr_port   <= cfg_wr_port;
                         m_len       <= cfg_len;
+                        m_size      <= cfg_size;
                         m_base      <= cfg_base;
                         m_span_log2 <= cfg_span_log2;
                         m_count     <= cfg_count;
@@ -229,14 +234,18 @@ module memprobe_core #(
         for (int p = 0; p < 4; p++) begin
             hp_araddr[p]  = g_araddr;
             hp_arlen[p]   = g_arlen;
+            hp_arsize[p]  = m_size;
             hp_arid[p]    = 6'(gen_arid);
             hp_arvalid[p] = g_arvalid && m_rd_port == 2'(p);
             hp_rready[p]  = g_rready;
             hp_awaddr[p]  = g_awaddr;
             hp_awlen[p]   = g_awlen;
+            hp_awsize[p]  = m_size;
             hp_awid[p]    = 6'(gen_awid);
             hp_awvalid[p] = g_awvalid && m_wr_port == 2'(p);
             hp_wdata[p]   = g_wdata;
+            // B4: the 32-bit mode of the AFI takes the strobes of bits 31:0.
+            hp_wstrb[p]   = (m_size == MODE_SIZE_B4) ? 8'h0F : 8'hFF;
             hp_wlast[p]   = g_wlast;
             hp_wid[p]     = 6'(gen_wid);
             hp_wvalid[p]  = g_wvalid && m_wr_port == 2'(p);
@@ -260,7 +269,7 @@ module memprobe_core #(
     memprobe_gen #(.OFF_W(OFF_W), .IDS(IDS), .ID_W(GEN_ID_W)) gen (
         .clk(clk_m), .rst(rst_m),
         .start(gen_start), .clear(gen_clear), .stop(stop_m), .busy(gen_busy),
-        .cfg_op(m_op), .cfg_pattern(m_pattern), .cfg_len(m_len), .cfg_base(m_base),
+        .cfg_op(m_op), .cfg_pattern(m_pattern), .cfg_len(m_len), .cfg_size(m_size), .cfg_base(m_base),
         .cfg_span_log2(m_span_log2), .cfg_count(m_count), .cfg_gap(m_gap),
         .cfg_outstanding(m_outstanding), .cfg_read_share(m_read_share), .cfg_seed(m_seed),
         .cfg_verify(m_verify), .cfg_order_reverse(m_order_reverse),
@@ -290,9 +299,8 @@ module memprobe_core #(
     assign h_val[0] = smp_r_latency;
     assign h_val[1] = smp_r_latency;
     assign h_val[2] = smp_b_latency;
-    // The design uses IDs below IDS; the upper bits of RID and BID are 0. The
-    // configuration field of the next version is not used yet.
-    wire unused_cfg = &{1'b0, g_rid[5:GEN_ID_W], g_bid[5:GEN_ID_W], cfg_size};
+    // The design uses IDs below IDS; the upper bits of RID and BID are 0.
+    wire unused_cfg = &{1'b0, g_rid[5:GEN_ID_W], g_bid[5:GEN_ID_W]};
 
     genvar g;
     generate for (g = 0; g < 3; g++) begin : hist

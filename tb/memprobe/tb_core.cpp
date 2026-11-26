@@ -133,6 +133,11 @@ struct HpConfig {
     uint32_t late = 0;                     // a write reaches the memory 0 to `late` edges after its last W beat
 };
 
+// MODE.SIZE B4 is the 32-bit mode of the AFI (UG585 v1.7, section 5.3.6, and
+// spec/regmap.toml): AxSIZE 2, data in bits 31:0, WSTRB 0x0F. The model then
+// drives random values in bits 63:32 of RDATA, and holds WREADY low while no
+// AW handshake waits for W beats (UG585 v1.7, section 5.3.9).
+
 // The model has four HP ports with one memory. Each port takes transactions
 // with any IDs, answers them in any order across IDs, and interleaves the R
 // beats of different IDs (AXI3 allows both). The model checks the rules of
@@ -151,7 +156,7 @@ struct Hp {
     struct Wr { unsigned id; uint32_t off; unsigned len; uint64_t t_hs; };
     struct WBeat { uint64_t data; bool last; unsigned id; };
     struct B { unsigned id; uint64_t t_aw, ready_at; };
-    struct Pending { uint64_t at; uint32_t off; uint64_t data; };
+    struct Pending { uint64_t at; uint32_t off; uint64_t data; unsigned bytes; };
     struct Port {
         std::vector<Rd> rds;          // after AR, until RLAST
         std::deque<Wr> aws;           // after AW, waiting for W beats, in AW order
@@ -180,6 +185,8 @@ struct Hp {
     bool check_on = false, order = false, order_reverse = false;
     uint32_t seed = 0;
     bool exact_stalls = true;
+    bool b4 = false;                            // MODE.SIZE B4
+    unsigned beat_bytes() const { return b4 ? 4 : 8; }
     // State of the run.
     uint64_t issued = 0, last_addr_hs = 0, order_mark = 0, order_n = 0;
     unsigned inflight = 0;
@@ -203,6 +210,12 @@ struct Hp {
         return v;
     }
     void wr64(uint32_t off, uint64_t v) { std::memcpy(&mem[off], &v, 8); }
+    uint32_t rd32(uint32_t off) const {
+        uint32_t v;
+        std::memcpy(&v, &mem[off], 4);
+        return v;
+    }
+    void store(uint32_t off, uint64_t v, unsigned bytes) { std::memcpy(&mem[off], &v, bytes); }
 
     uint64_t latency() {
         if (cfg.p_long > 0 && rng.chance(cfg.p_long)) return 1000 + rng.below(200);
@@ -220,8 +233,9 @@ struct Hp {
 
     void new_run(unsigned gap_, uint64_t total_, unsigned outstanding_, uint32_t base, uint32_t span,
                  bool check, uint32_t seed_, unsigned rd_port_ = 0, unsigned wr_port_ = 0, bool order_ = false,
-                 bool reverse = false) {
+                 bool reverse = false, bool b4_ = false) {
         gap = gap_;
+        b4 = b4_;
         total = order_ ? 2 * total_ : total_;
         outstanding = order_ ? 2 : outstanding_;
         span_lo = base;
@@ -262,7 +276,7 @@ struct Hp {
     }
 
     void check_addr(uint32_t addr, unsigned len, const char* ch) {
-        uint32_t bytes = (len + 1) * 8;
+        uint32_t bytes = (len + 1) * beat_bytes();
         CHECK(addr >= HP_BASE && addr - HP_BASE + bytes <= HP_SIZE, "%s address %08x outside the HP memory", ch, addr);
         uint32_t off = addr - HP_BASE;
         CHECK(off >= span_lo && off + bytes <= span_hi, "%s offset %06x outside the span %06x..%06x", ch, off,
@@ -305,13 +319,15 @@ struct Hp {
     }
 
     void check_beat(Rd& r, uint64_t data) {
+        if (b4) data &= 0xFFFFFFFFu;   // bits 63:32 are not defined
         if (order) {
-            if (data != order_value()) r.bad = true;
+            uint64_t v = order_value();
+            if (data != (b4 ? v & 0xFFFFFFFFu : v)) r.bad = true;
             return;
         }
         if (!check_on) return;
-        uint32_t off = r.off + 8 * r.beat;
-        uint64_t expect = pattern64(seed, off);
+        uint32_t off = r.off + beat_bytes() * r.beat;
+        uint64_t expect = b4 ? uint64_t(pattern(seed, off)) : pattern64(seed, off);
         bool lo = uint32_t(data) != uint32_t(expect), hi = (data >> 32) != (expect >> 32);
         data_errors += unsigned(lo) + unsigned(hi);
         if ((lo || hi) && !err_seen) {
@@ -326,7 +342,7 @@ struct Hp {
         // Writes that reach the memory now.
         for (size_t i = 0; i < pending.size();) {
             if (n >= pending[i].at) {
-                wr64(pending[i].off, pending[i].data);
+                store(pending[i].off, pending[i].data, pending[i].bytes);
                 pending.erase(pending.begin() + long(i));
             } else {
                 i++;
@@ -354,6 +370,13 @@ struct Hp {
             if (p.aw_wait)
                 CHECK(awv && d->hp_awaddr[pi] == p.aw_addr && d->hp_awlen[pi] == p.aw_len && d->hp_awid[pi] == p.aw_id,
                       "AW changed before AWREADY");
+            const unsigned size = b4 ? 2 : 3;
+            if (arv) CHECK(d->hp_arsize[pi] == size, "ARSIZE %u, expected %u", unsigned(d->hp_arsize[pi]), size);
+            if (awv) CHECK(d->hp_awsize[pi] == size, "AWSIZE %u, expected %u", unsigned(d->hp_awsize[pi]), size);
+            if (wv) {
+                CHECK(d->hp_wstrb[pi] == (b4 ? 0x0F : 0xFF), "WSTRB %02x", unsigned(d->hp_wstrb[pi]));
+                if (b4) CHECK((d->hp_wdata[pi] >> 32) == 0, "B4: bits 63:32 of WDATA are not 0");
+            }
             if (p.w_wait)
                 CHECK(wv && d->hp_wdata[pi] == p.w_data && d->hp_wlast[pi] == p.w_last && d->hp_wid[pi] == p.w_id,
                       "W changed before WREADY");
@@ -426,8 +449,9 @@ struct Hp {
                     p.wbeats.pop_front();
                     CHECK(b.last == (i == w.len), "WLAST %d at beat %u of %u", int(b.last), i, w.len + 1);
                     CHECK(b.id == w.id, "WID %u, AWID %u", b.id, w.id);
-                    if (at <= n) wr64(w.off + 8 * i, b.data);
-                    else pending.push_back({at, w.off + 8 * i, b.data});
+                    uint32_t off = w.off + beat_bytes() * i;
+                    if (at <= n) store(off, b.data, beat_bytes());
+                    else pending.push_back({at, off, b.data, beat_bytes()});
                 }
                 p.bs.push_back({w.id, w.t_hs, n + latency()});
             }
@@ -485,7 +509,7 @@ struct Hp {
             Port& p = port[pi];
             d->hp_arready[pi] = !in_reset && rng.chance(cfg.p_arready);
             d->hp_awready[pi] = !in_reset && rng.chance(cfg.p_awready);
-            d->hp_wready[pi] = !in_reset && rng.chance(cfg.p_wready);
+            d->hp_wready[pi] = !in_reset && rng.chance(cfg.p_wready) && !(b4 && p.aws.empty());
 
             // A beat that waits for RREADY stays. Otherwise present a beat of the
             // current read, or of another read that is ready, or none.
@@ -500,7 +524,8 @@ struct Hp {
                     auto it = std::find_if(p.rds.begin(), p.rds.end(), [&](const Rd& r) { return int(r.id) == p.r_cur; });
                     d->hp_rvalid[pi] = 1;
                     d->hp_rid[pi] = it->id;
-                    d->hp_rdata[pi] = rd64(it->off + 8 * it->beat);
+                    uint32_t off = it->off + beat_bytes() * it->beat;
+                    d->hp_rdata[pi] = b4 ? (rng.next() << 32) | rd32(off) : rd64(off);
                     d->hp_rlast[pi] = (it->beat == it->len);
                     d->hp_rresp[pi] = rng.chance(cfg.p_rerr) ? 2 : 0;
                 }
@@ -745,10 +770,12 @@ struct Run {
     uint32_t op = MEMPROBE_MODE_OP_READ, len = 15, base = 0, span_log2 = 22, count = 1, gap = 0;
     uint32_t seed = 1, outstanding = 1, pattern = MEMPROBE_MODE_PATTERN_SEQ, read_share = 0x8000;
     uint32_t rd_port = 0, wr_port = 0;
-    bool verify = false, reverse = false;
+    bool verify = false, reverse = false, b4 = false;
+    unsigned beat_bytes() const { return b4 ? 4 : 8; }
     uint32_t mode() const {
         return (op << MEMPROBE_MODE_OP_LSB) | (pattern << MEMPROBE_MODE_PATTERN_LSB)
-             | (len << MEMPROBE_MODE_LEN_LSB) | (MEMPROBE_MODE_SIZE_B8 << MEMPROBE_MODE_SIZE_LSB)
+             | (len << MEMPROBE_MODE_LEN_LSB)
+             | ((b4 ? MEMPROBE_MODE_SIZE_B4 : MEMPROBE_MODE_SIZE_B8) << MEMPROBE_MODE_SIZE_LSB)
              | (rd_port << MEMPROBE_MODE_RD_PORT_LSB) | (wr_port << MEMPROBE_MODE_WR_PORT_LSB)
              | (verify ? BIT(MODE, VERIFY) : 0u) | (reverse ? BIT(MODE, ORDER_REVERSE) : 0u);
     }
@@ -758,7 +785,7 @@ struct Run {
     }
     uint64_t total() const {
         if (op == MEMPROBE_MODE_OP_FILL || op == MEMPROBE_MODE_OP_CHECK)
-            return (uint64_t(1) << span_log2) / ((len + 1) * 8);
+            return (uint64_t(1) << span_log2) / ((len + 1) * beat_bytes());
         return count;
     }
 };
@@ -777,7 +804,7 @@ static void configure(Sim& s, const Run& r) {
 static void start(Sim& s, const Run& r) {
     configure(s, r);
     s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed, r.rd_port,
-                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse);
+                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse, r.b4);
     s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START));
 }
 
@@ -854,12 +881,14 @@ static void check_results(Sim& s) {
     }
 }
 
-static Run random_run(Rng& rng, uint32_t op) {
+// size: 4 or 8 bytes in each beat, or 0 for a random size.
+static Run random_run(Rng& rng, uint32_t op, unsigned size = 0) {
     static const uint32_t lens[] = {0, 1, 3, 7, 15};
     Run r;
     r.op = op;
     r.len = lens[rng.below(5)];
-    unsigned burst_log2 = 3 + __builtin_popcount(r.len);
+    r.b4 = size ? size == 4 : rng.chance(0.4);
+    unsigned burst_log2 = (r.b4 ? 2 : 3) + __builtin_popcount(r.len);
     r.span_log2 = burst_log2 + 2 + rng.below(8);       // 4 to 512 bursts
     uint32_t spans = HP_SIZE >> r.span_log2;
     r.base = rng.below(spans) << r.span_log2;
@@ -889,7 +918,7 @@ static void test_identity(Sim& s) {
     CHECK(FIELD(caps, CAPS, CLK_MHZ) == 100, "CAPS.CLK_MHZ %u", FIELD(caps, CAPS, CLK_MHZ));
     CHECK(FIELD(caps, CAPS, MAX_OUTSTANDING) == 16, "CAPS.MAX_OUTSTANDING %u", FIELD(caps, CAPS, MAX_OUTSTANDING));
     CHECK(FIELD(caps, CAPS, PORTS) == 0xF, "CAPS.PORTS %u", FIELD(caps, CAPS, PORTS));
-    uint32_t flags = BIT(CAPS, MIXED) | BIT(CAPS, PATTERNS) | BIT(CAPS, VERIFY) | BIT(CAPS, ORDER);
+    uint32_t flags = BIT(CAPS, MIXED) | BIT(CAPS, PATTERNS) | BIT(CAPS, VERIFY) | BIT(CAPS, ORDER) | BIT(CAPS, SIZE32);
     CHECK((caps & ~(MEMPROBE_CAPS_CLK_MHZ_MASK | MEMPROBE_CAPS_MAX_OUTSTANDING_MASK | MEMPROBE_CAPS_PORTS_MASK))
               == flags, "CAPS %08x", caps);
     // A burst reads consecutive registers.
@@ -1006,13 +1035,17 @@ static void test_refusals(Sim& s) {
         CHECK(s.status() & BIT(STATUS, CFG_ERR), "MODE %08x accepted", ok.mode() | extra);
         clear_status(s, BIT(STATUS, CFG_ERR));
     }
-    configure(s, ok);
-    s.wr(MEMPROBE_MODE_OFFSET, (ok.mode() & ~MEMPROBE_MODE_SIZE_MASK)
-                               | (MEMPROBE_MODE_SIZE_B4 << MEMPROBE_MODE_SIZE_LSB));
-    s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START));
-    s.cycles_s(20);
-    CHECK(s.status() & BIT(STATUS, CFG_ERR), "SIZE B4 accepted");
-    clear_status(s, BIT(STATUS, CFG_ERR));
+    // SIZE 0 and 1 (1 and 2 bytes) are not values of the field.
+    for (uint32_t size : {0u, 1u}) {
+        configure(s, ok);
+        s.wr(MEMPROBE_MODE_OFFSET, (ok.mode() & ~MEMPROBE_MODE_SIZE_MASK) | (size << MEMPROBE_MODE_SIZE_LSB));
+        s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START));
+        s.cycles_s(20);
+        CHECK(s.status() & BIT(STATUS, CFG_ERR), "SIZE %u accepted", size);
+        clear_status(s, BIT(STATUS, CFG_ERR));
+    }
+    // With 4-byte beats, a 64-byte burst needs a span of 64 bytes or more.
+    expect_refused(s, with([](Run& r) { r.b4 = true; r.span_log2 = 5; r.len = 15; r.base = 0; }), "B4: span < burst");
     // Two commands in one write.
     configure(s, ok);
     s.wr(MEMPROBE_CTRL_OFFSET, BIT(CTRL, START) | BIT(CTRL, CLEAR));
@@ -1022,9 +1055,9 @@ static void test_refusals(Sim& s) {
     clear_status(s, BIT(STATUS, CFG_ERR));
 }
 
-static void test_fill_check(Sim& s) {
-    g_step = "fill and check";
-    Run r = random_run(s.rng, MEMPROBE_MODE_OP_FILL);
+static void test_fill_check(Sim& s, unsigned size) {
+    g_step = size == 4 ? "fill and check, B4" : "fill and check";
+    Run r = random_run(s.rng, MEMPROBE_MODE_OP_FILL, size);
     std::vector<uint8_t> before = s.hp.mem;
     clear(s);
     run(s, r);
@@ -1077,7 +1110,7 @@ static void test_fill_check(Sim& s) {
     clear_status(s, BIT(STATUS, DATA_ERR));
     // A second run adds to the counters.
     s.hp.new_run(r.gap, r.total(), r.outstanding, r.base, 1u << r.span_log2, r.checks(), r.seed, r.rd_port,
-                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse);
+                 r.wr_port, r.op == MEMPROBE_MODE_OP_ORDER, r.reverse, r.b4);
     run(s, r);
     CHECK(s.rd(MEMPROBE_DATA_ERRORS_OFFSET) == 2 * errors, "DATA_ERRORS after two runs");
     check_results(s);
@@ -1182,7 +1215,7 @@ static void test_concurrent(Sim& s, int runs) {
         CHECK(s.rd(MEMPROBE_DATA_ERRORS_OFFSET) == 0, "run %d: DATA_ERRORS %u with VERIFY", i,
               s.rd(MEMPROBE_DATA_ERRORS_OFFSET));
         // RANDOM spreads the bursts over the span; FIXED uses one address.
-        uint64_t places = (uint64_t(1) << r.span_log2) / ((r.len + 1) * 8);
+        uint64_t places = (uint64_t(1) << r.span_log2) / ((r.len + 1) * r.beat_bytes());
         if (r.pattern == MEMPROBE_MODE_PATTERN_RANDOM)
             CHECK(s.hp.offsets.size() * 4 >= std::min<uint64_t>(places, r.count),
                   "RANDOM: %zu addresses for %u bursts in %llu places", s.hp.offsets.size(), r.count,
@@ -1247,9 +1280,11 @@ static void test_order(Sim& s) {
         {0, 2, false, 60, 1}, {0, 0, true, 0, 0},   {3, 1, true, 30, 5},  {0, 0, false, 60, 40},
     };
     uint64_t late_mismatches = 0, reverse_mismatches = 0;
+    unsigned k = 0;
     for (const Case& c : cases) {
         s.hp.cfg.late = c.late;
-        Run r = random_run(s.rng, MEMPROBE_MODE_OP_READ);
+        // B4 in every second case: late writes, two ports and ORDER_REVERSE.
+        Run r = random_run(s.rng, MEMPROBE_MODE_OP_READ, k++ % 2 ? 4 : 8);
         r.op = MEMPROBE_MODE_OP_ORDER;
         r.count = 30 + s.rng.below(50);
         r.gap = c.gap;
@@ -1330,7 +1365,8 @@ int main(int argc, char** argv) {
     test_identity(s);
     test_registers(s);
     test_refusals(s);
-    test_fill_check(s);
+    test_fill_check(s, 8);
+    test_fill_check(s, 4);
     test_read_write(s, false, false);
     test_read_write(s, true, false);
     test_read_write(s, false, true);

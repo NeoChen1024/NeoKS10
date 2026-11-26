@@ -7,7 +7,7 @@
 ///
 /// Transactions in progress: A transaction is in progress from the cycle in which the design sets its ARVALID or AWVALID to the cycle of its RLAST or B handshake. Reads and writes count together. Each transaction in progress has an AXI ID that no other transaction in progress has. The R beats of different IDs can come in any order (AXI3).
 ///
-/// Data pattern: FILL, WRITE and MIXED write this data. CHECK expects it; READ and MIXED expect it if MODE.VERIFY is 1. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values. ORDER does not use this pattern: its write number n, from 0, writes SEED ^ n in bits 31:0 and SEED ^ ~n in bits 63:32.
+/// Data pattern: FILL, WRITE and MIXED write this data. CHECK expects it; READ and MIXED expect it if MODE.VERIFY is 1. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values. ORDER does not use this pattern: its write number n, from 0, writes SEED ^ n in bits 31:0 and SEED ^ ~n in bits 63:32. With 32-bit beats (MODE.SIZE B4), a beat at offset a has the value of a in bits 31:0, and the comparisons of CHECK, VERIFY and ORDER use bits 31:0 only.
 pub mod memprobe {
     use crate::{Field, Mem, Reg};
 
@@ -442,7 +442,7 @@ pub mod memprobe {
             width: 4,
         };
 
-        /// Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of the AFI, with the data in bits 31:0. Before a run with B4, the PS sets 32BitEn in AFI_RDCHAN_CTRL and AFI_WRCHAN_CTRL of each port that the run uses (board interface, section HP ports). The design does not make narrow transfers on the 64-bit port. Access: rw.
+        /// Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of the AFI (UG585 v1.7, section 5.3.6): the data is in bits 31:0, WSTRB is 0x0F, bits 63:32 of WDATA are 0, and bits 63:32 of RDATA are not used. Before a run with B4, the PS sets 32BitEn in AFI_RDCHAN_CTRL of RD_PORT and in AFI_WRCHAN_CTRL of WR_PORT; before a run with B8, it clears them. The design does not make narrow transfers on the 64-bit port. AxCACHE is 0b0011: the AFI upsizes 32-bit bursts of an even number of beats and expands 1-beat bursts (UG585 v1.7, Table 5-8). Access: rw.
         pub const SIZE: Field = Field {
             lsb: 12,
             width: 2,

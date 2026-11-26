@@ -5,10 +5,12 @@
 //! - [`mmio`]: the memory mappings. It is the only module with `unsafe` code.
 //! - [`board`]: the board interface on Linux (UIO device, reserved region,
 //!   checks before the first register read).
+//! - [`afi`]: the 32-bit mode of the HP ports.
 
 #[rustfmt::skip]
 pub mod regmap;
 
+pub mod afi;
 pub mod board;
 #[allow(unsafe_code)]
 pub mod mmio;

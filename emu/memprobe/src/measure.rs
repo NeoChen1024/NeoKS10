@@ -27,7 +27,7 @@ fn timeout(transactions: u64) -> Duration {
 }
 
 /// The CSV header of [`latency`].
-pub const LATENCY_HEADER: &str = "measure,op,beats,count,gap,clk_mhz,samples,\
+pub const LATENCY_HEADER: &str = "measure,op,beats,width,count,gap,clk_mhz,samples,\
 min_cyc,median_cyc,p99_cyc,max_cyc,mean_cyc,min_ns,median_ns,p99_ns,max_ns,mean_ns";
 
 fn ns(cycles: f64, clk_mhz: u32) -> f64 {
@@ -50,9 +50,10 @@ fn latency_row(
 ) -> Option<String> {
     let s = stats::summarize(&h.bins, h.min, h.max, h.sum, samples)?;
     Some(format!(
-        "{name},{},{},{},{},{clk_mhz},{},{},{},{},{},{:.2},{:.1},{},{},{:.1},{:.1}",
+        "{name},{},{},{},{},{},{clk_mhz},{},{},{},{},{},{:.2},{:.1},{},{},{:.1},{:.1}",
         cfg.op.name(),
         cfg.beats,
+        8 * cfg.beat_bytes(),
         cfg.count,
         cfg.gap,
         s.count,
@@ -72,11 +73,12 @@ fn latency_row(
 /// B1, B2, B3: `count` bursts of `beats` beats, one at a time, with `gap`
 /// cycles at least from one address handshake to the next issue. Writes one
 /// CSV row for each latency (read: first beat and last beat; write: response),
-/// and one comment with the rate.
+/// and one comment with the rate. `width32`: 32-bit beats.
 pub fn latency(
     dev: &Memprobe,
     op: Op,
     beats: u32,
+    width32: bool,
     count: u32,
     gap: u32,
     out: &mut impl Write,
@@ -84,7 +86,10 @@ pub fn latency(
     if !matches!(op, Op::Read | Op::Write) {
         return Err(Error::Device("latency needs read or write".into()));
     }
-    let cfg = RunConfig::simple(op, beats, SPAN_LOG2, count, gap, 1);
+    let cfg = RunConfig {
+        width32,
+        ..RunConfig::simple(op, beats, SPAN_LOG2, count, gap, 1)
+    };
     dev.clear()?;
     let st = dev.run(&cfg, timeout(cfg.transactions()))?;
     let r = dev.results();
@@ -112,11 +117,12 @@ pub fn latency(
         writeln!(out, "{row}").map_err(io)?;
     }
     let secs = r.run_cycles as f64 / (f64::from(clk) * 1e6);
-    let bytes = done as f64 * f64::from(beats) * 8.0;
+    let bytes = done as f64 * f64::from(beats) * f64::from(cfg.beat_bytes());
     writeln!(
         out,
-        "# {} {count} x {beats} beats: {} cycles, {:.0} transactions/s, {:.1} MiB/s, {} stall cycles, {} samples dropped",
+        "# {} {count} x {beats} beats of {} bits: {} cycles, {:.0} transactions/s, {:.1} MiB/s, {} stall cycles, {} samples dropped",
         op.name(),
+        8 * cfg.beat_bytes(),
         r.run_cycles,
         done as f64 / secs,
         bytes / secs / (1u64 << 20) as f64,
@@ -128,7 +134,7 @@ pub fn latency(
 }
 
 /// The CSV header of [`rate`].
-pub const RATE_HEADER: &str = "op,pattern,beats,count,outstanding,read_share,verify,gap,clk_mhz,\
+pub const RATE_HEADER: &str = "op,pattern,beats,width,count,outstanding,read_share,verify,gap,clk_mhz,\
 reads,writes,cycles,transactions_per_s,mib_per_s,stall_share,\
 rd_last_median_cyc,rd_last_p99_cyc,rd_last_max_cyc,wr_resp_median_cyc,wr_resp_p99_cyc,wr_resp_max_cyc,\
 data_errors,samples_dropped";
@@ -144,14 +150,15 @@ fn quantiles(h: &Hist, samples: u64) -> (String, String, String) {
 fn rate_row(cfg: &RunConfig, clk_mhz: u32, r: &Results) -> String {
     let secs = r.run_cycles as f64 / (f64::from(clk_mhz) * 1e6);
     let done = r.reads + r.writes;
-    let bytes = done as f64 * f64::from(cfg.beats) * 8.0;
+    let bytes = done as f64 * f64::from(cfg.beats) * f64::from(cfg.beat_bytes());
     let (rm, rp, rx) = quantiles(&r.rd_last, r.reads);
     let (wm, wp, wx) = quantiles(&r.wr_resp, r.writes);
     format!(
-        "{},{},{},{},{},{},{},{},{clk_mhz},{},{},{},{:.0},{:.1},{:.3},{rm},{rp},{rx},{wm},{wp},{wx},{},{}",
+        "{},{},{},{},{},{},{},{},{},{clk_mhz},{},{},{},{:.0},{:.1},{:.3},{rm},{rp},{rx},{wm},{wp},{wx},{},{}",
         cfg.op.name(),
         cfg.pattern.name(),
         cfg.beats,
+        8 * cfg.beat_bytes(),
         cfg.count,
         cfg.outstanding,
         cfg.read_share,
@@ -203,7 +210,7 @@ pub fn rate(dev: &Memprobe, cfg: &RunConfig, out: &mut impl Write) -> Result<Res
 }
 
 /// The CSV header of [`order`].
-pub const ORDER_HEADER: &str = "pattern,beats,count,gap,rd_port,wr_port,reverse,clk_mhz,\
+pub const ORDER_HEADER: &str = "pattern,beats,width,count,gap,rd_port,wr_port,reverse,clk_mhz,\
 mismatches,mismatch_share,rd_last_median_cyc,rd_last_p99_cyc,wr_resp_median_cyc,wr_resp_p99_cyc";
 
 /// One CSV row of [`order`].
@@ -211,9 +218,10 @@ fn order_row(cfg: &RunConfig, clk_mhz: u32, r: &Results) -> String {
     let (rm, rp, _) = quantiles(&r.rd_last, r.reads);
     let (wm, wp, _) = quantiles(&r.wr_resp, r.writes);
     format!(
-        "{},{},{},{},{},{},{},{clk_mhz},{},{:.4},{rm},{rp},{wm},{wp}",
+        "{},{},{},{},{},{},{},{},{clk_mhz},{},{:.4},{rm},{rp},{wm},{wp}",
         cfg.pattern.name(),
         cfg.beats,
+        8 * cfg.beat_bytes(),
         cfg.count,
         cfg.gap,
         cfg.rd_port,
@@ -262,12 +270,15 @@ pub struct Consistency {
 
 /// B9: the PS writes the pattern into the first 4 MiB and the PL checks it;
 /// then the PL fills it and the PS checks it. Repeats with new seeds until
-/// `words` 32-bit words went in each direction.
+/// `words` 32-bit words went in each direction. The PL uses bursts of
+/// `beats` beats of 32 bits (`width32`) or 64 bits.
 pub fn consistency(
     dev: &Memprobe,
     region: &Region,
     words: u64,
     seed: u32,
+    beats: u32,
+    width32: bool,
 ) -> Result<Consistency, Error> {
     if region.base != u64::from(mp::HP_BASE) {
         return Err(Error::Device(
@@ -294,7 +305,10 @@ pub fn consistency(
         }
         plio::mmio::barrier();
         dev.clear()?;
-        let cfg = RunConfig::simple(Op::Check, 16, SPAN_LOG2, 0, 0, sa);
+        let cfg = RunConfig {
+            width32,
+            ..RunConfig::simple(Op::Check, beats, SPAN_LOG2, 0, 0, sa)
+        };
         dev.run(&cfg, timeout(cfg.transactions()))?;
         let r = dev.results();
         if r.resp_errors != 0 {
@@ -344,7 +358,7 @@ mod tests {
         let row = latency_row("rd_first", &cfg, 100, &h, 4).unwrap();
         assert_eq!(
             row,
-            "rd_first,read,1,4,0,100,4,1,1,>=3,1200,301.00,10.0,10.0,>=30.0,12000.0,3010.0"
+            "rd_first,read,1,64,4,0,100,4,1,1,>=3,1200,301.00,10.0,10.0,>=30.0,12000.0,3010.0"
         );
         assert_eq!(LATENCY_HEADER.split(',').count(), row.split(',').count());
         assert!(
@@ -391,9 +405,22 @@ mod tests {
         let row = rate_row(&cfg, 100, &r);
         assert_eq!(
             row,
-            "mixed,seq,2,100,8,32768,0,0,100,60,40,1000,10000000,152.6,0.250,2,2,2,1,1,1,0,0"
+            "mixed,seq,2,64,100,8,32768,0,0,100,60,40,1000,10000000,152.6,0.250,2,2,2,1,1,1,0,0"
         );
         assert_eq!(RATE_HEADER.split(',').count(), row.split(',').count());
+        // 32-bit beats: 100 * 8 bytes in 10 us.
+        let row = rate_row(
+            &RunConfig {
+                width32: true,
+                ..cfg
+            },
+            100,
+            &r,
+        );
+        assert_eq!(
+            row,
+            "mixed,seq,2,32,100,8,32768,0,0,100,60,40,1000,10000000,76.3,0.250,2,2,2,1,1,1,0,0"
+        );
     }
 
     #[test]
@@ -423,7 +450,7 @@ mod tests {
             sum: 400,
         };
         let row = order_row(&cfg, 100, &r);
-        assert_eq!(row, "seq,1,200,3,2,0,1,100,50,0.2500,1,1,2,2");
+        assert_eq!(row, "seq,1,64,200,3,2,0,1,100,50,0.2500,1,1,2,2");
         assert_eq!(ORDER_HEADER.split(',').count(), row.split(',').count());
     }
 

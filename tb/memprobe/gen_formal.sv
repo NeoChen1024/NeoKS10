@@ -12,7 +12,8 @@
 // Properties:
 //   - VALID stays until READY, and the payload (address, length, ID, data)
 //     does not change.
-//   - Each address is in the HP memory and in the span, aligned to the burst,
+//   - Each address is in the HP memory and in the span, aligned to the burst
+//     (beats of 4 or 8 bytes, MODE.SIZE),
 //     and the burst does not cross 4 KiB. AxLEN is the configured length.
 //   - A new ARVALID or AWVALID has an ID that no transaction in progress has;
 //     at most OUTSTANDING transactions are in progress (note "Transactions in
@@ -31,6 +32,7 @@ module gen_formal #(
     input logic [2:0]      cfg_op,
     input logic [1:0]      cfg_pattern,
     input logic [3:0]      cfg_len,
+    input logic [1:0]      cfg_size,
     input logic [OFF_W-1:0] cfg_base,
     input logic [4:0]      cfg_span_log2,
     input logic [31:0]     cfg_count,
@@ -59,7 +61,7 @@ module gen_formal #(
 
     memprobe_gen #(.OFF_W(OFF_W), .IDS(IDS), .ID_W(ID_W)) dut (
         .clk(clk), .rst(rst), .start(start), .clear(clear), .stop(stop), .busy(busy),
-        .cfg_op(cfg_op), .cfg_pattern(cfg_pattern), .cfg_len(cfg_len), .cfg_base(cfg_base),
+        .cfg_op(cfg_op), .cfg_pattern(cfg_pattern), .cfg_len(cfg_len), .cfg_size(cfg_size), .cfg_base(cfg_base),
         .cfg_span_log2(cfg_span_log2), .cfg_count(cfg_count), .cfg_gap(cfg_gap),
         .cfg_outstanding(cfg_outstanding), .cfg_read_share(cfg_read_share), .cfg_seed(cfg_seed),
         .cfg_verify(cfg_verify), .cfg_order_reverse(cfg_order_reverse),
@@ -75,7 +77,7 @@ module gen_formal #(
 
     // ---- Assumptions on the configuration ------------------------------------------
     wire [2:0] len_log2 = 3'(cfg_len[0]) + 3'(cfg_len[1]) + 3'(cfg_len[2]) + 3'(cfg_len[3]);
-    wire [4:0] burst_log2 = 5'd3 + 5'(len_log2);
+    wire [4:0] burst_log2 = 5'(cfg_size) + 5'(len_log2);
     wire [OFF_W:0] span = (OFF_W+1)'(1) << cfg_span_log2;
     wire whole_span = cfg_op == memprobe_regmap_pkg::MODE_OP_FILL || cfg_op == memprobe_regmap_pkg::MODE_OP_CHECK;
     always_comb begin
@@ -90,10 +92,12 @@ module gen_formal #(
         assume(cfg_span_log2 >= burst_log2 && cfg_span_log2 <= 5'(OFF_W));
         assume(((OFF_W+1)'(cfg_base) & (span - 1'b1)) == '0);
         assume(cfg_outstanding >= 5'd1 && cfg_outstanding <= 5'(IDS));
+        assume(cfg_size == memprobe_regmap_pkg::MODE_SIZE_B4 || cfg_size == memprobe_regmap_pkg::MODE_SIZE_B8);
     end
     always_ff @(posedge clk)
         if (!init && ($past(busy) || $past(start))) begin
             assume(cfg_op == $past(cfg_op) && cfg_len == $past(cfg_len) && cfg_pattern == $past(cfg_pattern));
+            assume(cfg_size == $past(cfg_size));
             assume(cfg_base == $past(cfg_base) && cfg_span_log2 == $past(cfg_span_log2));
             assume(cfg_count == $past(cfg_count) && cfg_gap == $past(cfg_gap));
             assume(cfg_outstanding == $past(cfg_outstanding) && cfg_read_share == $past(cfg_read_share));
@@ -225,6 +229,7 @@ module gen_formal #(
         if (!init && !rst) begin
             cover(n_in_use == (ID_W+2)'(IDS) && cfg_outstanding == 5'(IDS));
             cover(rvalid && rready && rlast && cfg_len == 4'd3 && rid == ID_W'(IDS - 1));
+            cover(wvalid && wready && wlast && cfg_len == 4'd1 && cfg_size == memprobe_regmap_pkg::MODE_SIZE_B4);
             cover(bvalid && bready && cfg_len == 4'd1 && wq_n == 1);
             cover(wvalid && wready && wlast && cfg_len == 4'd0 && !awvalid);
         end
