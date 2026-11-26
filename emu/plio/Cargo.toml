@@ -1,0 +1,11 @@
+[package]
+name = "plio"
+version = "0.1.0"
+description = "Access to the PL of the board: register map, register window, memory region"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

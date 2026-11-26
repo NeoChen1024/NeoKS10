@@ -57,20 +57,25 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 
 | Path | Contents |
 |---|---|
-| `spec/` | Instruction table, register map, and their generators |
-| `emu/` | The Rust workspace: emulator, software processor, image tools |
-| `rtl/` | SystemVerilog: core, memory bridge, panel |
+| `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `plio` is the access to the PL |
+| `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts, SymbiYosys proofs |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2 |
 | `oracle/` | Pinned commits and patch files for the reference emulators |
 | `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data |
 | `its/` | The files that PDP-10/its needs under `build/<emulator>/` |
 | `tests/` | Guest programs, saved random seeds, expected traces |
-| `docs/` | Design notes, `unknowns.md`, `discrepancies.md` |
+| `docs/` | Design notes, `unknowns.md`, `discrepancies.md`, `regmap.md` (generated) |
 | `third-party.lock` | Source URL and SHA-256 of each external file |
 
 Build output and downloaded files stay outside the repository tree, or in a
 directory that `.gitignore` excludes.
+
+`make gen` writes files from `spec/`: `rtl/gen/`, `emu/plio/src/regmap.rs`
+and `docs/regmap.md`. These files are in git, so that a build does not need
+the generators. Do not edit them. If they are not current, `make check`
+fails.
 
 ## Build and verification
 
@@ -84,8 +89,8 @@ directory that `.gitignore` excludes.
 | A milestone, or a possible fault in a full system | `make its-build` |
 | A file in `fpga/`, or a timing claim | `make synth`, and read the timing report |
 
-- `make check` is: format, lint, unit tests, and a short random differential
-  run.
+- `make check` is: format, lint, unit tests, a check that the generated
+  files are current, and a short random differential run.
 - Run heavy jobs (synthesis, formal proofs, the ITS build) with `nice -n 19`.
 - Do not change a file that a test or a synthesis in progress reads.
 - State in the commit message which rows you ran. Do not state a result that

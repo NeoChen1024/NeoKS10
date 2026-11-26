@@ -1,0 +1,596 @@
+# Register map of the PL designs. This file is the only definition of the
+# PS/PL interface (AGENTS.md). `make gen` writes the files for the logic, the
+# Rust code and the documents from it. Do not edit the generated files.
+#
+# Schema:
+#   [[block]]          one PL design
+#     name, description, id (value of the ID register), version
+#     window_bytes     size of the register window on M_AXI_GP0
+#     [block.hp]       the memory that an HP master of the design can access:
+#                      base, size (bytes; base is a multiple of size), source
+#     [[block.register]]  name, offset (bytes), access, reset, description
+#       access: "ro" read only, "rw" read and write, "wo" write only
+#               (reads give 0), "w1c" write 1 to clear
+#       [[block.register.field]]  name, lsb, width, description,
+#                                 access (optional, overrides the register),
+#                                 values (optional table: NAME = value)
+#     [[block.memory]]    name, offset, depth (words), width (bits),
+#                         access, description
+#
+# All registers are 32 bits. Offsets are bytes from the start of the window.
+
+format = 1
+
+[[block]]
+name = "memprobe"
+description = """
+Test design for the memory path between the PL and the PS DDR \
+(docs/mem-path-experiment.md, Part B). A traffic generator on the HP ports, \
+latency timers, histograms and a data checker."""
+id = 0x4D50_5242       # "MPRB"
+version = 1
+window_bytes = 0x10_0000  # GP0 register window; see [block.hp] source
+
+[block.hp]
+base = 0x1F00_0000
+size = 0x0100_0000
+source = """
+The reserved region of the board interface: docs/pl-interface.md of \
+https://github.com/NeoChen1024/PYNQ-Z2, tag pl-interface-v1."""
+
+[[block.note]]
+title = "Latency"
+text = """
+A latency is the number of rising edges of clk_m from the edge with the \
+address handshake to the edge with the end handshake. If the end handshake \
+is at the next edge, the latency is 1. RD_FIRST ends at the first R \
+handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP \
+ends at the B handshake. W handshakes do not end a latency."""
+
+[[block.note]]
+title = "Data pattern"
+text = """
+FILL writes this data and CHECK expects it. For the 32-bit word at byte \
+offset a from the start of the HP memory: w = a >> 2, and the value is \
+SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a \
+has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. \
+tests/memprobe-pattern.txt has recorded values."""
+
+# ---- Identification ------------------------------------------------------
+
+[[block.register]]
+name = "ID"
+offset = 0x000
+access = "ro"
+reset = 0x4D50_5242
+description = "Constant. Identifies the design. Read it before any other register."
+
+[[block.register]]
+name = "VERSION"
+offset = 0x004
+access = "ro"
+reset = 1
+description = "Version of this register map."
+
+[[block.register]]
+name = "BUILD"
+offset = 0x008
+access = "ro"
+reset = 0
+description = "The first 32 bits of the git commit of the build. The Vivado script sets it."
+
+[[block.register]]
+name = "CAPS"
+offset = 0x00C
+access = "ro"
+reset = 0
+description = "The features that this bitstream contains."
+
+[[block.register.field]]
+name = "CLK_MHZ"
+lsb = 0
+width = 8
+description = "Nominal frequency of clk_m, the clock of the HP side, in MHz."
+
+[[block.register.field]]
+name = "MAX_OUTSTANDING"
+lsb = 8
+width = 5
+description = "The largest value that OUTSTANDING accepts."
+
+[[block.register.field]]
+name = "HP1"
+lsb = 16
+width = 1
+description = "1: the design has a master on S_AXI_HP1."
+
+[[block.register.field]]
+name = "SIZE32"
+lsb = 17
+width = 1
+description = "1: MODE.SIZE accepts 32-bit transfers."
+
+[[block.register.field]]
+name = "MIXED"
+lsb = 18
+width = 1
+description = "1: MODE.OP accepts MIXED."
+
+[[block.register.field]]
+name = "ORDER"
+lsb = 19
+width = 1
+description = "1: MODE.OP accepts ORDER."
+
+[[block.register.field]]
+name = "PATTERNS"
+lsb = 20
+width = 1
+description = "1: MODE.PATTERN accepts RANDOM and FIXED."
+
+# ---- Control -------------------------------------------------------------
+
+[[block.register]]
+name = "CTRL"
+offset = 0x010
+access = "wo"
+reset = 0
+description = "Commands. A write with more than one bit set does nothing and sets STATUS.CFG_ERR."
+
+[[block.register.field]]
+name = "START"
+lsb = 0
+width = 1
+description = """
+Start a run with the configuration registers. If the design is busy, or \
+the configuration is not valid, the run does not start and STATUS.CFG_ERR \
+becomes 1."""
+
+[[block.register.field]]
+name = "ABORT"
+lsb = 1
+width = 1
+description = "Issue no new transaction. The run ends when all transactions in progress have ended."
+
+[[block.register.field]]
+name = "CLEAR"
+lsb = 2
+width = 1
+description = "Set the counters, the statistics and the histograms to 0. Ignored while busy."
+
+[[block.register]]
+name = "STATUS"
+offset = 0x014
+access = "w1c"
+reset = 0
+description = "State of the design. The w1c bits stay 1 until the PS writes 1 to them."
+
+[[block.register.field]]
+name = "BUSY"
+lsb = 0
+width = 1
+access = "ro"
+description = "1: a run is in progress, or the histograms are being cleared."
+
+[[block.register.field]]
+name = "DONE"
+lsb = 1
+width = 1
+description = "1: a run ended."
+
+[[block.register.field]]
+name = "RESP_ERR"
+lsb = 2
+width = 1
+description = "1: a response was not OKAY. RESP_ERRORS has the number."
+
+[[block.register.field]]
+name = "CFG_ERR"
+lsb = 3
+width = 1
+description = "1: a command was refused."
+
+[[block.register.field]]
+name = "HIST_DROP"
+lsb = 4
+width = 1
+description = "1: a latency sample was not put into the histogram. HIST_DROPS has the number."
+
+[[block.register.field]]
+name = "DATA_ERR"
+lsb = 5
+width = 1
+description = "1: the checker found a word that is not the expected value."
+
+[[block.register.field]]
+name = "MMCM_LOCKED"
+lsb = 8
+width = 1
+access = "ro"
+description = "1: the MMCM that makes clk_m is locked. If 0, START is refused."
+
+[[block.register]]
+name = "IRQ_EN"
+offset = 0x018
+access = "rw"
+reset = 0
+description = "Interrupt enable. The interrupt is IRQF2P[0], high while an enabled cause is 1."
+
+[[block.register.field]]
+name = "DONE"
+lsb = 0
+width = 1
+description = "1: STATUS.DONE gives the interrupt."
+
+# ---- Configuration -------------------------------------------------------
+# The design reads these registers at START. A write while BUSY is ignored.
+
+[[block.register]]
+name = "MODE"
+offset = 0x020
+access = "rw"
+reset = 0x0000_3F00
+description = "Type of the run."
+
+[[block.register.field]]
+name = "OP"
+lsb = 0
+width = 3
+description = "Operation."
+values = { READ = 0, WRITE = 1, MIXED = 2, ORDER = 3, FILL = 4, CHECK = 5 }
+
+[[block.register.field]]
+name = "PATTERN"
+lsb = 4
+width = 2
+description = "Address sequence. SEQ increments by one burst and wraps in the span. RANDOM uses an LFSR from SEED. FIXED uses BASE."
+values = { SEQ = 0, RANDOM = 1, FIXED = 2 }
+
+[[block.register.field]]
+name = "LEN"
+lsb = 8
+width = 4
+description = "Beats in each burst minus 1 (AxLEN). The accepted values are 0, 1, 3, 7 and 15."
+
+[[block.register.field]]
+name = "SIZE"
+lsb = 12
+width = 2
+description = """
+Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of \
+the AFI, with the data in bits 31:0. Before a run with B4, the PS sets \
+32BitEn in AFI_RDCHAN_CTRL and AFI_WRCHAN_CTRL of each port that the run \
+uses (board interface, section HP ports). The design does not make narrow \
+transfers on the 64-bit port."""
+values = { B4 = 2, B8 = 3 }
+
+[[block.register.field]]
+name = "RD_PORT"
+lsb = 16
+width = 1
+description = "HP port of the reads."
+values = { HP0 = 0, HP1 = 1 }
+
+[[block.register.field]]
+name = "WR_PORT"
+lsb = 17
+width = 1
+description = "HP port of the writes."
+values = { HP0 = 0, HP1 = 1 }
+
+[[block.register]]
+name = "BASE"
+offset = 0x024
+access = "rw"
+reset = 0
+description = """
+Start of the span, in bytes from the start of the HP memory of the block. \
+A multiple of the span. The bus address is the base of the HP memory plus \
+this offset."""
+
+[[block.register]]
+name = "SPAN_LOG2"
+offset = 0x028
+access = "rw"
+reset = 22
+description = "The span is 2^SPAN_LOG2 bytes. BASE plus the span must not be more than the size of the HP memory."
+
+[[block.register.field]]
+name = "VALUE"
+lsb = 0
+width = 5
+description = "Exponent."
+
+[[block.register]]
+name = "COUNT"
+offset = 0x02C
+access = "rw"
+reset = 1
+description = "Transactions in the run. In FILL and CHECK mode, the run covers the span once and ignores COUNT."
+
+[[block.register]]
+name = "GAP"
+offset = 0x030
+access = "rw"
+reset = 0
+description = "Minimum number of clk_m cycles from one address handshake to the next issue."
+
+[[block.register.field]]
+name = "CYCLES"
+lsb = 0
+width = 16
+description = "Cycles."
+
+[[block.register]]
+name = "OUTSTANDING"
+offset = 0x034
+access = "rw"
+reset = 1
+description = "Maximum number of transactions in progress. From 1 to CAPS.MAX_OUTSTANDING."
+
+[[block.register.field]]
+name = "VALUE"
+lsb = 0
+width = 5
+description = "Transactions."
+
+[[block.register]]
+name = "READ_SHARE"
+offset = 0x038
+access = "rw"
+reset = 0x8000
+description = "In MIXED mode, a transaction is a read if a 16-bit LFSR value is less than this value."
+
+[[block.register.field]]
+name = "VALUE"
+lsb = 0
+width = 16
+description = "Share of reads in units of 1/65536."
+
+[[block.register]]
+name = "SEED"
+offset = 0x03C
+access = "rw"
+reset = 1
+description = "Seed of the LFSRs and of the data pattern. 0 is not accepted."
+
+# ---- Results -------------------------------------------------------------
+# The counters are stable when STATUS.BUSY is 0. Values read during a run
+# are not guaranteed. CTRL.CLEAR sets them to 0. Each run adds to them.
+
+[[block.register]]
+name = "RUN_CYCLES_LO"
+offset = 0x080
+access = "ro"
+reset = 0
+description = "clk_m cycles from START to the end of the run, bits 31:0."
+
+[[block.register]]
+name = "RUN_CYCLES_HI"
+offset = 0x084
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same counter."
+
+[[block.register]]
+name = "READS_LO"
+offset = 0x088
+access = "ro"
+reset = 0
+description = "Read transactions with RLAST, bits 31:0."
+
+[[block.register]]
+name = "READS_HI"
+offset = 0x08C
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same counter."
+
+[[block.register]]
+name = "WRITES_LO"
+offset = 0x090
+access = "ro"
+reset = 0
+description = "Write transactions with a response, bits 31:0."
+
+[[block.register]]
+name = "WRITES_HI"
+offset = 0x094
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same counter."
+
+[[block.register]]
+name = "STALLS_LO"
+offset = 0x098
+access = "ro"
+reset = 0
+description = "Cycles in which a transaction was ready to issue but the limit of OUTSTANDING or AxREADY stopped it, bits 31:0."
+
+[[block.register]]
+name = "STALLS_HI"
+offset = 0x09C
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same counter."
+
+[[block.register]]
+name = "DATA_ERRORS"
+offset = 0x0A0
+access = "ro"
+reset = 0
+description = "Words that are not the expected value. Stops at 0xFFFFFFFF."
+
+[[block.register]]
+name = "FIRST_ERR_ADDR"
+offset = 0x0A4
+access = "ro"
+reset = 0
+description = "Byte offset in the HP memory of the first word that is not the expected value."
+
+[[block.register]]
+name = "FIRST_ERR_DATA_LO"
+offset = 0x0A8
+access = "ro"
+reset = 0
+description = "Bits 31:0 of the data of the first word that is not the expected value."
+
+[[block.register]]
+name = "FIRST_ERR_DATA_HI"
+offset = 0x0AC
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same data. 0 for 32-bit transfers."
+
+[[block.register]]
+name = "ORDER_MISMATCHES"
+offset = 0x0B0
+access = "ro"
+reset = 0
+description = "In ORDER mode: reads that gave the value from before the write that preceded them."
+
+[[block.register]]
+name = "HIST_DROPS"
+offset = 0x0B4
+access = "ro"
+reset = 0
+description = "Latency samples that are not in the histograms."
+
+[[block.register]]
+name = "RESP_ERRORS"
+offset = 0x0B8
+access = "ro"
+reset = 0
+description = "Read beats and write responses with RRESP or BRESP not OKAY."
+
+# ---- Clocks --------------------------------------------------------------
+
+[[block.register]]
+name = "FCLK_COUNT"
+offset = 0x0C0
+access = "ro"
+reset = 0
+description = "Free-running counter of FCLK_CLK0 cycles."
+
+[[block.register]]
+name = "CLKM_COUNT"
+offset = 0x0C4
+access = "ro"
+reset = 0
+description = "Free-running counter of clk_m cycles. Read it with FCLK_COUNT to measure the frequency of clk_m."
+
+# ---- Latency statistics --------------------------------------------------
+# The note "Latency" defines RD_FIRST, RD_LAST and WR_RESP. MIN is
+# 0xFFFFFFFF if there is no sample.
+
+[[block.register]]
+name = "RD_FIRST_MIN"
+offset = 0x100
+access = "ro"
+reset = 0xFFFF_FFFF
+description = "Minimum of RD_FIRST."
+
+[[block.register]]
+name = "RD_FIRST_MAX"
+offset = 0x104
+access = "ro"
+reset = 0
+description = "Maximum of RD_FIRST."
+
+[[block.register]]
+name = "RD_FIRST_SUM_LO"
+offset = 0x108
+access = "ro"
+reset = 0
+description = "Sum of RD_FIRST, bits 31:0."
+
+[[block.register]]
+name = "RD_FIRST_SUM_HI"
+offset = 0x10C
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same sum."
+
+[[block.register]]
+name = "RD_LAST_MIN"
+offset = 0x110
+access = "ro"
+reset = 0xFFFF_FFFF
+description = "Minimum of RD_LAST."
+
+[[block.register]]
+name = "RD_LAST_MAX"
+offset = 0x114
+access = "ro"
+reset = 0
+description = "Maximum of RD_LAST."
+
+[[block.register]]
+name = "RD_LAST_SUM_LO"
+offset = 0x118
+access = "ro"
+reset = 0
+description = "Sum of RD_LAST, bits 31:0."
+
+[[block.register]]
+name = "RD_LAST_SUM_HI"
+offset = 0x11C
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same sum."
+
+[[block.register]]
+name = "WR_RESP_MIN"
+offset = 0x120
+access = "ro"
+reset = 0xFFFF_FFFF
+description = "Minimum of WR_RESP."
+
+[[block.register]]
+name = "WR_RESP_MAX"
+offset = 0x124
+access = "ro"
+reset = 0
+description = "Maximum of WR_RESP."
+
+[[block.register]]
+name = "WR_RESP_SUM_LO"
+offset = 0x128
+access = "ro"
+reset = 0
+description = "Sum of WR_RESP, bits 31:0."
+
+[[block.register]]
+name = "WR_RESP_SUM_HI"
+offset = 0x12C
+access = "ro"
+reset = 0
+description = "Bits 63:32 of the same sum."
+
+# ---- Histograms ----------------------------------------------------------
+# Bin n counts the samples with a latency of n (note "Latency"). The last
+# bin counts the samples of that latency or more. A bin stops at 0xFFFFFFFF.
+
+[[block.memory]]
+name = "HIST_RD_FIRST"
+offset = 0x1000
+depth = 1024
+width = 32
+access = "ro"
+description = "Histogram of RD_FIRST."
+
+[[block.memory]]
+name = "HIST_RD_LAST"
+offset = 0x2000
+depth = 1024
+width = 32
+access = "ro"
+description = "Histogram of RD_LAST."
+
+[[block.memory]]
+name = "HIST_WR_RESP"
+offset = 0x3000
+depth = 1024
+width = 32
+access = "ro"
+description = "Histogram of WR_RESP."
