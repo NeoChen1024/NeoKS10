@@ -8,6 +8,18 @@ move the value to its place and remove the item here.
 The location of the DEC KS10 diagnostics is not known (README.md,
 "Sources").
 
+## KS10 processor and devices
+
+- How the microcode takes a Unibus interrupt: the request line, the PI
+  level from the adapter status register, and the use of the vector
+  (`src/kshack/inout`, not read yet). docs/emulator.md.
+- The value of `APRID` for the ITS microcode (`src/system/ksdefs.194` gives
+  the fields only). docs/emulator.md.
+- The register address of the `SSIMP` IMP interface (`%LHVEC`,
+  `src/system/lhdh.defs`, not read yet). docs/emulator.md.
+- The instruction times of the KS10, for the virtual time of the emulator.
+  docs/emulator.md.
+
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 
 **[measured]** 2026-11-26, Linux 6.18.64-pynq-z2, memprobe build a4249ad7 at

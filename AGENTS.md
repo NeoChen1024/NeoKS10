@@ -21,6 +21,10 @@ source.
 1. The ITS KS10 microcode sources: `src/kshack/` in
    <https://github.com/PDP-10/its>. The files of the assembly are `its`,
    `ks10`, `simple`, `flt`, `extend`, `inout`, `itspag` and `pagef`.
+   For the devices and the console, the same rank has the ITS system
+   sources (`src/system/`, for example `ksdefs` and the device drivers) and
+   the 8080 front-end sources (`src/kshack/*.m80`): they give what ITS and
+   the boot process expect.
 2. The manuals: the ITS notes in `doc/kshack/` of the same repository, and
    the DEC manuals on <https://bitsavers.org/pdf/dec/pdp10/>.
 3. The behaviour of other emulators (KLH10, the `pdp10-ks` simulator).
@@ -43,6 +47,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Mark | Meaning |
 |---|---|
 | **[microcode]** | Read from the microcode source. Give the file and the label |
+| **[its]** | Read from the ITS system sources or the 8080 front-end sources. Give the file and the label |
 | **[manual]** | Read from a manual. Give the document and the page or section |
 | **[emulator]** | Seen in another emulator. Give the emulator and its commit |
 | **[measured]** | Measured on the board or in a test. Give the date and the method |
