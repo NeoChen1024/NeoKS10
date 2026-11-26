@@ -63,7 +63,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `plio` is the access to the PL. `memprobe` is the program of the memory path test |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the instruction tables from `spec/`. `plio` is the access to the PL. `memprobe` is the program of the memory path test |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -79,7 +79,8 @@ Build output and downloaded files stay outside the repository tree, or in a
 directory that `.gitignore` excludes.
 
 `make gen` writes files from `spec/`: `rtl/gen/`, `tb/gen/`,
-`emu/plio/src/regmap.rs` and `docs/regmap.md`. These files are in git, so that a build does not need
+`emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
+`docs/regmap.md` and `docs/instructions.md`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
 fails.
 

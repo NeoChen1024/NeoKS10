@@ -103,8 +103,10 @@ the microcode where the two differ (AGENTS.md, source order):
   to `IOWRBQ` (720 to 725), and `BLTBU` and `BLTUB` (716, 717) **[its]**
   (`ksdefs.194`).
 
-The instruction set itself is the subject of `spec/instructions.*`, which
-does not exist yet.
+The instruction set is in `spec/instructions.toml`, and
+`docs/instructions.md` shows it. It holds the dispatch ROM of the ITS
+microcode for each opcode, the dispatch on the AC field, and the names
+from MIDAS and KSDEFS. `make check` compares it with the ITS sources.
 
 ### The 8080 console
 
@@ -372,8 +374,8 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
 - `DSKCA` with `SUBSM` printed its title, took the answer `0` and ran for
   60 s without a halt or an error message. The end of a pass was not seen
   in that time.
-- The title of `DSKCA` gave `MCV=416` and `MCO=570`, the microcode version
-  and options from `APRID`, as sims gives them in ITS mode.
+- The title of `DSKCA` gave `CPU#=4097`, `MCV=416` and `MCO=570`. These
+  values of `APRID` differ from the ITS microcode (`docs/discrepancies.md`).
 
 **Which programs apply.** The programs are for the DEC microcode. `DSKEA`
 and `DSKEC` test the paging of the DEC microcode, which the ITS microcode
@@ -417,8 +419,7 @@ These are in `docs/unknowns.md`:
 
 - Which DEC KS10 diagnostics apply to the ITS microcode behaviour, and how
   the diagnostic monitor loads them.
-- How the microcode takes a Unibus interrupt (`inout`), and the `APRID`
-  value of the ITS microcode.
+- How the microcode takes a Unibus interrupt (`inout`).
 - The register address of the `SSIMP` interface (`%LHVEC`, `lhdh.defs`).
 
 ## Documents and tapes

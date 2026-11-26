@@ -1,0 +1,11 @@
+[package]
+name = "pdp10"
+version = "0.1.0"
+description = "PDP-10 words and the KS10 instruction set tables from spec/instructions.toml"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

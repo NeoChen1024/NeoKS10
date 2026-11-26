@@ -19,10 +19,6 @@ tapes"). Not known yet:
 - How the microcode takes a Unibus interrupt: the request line, the PI
   level from the adapter status register, and the use of the vector
   (`src/kshack/inout`, not read yet). docs/emulator.md.
-- The value of `APRID` for the ITS microcode (`src/system/ksdefs.194` gives
-  the fields only). sims `pdp10-ks` in ITS mode gives microcode version 416
-  and options 570 (octal), from the title of `DSKCA` **[emulator]**; that is
-  not a source for the value. docs/emulator.md.
 - The register address of the `SSIMP` IMP interface (`%LHVEC`,
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
 - The instruction times of the KS10, for the virtual time of the emulator.
