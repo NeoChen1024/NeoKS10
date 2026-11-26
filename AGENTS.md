@@ -29,7 +29,8 @@ source.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
    - The software processor in `emu/` is the model for the logic in `rtl/`.
 
-The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. Do not
+The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. The
+submodule `3rdparty/PYNQ-Z2` pins the commit that this repository uses. Do not
 copy pin tables or measurements from it. Refer to it.
 
 If two sources disagree, do not select one silently. Add the case to
@@ -62,6 +63,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | `tb/` | Verilator co-simulation, mutation scripts, SymbiYosys proofs |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2 |
 | `oracle/` | Pinned commits and patch files for the reference emulators |
+| `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data |
 | `its/` | The files that PDP-10/its needs under `build/<emulator>/` |
 | `tests/` | Guest programs, saved random seeds, expected traces |
 | `docs/` | Design notes, `unknowns.md`, `discrepancies.md` |

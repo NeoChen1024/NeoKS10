@@ -1,0 +1,6 @@
+[submodule "3rdparty/its"]
+	path = 3rdparty/its
+	url = https://github.com/NeoChen1024/PDP-10_its.git
+[submodule "3rdparty/PYNQ-Z2"]
+	path = 3rdparty/PYNQ-Z2
+	url = https://github.com/NeoChen1024/PYNQ-Z2.git
