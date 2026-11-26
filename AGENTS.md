@@ -72,6 +72,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | `its/` | The files that PDP-10/its needs under `build/<emulator>/` |
 | `tests/` | Guest programs, saved random seeds, expected traces |
 | `docs/` | Design notes, `unknowns.md`, `discrepancies.md`, `regmap.md` (generated) |
+| `references/` | Third-party manuals from `third-party.lock`, made by `make references`. Git ignores it |
 | `third-party.lock` | Source URL and SHA-256 of each external file |
 
 Build output and downloaded files stay outside the repository tree, or in a

@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross
+.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -113,3 +113,26 @@ cross:
 	cd emu && CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER=$(QEMU_ARM) \
 	    $(NICE) $(CARGO) test --locked --target $(CROSS_TARGET)
 	cd emu && $(NICE) $(CARGO) build --locked --release --target $(CROSS_TARGET)
+
+# Third-party files (third-party.lock) into references/, which git ignores.
+# bitsavers.org has an rsync server; pdp-10.trailing-edge.com is read with
+# curl. The files keep their path of the site. The check fails if a file is
+# not the one of the lock file.
+TRAILING_EDGE = https://pdp-10.trailing-edge.com/
+references:
+	@mkdir -p references
+	@grep -v '^#' third-party.lock | sed -n 's|^[0-9a-f]*  https://bitsavers.org/||p' \
+	    > references/.bitsavers-files
+	rsync -a --files-from=references/.bitsavers-files rsync://bitsavers.org/bitsavers/ \
+	    references/bitsavers/
+	@for p in $$(grep -v '^#' third-party.lock | sed -n 's|^[0-9a-f]*  $(TRAILING_EDGE)||p'); do \
+	    f=references/trailing-edge/$$p; \
+	    test -f $$f && continue; \
+	    mkdir -p $$(dirname $$f) && echo "curl $$p" \
+	        && curl -s -f -A "Mozilla/5.0" -o $$f $(TRAILING_EDGE)$$p || exit 1; \
+	done
+	@grep -v '^#' third-party.lock \
+	    | sed -e 's|https://bitsavers.org/|references/bitsavers/|' \
+	          -e 's|$(TRAILING_EDGE)|references/trailing-edge/|' \
+	    | sha256sum --quiet -c -
+	@echo "references: all files match third-party.lock"

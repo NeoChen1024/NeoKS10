@@ -321,8 +321,10 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
 
 - Each instruction: differential runs against the instruction records of
   the reference emulator, with a trace patch in `oracle/` (AGENTS.md).
-- The DEC KS10 diagnostics (`make diag`). Their location is an open item
-  (`docs/unknowns.md`).
+- The DEC KS10 diagnostics (`make diag`), from the tapes in
+  [Documents and tapes](#documents-and-tapes). They are for the DEC
+  microcode. Which of them apply to the ITS microcode behaviour is an open
+  item.
 - `make its-boot`: boot the step 0 disk image with a replay file of
   console input, to the ITS prompt.
 - `make its-build`: build ITS from source with the scripts of `its/`.
@@ -361,21 +363,57 @@ Open:
 
 These are in `docs/unknowns.md`:
 
-- The location of the DEC KS10 diagnostics.
+- Which DEC KS10 diagnostics apply to the ITS microcode behaviour, and how
+  the diagnostic monitor loads them.
 - How the microcode takes a Unibus interrupt (`inout`), and the `APRID`
   value of the ITS microcode.
 - The register address of the `SSIMP` interface (`%LHVEC`, `lhdh.defs`).
 
-## Documents to find
+## Documents and tapes
 
-The next step searches bitsavers.org for these documents. The titles are
-names to search for, not checked references:
+`third-party.lock` lists the files from bitsavers.org and
+pdp-10.trailing-edge.com, and `make references` copies them into
+`references/`. On 2026-11-26 the list has these documents:
 
-- The KS10 technical manual and the KS10 schematics (README.md, Sources).
-- The DECsystem-10/DECSYSTEM-20 Processor Reference Manual (README.md,
-  Sources).
-- The RH11 Massbus controller manual.
-- The RP04/RP05/RP06 disk drive manual.
-- The TM03 formatter and TU45 tape drive manuals.
-- The DZ11 asynchronous multiplexer user guide.
-- The DEC KS10 diagnostics and their documents (DSKxx programs).
+- The KS10 technical manual (EK-0KS10-TM-001 and EK-OKS10-TM-002), the KS10
+  reference (`ksrefRev2.pdf`, `ksrefRev4.txt`), and the KS10 maintenance
+  guide, volumes 1 and 2.
+- The 8080 console program, version 5.2 (`KS10_CSL_V5.2.zip`).
+- The DECsystem-10/DECSYSTEM-20 Processor Reference Manual (1982).
+- The RH11 option description.
+- The DZ11 user's guide and technical manual.
+- The RP04/RP05/RP06 maintenance manual (EK-RP056-MM-01).
+- The TM03 user's guide and technical manual, and the TU45 maintenance
+  manual.
+
+The KS10 schematics and the KS10 microcode listings are on bitsavers too
+(`pdf/dec/pdp10/KS10/`), but not in the list.
+
+The tapes (TOPS-10 BACKUP format; `t10backup` of `tools/tapeutils` in the
+ITS tree lists and extracts them):
+
+- `KLAD_Sources.tap` (bitsavers, `dec_distribs/klad/`): the sources and the
+  `.SAV` files of the diagnostics for the KL10 and the KS10. The KS10
+  programs are `DSKAA` to `DSKFA`; their `.TXT` files name them
+  "DECSYSTEM 2020" or "KS10" diagnostics (2026-11-26, a list of the tape):
+  - `DSKAA` to `DSKAM`: basic instruction diagnostics 1 to 13;
+  - `DSKBA`: basic instruction reliability;
+  - `DSKCA` to `DSKCG`: advanced instruction diagnostics 1 to 7;
+  - `DSKDA`: processor and memory reliability;
+  - `DSKEA`: paging (DEC); `DSKEB`: cache; `DSKEC`: KL paging;
+  - `DSKFA`: instruction timing.
+  The tape also has the diagnostic monitor `SMMON`, `SMDDT`, `SUBRTN` and
+  the KS10 parameter files (`PARAM.KSM`, `FIXED.KSM`, `STOR.KSM`).
+- `ks_diag_gs.tap.bz2` (trailing-edge, "KS Diagnostics GS"): the `.SAV`
+  files of the same programs, and the device diagnostics, for example
+  `DSDZA` (DZ11), `DSRPA`, `DSRHA`, `DSTUA`, `DSUBA` and `DSMMA` to `DSMMD`.
+  It also has `SMMON`, `SMTAPE` and the command files `SMCPU.CMD` and
+  `SMFLT.CMD`.
+- `BB-JF16A-SB_1986.tap.gz` (bitsavers, `dec_distribs/microcode/`): the KS10
+  microcode version 2.0(130) of DEC, sources.
+- `ks10_8080_microcode.tap.bz2` (trailing-edge, "KS-10 8080 Microcode
+  V5.2"): the 8080 console program, with the listing `KNS10.PNT`.
+
+A related project is KS10FPGA (github.com/KS10FPGA/KS10FPGA), a KS10 with
+the DEC microcode in an FPGA. Its repository has no license file
+(2026-11-26), so this project can read it as a reference but not copy it.

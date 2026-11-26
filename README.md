@@ -103,8 +103,8 @@ Manuals, diagnostics, system images and the output of vendor tools are not
 in this repository. `third-party.lock` gives the source and the SHA-256 of
 each such file.
 
-The location of the DEC KS10 diagnostics is an open item in
-[`docs/unknowns.md`](docs/unknowns.md).
+The DEC KS10 diagnostics are on two tapes of `third-party.lock`
+([`docs/emulator.md`](docs/emulator.md), section "Documents and tapes").
 
 ## Related projects
 

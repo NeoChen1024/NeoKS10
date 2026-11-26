@@ -5,8 +5,14 @@ move the value to its place and remove the item here.
 
 ## DEC KS10 diagnostics
 
-The location of the DEC KS10 diagnostics is not known (README.md,
-"Sources").
+The diagnostics are on two tapes (docs/emulator.md, "Documents and
+tapes"). Not known yet:
+
+- Which of them apply to the ITS microcode behaviour. They are for the DEC
+  microcode. `DSKEA` and `DSKEC` test DEC paging, which the ITS microcode
+  does not have.
+- How the diagnostic monitor `SMMON` loads and runs them on a KS10 without
+  TOPS-10, and what the 8080 does for it.
 
 ## KS10 processor and devices
 

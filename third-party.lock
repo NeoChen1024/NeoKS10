@@ -1,0 +1,22 @@
+# Third-party files that stay out of git (AGENTS.md, "Third-party material").
+# Each line: SHA-256 and the source URL. `make references` copies the files
+# into references/<site>/<path> (bitsavers, trailing-edge) and checks them.
+6d8a400520ad2917971f9d792f698b564f587903ec2b53f83e49edb24bbbd834  https://bitsavers.org/pdf/dec/disc/rp04_rp05_rp06/EK-RP056-MM-01_maint_Dec75.pdf
+3b0e3150a48d489b0909699d9b081c5970526662596b58f09cc2abc8333b0663  https://bitsavers.org/pdf/dec/magtape/tm03/TM03_TechnicalManual_Jul79.pdf
+dbdb8a0d841b4836717acefc1d1ca948d2c2345377cfa018830ee1af50d8a406  https://bitsavers.org/pdf/dec/magtape/tm03/TM03_UsersGuide.pdf
+d7201eac004c002dddb4d6ec220516b317aac4038d550ffff9d69377d52394db  https://bitsavers.org/pdf/dec/magtape/tu45/ER-00016_TU-45_Maint_May78.pdf
+b6fa866f1a5e8f1962ce6080659330c0f830583bb433484e66269a8f930757c7  https://bitsavers.org/pdf/dec/pdp10/1982_ProcRefMan.pdf
+0bcdad9e9e12779024b639123d60621a6fa4d16c0787313ebb9cbe714b8d8c7f  https://bitsavers.org/pdf/dec/pdp10/KS10/EK-0KS10-TM-001_KS10_Tech_Oct78.pdf
+eeb93f0ad8cea31c5c8a2a87960ebf3b6fdfd8d8cfe6bc4cf00202b50862088a  https://bitsavers.org/pdf/dec/pdp10/KS10/EK-OKS10-MG-001_KS10_Maintenance_Guide_Volume_1_Jun79.pdf
+1550e75c9dfd3c2c11ae87d0418cccf831c487016014ae1a2cf24f50c0d90a61  https://bitsavers.org/pdf/dec/pdp10/KS10/EK-OKS10-MG-001_KS10_Maintenance_Guide_Volume_2_Jan80.pdf
+dca9d8e46a8fc35f1668a13ccd85a5df07f8b9e2c79592e212f3a44ce65b5544  https://bitsavers.org/pdf/dec/pdp10/KS10/EK-OKS10-TM-002_tech_Sep79.pdf
+bd36a852728ac51bed0ae47a5fbce7edd8f3df9c5a6ae0249195edfe83128330  https://bitsavers.org/pdf/dec/pdp10/KS10/firmware/KS10_CSL_V5.2.zip
+e2c4869f37c674ed4cbc0ac4554312023c9e4d682d1c0d63cb1ea0b3b64ebe2c  https://bitsavers.org/pdf/dec/pdp10/KS10/ksrefRev2.pdf
+47b5a7aee6769e7d79a57df6befdc5a78822a5c590b7f980719c143d7f9cf832  https://bitsavers.org/pdf/dec/pdp10/KS10/ksrefRev4.txt
+0e0157aaa63b7ccb81138723ec61997e6135433205d7fd0df7e1b08ef4b4a2ee  https://bitsavers.org/pdf/dec/unibus/DZ11/EK-DZ110-TM-002_DZ11_Asynchronous_Multiplexer_Technical_Manual_Oct78.pdf
+8410ae7abd09c030de1f3d9460642f00eb5d76f5aab776e333a4398dbb951fde  https://bitsavers.org/pdf/dec/unibus/DZ11/EK-DZ110-UG-002_DZ11_Users_Guide_Feb79.pdf
+f2cfb14b0b20e4d18bb2a26917f5ae5354c7df6a8544708f6f4931f02200ad4a  https://bitsavers.org/pdf/dec/unibus/RH11/RH11-AB_OptionDescr.pdf
+38296f2eda69ee06127a005ba84314936249613400cdc50437c04dc58272f055  https://bitsavers.org/bits/DEC/pdp10/magtape/dec_distribs/klad/KLAD_Sources.tap
+3f9bc6f608068a8ed9957ae8054cbd57d52c7b8c7c6daa0fba17fc2d6902a74c  https://bitsavers.org/bits/DEC/pdp10/magtape/dec_distribs/microcode/BB-JF16A-SB_1986.tap.gz
+31765474af2acd92a1884baf4ab0dd8089a07f7d6f67bbdb12f43da1afd9abcf  https://pdp-10.trailing-edge.com/tapes/ks_diag_gs.tap.bz2
+ca7b1ad5b512465ecb2cb5b0c134dd6698926f58d9262ed47ddef3d282d2be66  https://pdp-10.trailing-edge.com/tapes/ks10_8080_microcode.tap.bz2

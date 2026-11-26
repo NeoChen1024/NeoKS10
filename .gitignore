@@ -1,3 +1,4 @@
 /emu/target/
 /build/
+/references/
 __pycache__/
