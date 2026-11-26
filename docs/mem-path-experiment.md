@@ -165,9 +165,13 @@ Each step on the board needs the permission of the owner in that session.
    clocks and the reserved region.
 5. Run `memprobe consistency --words 10000000` (a short B9). Continue only
    if it gives 0 mismatches.
-6. Run `memprobe latency read` and `memprobe latency write` (B1, B2), and
+6. Run all 64-bit measurements before the first 32-bit run (`--width 32`).
+   After a 32-bit run, the program refuses 64-bit runs on its channels.
+   Reset the PS before a 64-bit run or another design uses these ports
+   (results of M2c).
+7. Run `memprobe latency read` and `memprobe latency write` (B1, B2), and
    with `--beats 2`, 4, 8 and 16 (B3).
-7. Put the output into `docs/data/` and the results section of this file.
+8. Put the output into `docs/data/` and the results section of this file.
 
 
 | Number | Measurement | Variations |
@@ -485,7 +489,10 @@ write, GAP 0):
 
 **[measured]** 2026-11-26. Design `rtl/memprobe` at commit a4249ad7
 (`BUILD` register), 100 MHz, the first 4 MiB, Linux 6.18.64-pynq-z2, PS
-idle. 32-bit beats use the 32-bit mode of the AFI. Data:
+idle. 32-bit beats use the 32-bit mode of the AFI. The PS program was
+the one of commit e3a4686; in the same boot, before these runs, a write of
+devmem2 had set `32BitEn` of the HP0 write channel to 1 and back to 0
+without traffic. Data:
 `docs/data/mem-path-m2c-latency-100mhz.csv`,
 `docs/data/mem-path-m2c-rate-100mhz.csv` and
 `docs/data/mem-path-m2c-order-100mhz.csv`.
@@ -559,11 +566,10 @@ row, writes on HP0:
 - The reverse runs: about 91 % of the reads that went before the write gave
   the new value. With 64-bit beats, it was 16 % on one port and 83 % on two
   ports.
-- The rows of HP0 and HP2 are equal in each column. The 1-beat reads are
-  expanded and blocked, which can make the timing repeat closely. These
-  runs do not show by themselves that the reads used HP2. The port setting
-  is the same logic as in M2b, where the results of the two ports were
-  different.
+- The rows of HP0 and HP2 are equal in each column. The reads used HP2:
+  during a 32-bit read run with `--rd-port 2` and 16 in progress, devmem2
+  read `AFI_RDDEBUG.OutRdCmds` 1 on HP2 and 0 on HP0. It also showed only
+  one read command in flight, as the blocking of expanded reads gives.
 
 The test design is a probe: its checks and measurements use 100 MHz. The
 M1 results give B7 at 50 MHz and 150 MHz. Builds at those clocks are

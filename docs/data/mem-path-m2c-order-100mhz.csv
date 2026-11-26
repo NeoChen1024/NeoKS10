@@ -4,6 +4,8 @@
 # The width column gives the bits of a beat: 32 is the 32-bit mode of the AFI (MODE.SIZE B4,
 # 32BitEn of the channels of the run 1). All 64-bit rows ran before the first 32-bit row,
 # in the same boot (docs/unknowns.md, AFI). Latencies in clk_m cycles (10 ns).
+# PS program of commit e3a4686. Before these runs, in the same boot, devmem2 had set 32BitEn of
+# the HP0 write channel to 1 and back to 0 without traffic.
 # Method: emu/memprobe "order --width 32 --count 100000 --pattern random --rd-port R --wr-port 0
 # --gap G [--reverse 1]".
 
