@@ -280,6 +280,40 @@ each direction) gave 0 mismatches at each clock. Data:
   change of the design can make it fail.
 - The 32-bit width of B7 needs the next version of the design.
 
-Not done yet: B4 to B6 (they need more than one transaction in progress,
-mixed operations, HP1 and the order test: the next version of the design),
-and B8 (the PS program does not have it yet).
+### B8: access of the PS to the region
+
+**[measured]** 2026-11-26, Linux 6.18.64-pynq-z2. The region is mapped
+through `/dev/mem` with `O_SYNC`; the PL was idle. Method: `memprobe
+ps-access --threads N --passes 8`, and `memprobe pread --file /dev/mmcblk0
+--chunk N --threads N`. Each thread has its own part of the first 4 MiB.
+Data: `docs/data/mem-path-b8.csv`.
+
+| Access | 1 thread | 2 threads |
+|---|---|---|
+| 32-bit read | 132.9 ns, 28.7 MiB/s | 135.6 ns, 56.3 MiB/s |
+| 64-bit read | 132.6 ns, 57.5 MiB/s | 140.8 ns, 108.4 MiB/s |
+| 32-bit write | 26.5 ns, 144.0 MiB/s | 26.5 ns, 287.6 MiB/s |
+| 64-bit write | 28.3 ns, 269.5 MiB/s | 28.4 ns, 538.2 MiB/s |
+| `pread` 1 KiB, page cache | 5.5 us, 176.6 MiB/s | 6.3 us, 312.0 MiB/s |
+| `pread` 64 KiB, page cache | 146 us, 427.2 MiB/s | 232 us, 537.8 MiB/s |
+| `pread` 1 KiB, SD card | 45 us, 21.7 MiB/s | not measured |
+| `pread` 64 KiB, SD card | 2.9 ms, 21.7 MiB/s | not measured |
+
+The times are for one access or one `pread` of one thread; the rates are
+for all threads together.
+
+- A read of one word takes about 133 ns, for 32 bits and for 64 bits. The
+  time of a guest word read by the PS is thus that of one 64-bit read. Two
+  threads nearly double the rate.
+- A write takes about 27 ns: the CPU does not wait for the memory.
+- A `pread` of data in the page cache gives 177 MiB/s with 1 KiB blocks
+  (one PDP-10 disk sector of 128 words at 8 bytes) and 427 MiB/s with
+  64 KiB blocks.
+- From the SD card, `pread` gives 21.7 MiB/s for both block sizes. This is
+  near the read rate of the card in `docs/sd-card.md` of the board
+  repository: the card limits it, not the copy into the region.
+- The data of a `pread` into the region was checked at four offsets of the
+  partition table of the card, with `devmem2`: equal.
+
+Not done yet: B4 to B6. They need more than one transaction in progress,
+mixed operations, HP1 and the order test: the next version of the design.

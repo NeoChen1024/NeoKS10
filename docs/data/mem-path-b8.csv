@@ -1,0 +1,22 @@
+# Memory path, Part B, B8 (docs/mem-path-experiment.md): access of the PS to the reserved region.
+# [measured] 2026-11-26 on the PYNQ-Z2, Linux 6.18.64-pynq-z2. The region is mapped through /dev/mem with
+# O_SYNC (no CPU cache). The PL was idle. Each thread has its own part of the first 4 MiB.
+# Method: emu/memprobe "ps-access --threads N --passes 8" (volatile 32-bit and 64-bit loops), and
+# "pread --file /dev/mmcblk0 --chunk N --threads N": warm = the second of two runs of 128 MiB over the
+# same file range (in the page cache); cold = "--drop-caches 1", 64 MiB (read from the SD card).
+# mib_per_s is for all threads together; ns_per_op is the time of one access or one pread of one thread.
+kind,test,threads,unit_bytes,bytes,seconds,mib_per_s,ns_per_op,page_cache
+word,read32,1,4,33554432,1.114574,28.7,132.9,
+word,write32,1,4,33554432,0.222184,144.0,26.5,
+word,read64,1,8,33554432,0.556045,57.5,132.6,
+word,write64,1,8,33554432,0.118748,269.5,28.3,
+word,read32,2,4,33554432,0.568756,56.3,135.6,
+word,write32,2,4,33554432,0.111276,287.6,26.5,
+word,read64,2,8,33554432,0.295215,108.4,140.8,
+word,write64,2,8,33554432,0.059460,538.2,28.4,
+pread,pread,1,1024,134217728,0.724737,176.6,5529.3,warm
+pread,pread,2,1024,134217728,0.410291,312.0,6260.5,warm
+pread,pread,1,65536,134217728,0.299643,427.2,146310.1,warm
+pread,pread,2,65536,134217728,0.237994,537.8,232416.2,warm
+pread,pread,1,1024,67108864,2.950557,21.7,45021.9,cold
+pread,pread,1,65536,67108864,2.953170,21.7,2883954.9,cold
