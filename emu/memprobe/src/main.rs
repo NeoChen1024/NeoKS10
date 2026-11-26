@@ -3,7 +3,7 @@
 //! a memprobe bitstream in the PL.
 //!
 //!   memprobe info
-//!   memprobe latency read|write [--beats N] [--count N] [--gap N]
+//!   memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
 //!   memprobe consistency [--words N] [--seed N]
 //!   memprobe run read|write|fill|check [--beats N] [--count N] [--gap N]
 //!                [--base N] [--span-log2 N] [--seed N]
@@ -20,6 +20,7 @@ use plio::board::Region;
 use plio::regmap::memprobe as mp;
 
 mod device;
+mod load;
 mod measure;
 mod pattern;
 mod stats;
@@ -28,7 +29,7 @@ use device::{Error, Memprobe, Op, RunConfig};
 
 const USAGE: &str = "usage:
   memprobe info
-  memprobe latency read|write [--beats N] [--count N] [--gap N]
+  memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
   memprobe consistency [--words N] [--seed N]
   memprobe run read|write|fill|check [--beats N] [--count N] [--gap N] [--base N] [--span-log2 N] [--seed N]";
 
@@ -123,20 +124,32 @@ fn run_command(args: &[String]) -> Result<(), String> {
                 Some("write") => Op::Write,
                 _ => return Err("latency needs read or write".into()),
             };
-            let o = parse_options(&args[2..], &["beats", "count", "gap"])?;
+            let o = parse_options(&args[2..], &["beats", "count", "gap", "load-threads"])?;
             let dev = Memprobe::open().map_err(e)?;
             let mut out = io::stdout().lock();
             header(&dev, &mut out).map_err(|e| e.to_string())?;
             writeln!(out, "{}", measure::LATENCY_HEADER).map_err(|e| e.to_string())?;
-            measure::latency(
+            let threads = opt_u32(&o, "load-threads", 0)?;
+            let load = load::Load::start(threads);
+            // Let the load reach its rate before the run.
+            std::thread::sleep(Duration::from_millis(if threads > 0 { 200 } else { 0 }));
+            let result = measure::latency(
                 &dev,
                 op,
                 opt_u32(&o, "beats", 1)?,
                 opt_u32(&o, "count", 10_000)?,
                 opt_u32(&o, "gap", 0)?,
                 &mut out,
-            )
-            .map_err(e)
+            );
+            let rate = load.stop();
+            if threads > 0 {
+                writeln!(
+                    out,
+                    "# PS memory load: {threads} threads, {rate:.0} MiB/s copied"
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            result.map_err(e)
         }
         "consistency" => {
             let o = parse_options(&args[1..], &["words", "seed"])?;
