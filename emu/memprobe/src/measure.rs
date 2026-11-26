@@ -184,6 +184,8 @@ pub fn rate(dev: &Memprobe, cfg: &RunConfig, out: &mut impl Write) -> Result<Res
     if cfg.verify {
         let fill = RunConfig {
             base: cfg.base,
+            // The width of the run: a 64-bit fill after 32-bit runs is refused.
+            width32: cfg.width32,
             ..RunConfig::simple(Op::Fill, 16, cfg.span_log2, 0, 0, cfg.seed)
         };
         dev.clear()?;

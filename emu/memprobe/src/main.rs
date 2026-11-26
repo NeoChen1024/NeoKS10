@@ -12,7 +12,6 @@
 //!                  --outstanding N --pattern seq|random|fixed
 //!                  --read-percent P | --read-share N --verify 0|1
 //!                  --rd-port 0..3 --wr-port 0..3
-//!   memprobe afi-clear      (32BitEn of all HP ports to 0: 64-bit data)
 //!   memprobe ps-access [--threads N] [--passes N]
 //!   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]
 //!
@@ -46,7 +45,6 @@ const USAGE: &str = "usage:
     RUN OPTIONS: --beats N --width 32|64 --count N --gap N --base N --span-log2 N --seed N
                  --outstanding N --pattern seq|random|fixed --read-percent P | --read-share N --verify 0|1
                  --rd-port 0..3 --wr-port 0..3
-  memprobe afi-clear
   memprobe ps-access [--threads N] [--passes N]
   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]";
 
@@ -234,7 +232,8 @@ fn info(dev: &Memprobe) -> Result<(), Error> {
             region.len()
         ),
     )?;
-    // 1: 32-bit data. A run sets the bits that it needs and restores them.
+    // 1: 32-bit data. A 32-bit run sets the bits of its channels; only a
+    // reset of the PS clears them (plio::afi::plan).
     let afi = dev
         .afi_state()?
         .iter()
@@ -253,10 +252,6 @@ fn run_command(args: &[String]) -> Result<(), String> {
         "info" => {
             parse_options(&args[1..], &[])?;
             info(&Memprobe::open().map_err(e)?).map_err(e)
-        }
-        "afi-clear" => {
-            parse_options(&args[1..], &[])?;
-            Memprobe::open().map_err(e)?.afi_clear().map_err(e)
         }
         "latency" => {
             let op = match args.get(1).map(String::as_str) {

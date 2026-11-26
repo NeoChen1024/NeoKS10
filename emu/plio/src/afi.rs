@@ -12,7 +12,8 @@
 //!
 //! The registers are in the PS: a new bitstream does not change them. A
 //! design with 32-bit data sets them itself (board interface, rule 6), and
-//! only while its HP ports have no transaction.
+//! only while its HP ports have no transaction. This module never sets them
+//! back to 0 (see [`plan`]).
 
 use std::io;
 
@@ -113,41 +114,50 @@ impl Afi {
         Ok(v & EN_32BIT != 0)
     }
 
-    /// Set the read channel of `rd_port` and the write channel of `wr_port`
-    /// to 32-bit (`on`) or 64-bit data. The guard sets the earlier values
-    /// again when it is dropped. Call it only while the design makes no
-    /// transaction, and drop the guard only after the end of the run.
-    pub fn set_width(
-        &self,
-        rd_port: usize,
-        wr_port: usize,
-        on: bool,
-    ) -> io::Result<WidthGuard<'_>> {
-        let mut g = WidthGuard {
-            afi: self,
-            saved: Vec::with_capacity(2),
-        };
+    /// Prepare the read channel of `rd_port` and the write channel of
+    /// `wr_port` for a run with 32-bit data (`on`) or 64-bit data; see
+    /// [`plan`]. Call it only while the design makes no transaction.
+    pub fn prepare(&self, rd_port: usize, wr_port: usize, on: bool) -> io::Result<()> {
         for (port, ch) in [(rd_port, Channel::Read), (wr_port, Channel::Write)] {
-            let before = self.set_32bit(port, ch, on)?;
-            g.saved.push((port, ch, before));
+            match plan(self.is_32bit(port, ch)?, on) {
+                Action::Keep => {}
+                Action::Set32 => {
+                    self.set_32bit(port, ch, true)?;
+                }
+                Action::Refuse => {
+                    return Err(io::Error::other(format!(
+                        "32BitEn of HP{port}, {ch:?} channel, is 1, and the run has 64-bit data: \
+                         reset the PS first (after 32-bit writes, 64-bit writes on the port \
+                         stopped the PS)"
+                    )));
+                }
+            }
         }
-        Ok(g)
+        Ok(())
     }
 }
 
-/// The earlier values of `32BitEn`; see [`Afi::set_width`].
-pub struct WidthGuard<'a> {
-    afi: &'a Afi,
-    saved: Vec<(usize, Channel, bool)>,
+/// What [`Afi::prepare`] does with one channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Keep,
+    Set32,
+    Refuse,
 }
 
-impl Drop for WidthGuard<'_> {
-    fn drop(&mut self) {
-        for &(port, ch, v) in self.saved.iter().rev() {
-            if let Err(e) = self.afi.set_32bit(port, ch, v) {
-                eprintln!("warning: restore of the AFI width failed: {e}");
-            }
-        }
+/// The rule for `32BitEn` (`now`) before a run with 32-bit data (`want32`):
+/// a channel goes from 64-bit to 32-bit data, never back. On 2026-11-26,
+/// after a run with 32-bit writes on HP0 and a write of 0 to `32BitEn`, the
+/// next run with 64-bit writes on HP0 stopped after a few writes: one write
+/// command stayed in the AFI (`AFI_WRDEBUG.OutWrCmds` 1), and the PS stopped
+/// until a reset. A change of the bit without traffic had no effect
+/// **[measured]** (docs/mem-path-experiment.md, M2c). Thus a 64-bit run
+/// needs `32BitEn` 0, and only a reset of the PS sets it to 0 again.
+pub fn plan(now: bool, want32: bool) -> Action {
+    match (now, want32) {
+        (false, false) | (true, true) => Action::Keep,
+        (false, true) => Action::Set32,
+        (true, false) => Action::Refuse,
     }
 }
 
@@ -167,6 +177,14 @@ mod tests {
         assert_eq!(abs(2, Channel::Write), 0xF800_A014);
         assert_eq!(ctrl_offset(4, Channel::Read), None);
         assert!(ctrl_offset(3, Channel::Write).unwrap() + 4 <= PORTS * STRIDE);
+    }
+
+    #[test]
+    fn never_back_to_64() {
+        assert_eq!(plan(false, false), Action::Keep);
+        assert_eq!(plan(false, true), Action::Set32);
+        assert_eq!(plan(true, true), Action::Keep);
+        assert_eq!(plan(true, false), Action::Refuse);
     }
 
     #[test]

@@ -349,7 +349,7 @@ impl Memprobe {
             }
             if t0.elapsed() > timeout {
                 // Wait for the end of the transactions after ABORT, so that
-                // the caller can change the AFI after the error.
+                // no transaction is in progress after the error.
                 self.wr(mp::CTRL, mp::ctrl::ABORT.mask());
                 let t1 = Instant::now();
                 while mp::status::BUSY.get(self.status()) != 0 {
@@ -410,38 +410,21 @@ impl Memprobe {
             .map_err(|e| Error::Board(BoardError::Io("read of the AFI".into(), e)))
     }
 
-    /// Set the AFI of all ports to 64-bit data. Only while no run is in
-    /// progress.
-    pub fn afi_clear(&self) -> Result<(), Error> {
-        if mp::status::BUSY.get(self.status()) != 0 {
-            return Err(Error::Device("a run is in progress".into()));
-        }
-        for port in 0..plio::afi::PORTS {
-            for ch in [plio::afi::Channel::Read, plio::afi::Channel::Write] {
-                self.afi
-                    .set_32bit(port, ch, false)
-                    .map_err(|e| Error::Board(BoardError::Io("write of the AFI".into(), e)))?;
-            }
-        }
-        Ok(())
-    }
-
     /// One run. The caller makes a barrier after its own writes to the
     /// region (plio::mmio::barrier), before this call.
     ///
-    /// The AFI of RD_PORT (read channel) and WR_PORT (write channel) gets the
-    /// width of MODE.SIZE before START, for 32-bit and for 64-bit runs: an
-    /// earlier program that stopped can have left 32BitEn set. After the run,
-    /// the earlier values come back.
+    /// Before START, the AFI of RD_PORT (read channel) and WR_PORT (write
+    /// channel) gets 32-bit data for a 32-bit run. A 64-bit run needs
+    /// 32BitEn 0 on these channels, else it is refused: only a reset of the
+    /// PS sets the bits to 0 again (plio::afi::plan).
     pub fn run(&self, cfg: &RunConfig, timeout: Duration) -> Result<RunStatus, Error> {
         let mode = cfg.mode()?;
         self.supports(cfg)?;
         if mp::status::BUSY.get(self.status()) != 0 {
             return Err(Error::Device("a run is in progress".into()));
         }
-        let _width = self
-            .afi
-            .set_width(cfg.rd_port as usize, cfg.wr_port as usize, cfg.width32)
+        self.afi
+            .prepare(cfg.rd_port as usize, cfg.wr_port as usize, cfg.width32)
             .map_err(|e| Error::Board(BoardError::Io("AFI width".into(), e)))?;
         self.wr(mp::MODE, mode);
         self.wr(mp::BASE, cfg.base);

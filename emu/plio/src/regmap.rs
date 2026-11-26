@@ -442,7 +442,7 @@ pub mod memprobe {
             width: 4,
         };
 
-        /// Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of the AFI (UG585 v1.7, section 5.3.6): the data is in bits 31:0, WSTRB is 0x0F, bits 63:32 of WDATA are 0, and bits 63:32 of RDATA are not used. Before a run with B4, the PS sets 32BitEn in AFI_RDCHAN_CTRL of RD_PORT and in AFI_WRCHAN_CTRL of WR_PORT; before a run with B8, it clears them. The design does not make narrow transfers on the 64-bit port. AxCACHE is 0b0011: the AFI upsizes 32-bit bursts of an even number of beats and expands 1-beat bursts (UG585 v1.7, Table 5-8). Access: rw.
+        /// Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of the AFI (UG585 v1.7, section 5.3.6): the data is in bits 31:0, WSTRB is 0x0F, bits 63:32 of WDATA are 0, and bits 63:32 of RDATA are not used. Before a run with B4, the PS sets 32BitEn in AFI_RDCHAN_CTRL of RD_PORT and in AFI_WRCHAN_CTRL of WR_PORT. A run with B8 needs these bits at 0. After 32-bit writes, a change back to 64-bit data stopped the PS at the next 64-bit writes (docs/mem-path-experiment.md, M2c); thus only a reset of the PS sets the bits to 0 again. The design does not make narrow transfers on the 64-bit port. AxCACHE is 0b0011: the AFI upsizes 32-bit bursts of an even number of beats and expands 1-beat bursts (UG585 v1.7, Table 5-8). Access: rw.
         pub const SIZE: Field = Field {
             lsb: 12,
             width: 2,
