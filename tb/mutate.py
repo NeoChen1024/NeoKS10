@@ -8,8 +8,9 @@ fails. A mutant that does not compile is not counted.
 
 Usage: mutate.py --module NAME [--count N] [--seed S] [--jobs J]
   NAME is a file rtl/memprobe/NAME.sv. The tests are the testbenches of
-  tb/memprobe (tb_hist for memprobe_hist, then tb_core; seeds 1 to 3) and
-  the proof task of tb/memprobe/NAME.sby if it exists.
+  tb/memprobe (tb_hist with 4 and 1 banks for the histogram modules, then
+  tb_core; seeds 1 to 3) and
+  the task "prove_region" (else "prove") of tb/memprobe/NAME.sby if it exists.
 
 Exit status: 0 if at least one mutant is killed, 1 if none, 2 on an error.
 A surviving mutant needs a look: it is a gap in the tests, or a change that
@@ -48,7 +49,8 @@ OPERATORS = [
 ]
 
 TB_RTL = ["rtl/gen/regmap_pkg.sv"] + [f"rtl/memprobe/memprobe_{m}.sv"
-                                      for m in ("sync", "pattern", "gen", "hist", "regs", "core")]
+                                      for m in ("sync", "pattern", "gen", "hist_bank", "hist", "regs", "core")]
+HIST_RTL = ["rtl/memprobe/memprobe_hist_bank.sv", "rtl/memprobe/memprobe_hist.sv"]
 COSIM_SEEDS = (1, 2, 3)
 
 
@@ -105,18 +107,20 @@ def test_mutant(module, text, sby, workdir):
             shutil.copy(f, tree / "tb/memprobe" / f.name)
         shutil.copy(ROOT / f"tb/memprobe/{sby.stem}_formal.sv", tree / "tb/memprobe")
 
-    if module == "memprobe_hist":
-        rc, out = run(["nice", "-n", "19", "verilator", "--cc", "--exe", "--build", "-j", "2",
-                       "-Wno-fatal", "--top-module", "memprobe_hist", "-Mdir", "obj_hist",
-                       "-o", "../tb_hist", "-CFLAGS", "-O1", "-CFLAGS", "-std=c++17",
-                       "rtl/memprobe/memprobe_hist.sv", "tb/memprobe/tb_hist.cpp"], tree, 600)
-        if rc != 0:
-            return "invalid: does not compile"
-        for s in COSIM_SEEDS:
-            rc, out = run(["./tb_hist", "--seed", str(s)], tree, 120)
+    if module in ("memprobe_hist", "memprobe_hist_bank"):
+        for banks_log2, banks in ((2, 4), (0, 1)):
+            rc, out = run(["nice", "-n", "19", "verilator", "--cc", "--exe", "--build", "-j", "2",
+                           "-Wno-fatal", "--top-module", "memprobe_hist", f"-GBANKS_LOG2={banks_log2}",
+                           "-Mdir", f"obj_hist{banks}", "-o", f"../tb_hist{banks}", "-CFLAGS", "-O1",
+                           "-CFLAGS", "-std=c++17"] + HIST_RTL + ["tb/memprobe/tb_hist.cpp"], tree, 600)
             if rc != 0:
-                first = next((l for l in out.splitlines() if l.startswith("FAIL")), out[-200:])
-                return f"killed: tb_hist seed {s}: {first.strip()}" if rc is not None else "killed: tb_hist timeout"
+                return "invalid: does not compile"
+            for s in COSIM_SEEDS:
+                rc, out = run([f"./tb_hist{banks}", "--banks", str(banks), "--seed", str(s)], tree, 120)
+                if rc != 0:
+                    first = next((l for l in out.splitlines() if l.startswith("FAIL")), out[-200:])
+                    return (f"killed: tb_hist {banks} banks seed {s}: {first.strip()}" if rc is not None
+                            else "killed: tb_hist timeout")
 
     rc, out = run(["nice", "-n", "19", "verilator", "--cc", "--exe", "--build", "-j", "2",
                    "-Wno-fatal", "--top-module", "memprobe_core", "-GBUILD=32'h5EED0001",
@@ -131,7 +135,9 @@ def test_mutant(module, text, sby, workdir):
             first = next((l for l in out.splitlines() if l.startswith(("FAIL", "FATAL"))), out[-200:])
             return f"killed: cosim seed {s}: {first.strip()}" if rc is not None else "killed: cosim timeout"
     if sby:
-        rc, out = run(["nice", "-n", "19", "sby", "-f", "-d", "formal", f"{sby.stem}.sby", "prove"],
+        # A task that ends in seconds: "prove_region" if the file has one, else "prove".
+        task = "prove_region" if "\nprove_region\n" in sby.read_text() else "prove"
+        rc, out = run(["nice", "-n", "19", "sby", "-f", "-d", "formal", f"{sby.stem}.sby", task],
                       tree / "tb/memprobe", 600)
         if rc is None:
             return "survived (formal timeout)"

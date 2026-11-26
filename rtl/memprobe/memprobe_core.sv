@@ -59,26 +59,33 @@ module memprobe_core #(
     input  logic        mmcm_locked,   // asynchronous
     output logic [31:0] hp_araddr,
     output logic [3:0]  hp_arlen,
+    output logic [5:0]  hp_arid,
     output logic        hp_arvalid,
     input  logic        hp_arready,
     input  logic [63:0] hp_rdata,
     input  logic [1:0]  hp_rresp,
     input  logic        hp_rlast,
+    input  logic [5:0]  hp_rid,
     input  logic        hp_rvalid,
     output logic        hp_rready,
     output logic [31:0] hp_awaddr,
     output logic [3:0]  hp_awlen,
+    output logic [5:0]  hp_awid,
     output logic        hp_awvalid,
     input  logic        hp_awready,
     output logic [63:0] hp_wdata,
     output logic        hp_wlast,
+    output logic [5:0]  hp_wid,
     output logic        hp_wvalid,
     input  logic        hp_wready,
     input  logic [1:0]  hp_bresp,
+    input  logic [5:0]  hp_bid,
     input  logic        hp_bvalid,
     output logic        hp_bready
 );
     localparam OFF_W = HP_SIZE_LOG2;
+    localparam IDS = 16;
+    localparam GEN_ID_W = 4;
     localparam BINS_LOG2 = 10;
 
     // ---- Domain of clk_s ----------------------------------------------------------------
@@ -87,11 +94,13 @@ module memprobe_core #(
     logic             locked_s, ack_s;
     logic             cmd_toggle, cmd_clear, stop_s;
     logic [2:0]       cfg_op;
+    logic [1:0]       cfg_pattern, cfg_size, cfg_rd_port, cfg_wr_port;
     logic [3:0]       cfg_len;
     logic [OFF_W-1:0] cfg_base;
-    logic [4:0]       cfg_span_log2;
+    logic [4:0]       cfg_span_log2, cfg_outstanding;
     logic [31:0]      cfg_count, cfg_seed;
-    logic [15:0]      cfg_gap;
+    logic [15:0]      cfg_gap, cfg_read_share;
+    logic             cfg_verify, cfg_order_reverse;
     logic             run_resp_err, run_data_err, run_hist_drop;
     logic             ack_toggle;
 
@@ -99,7 +108,8 @@ module memprobe_core #(
     memprobe_sync sync_ack    (.clk(clk_s), .rst(rst_s), .d(ack_toggle),  .q(ack_s));
 
     memprobe_regs #(
-        .BUILD(BUILD), .CLK_MHZ(CLK_MHZ), .MAX_OUTSTANDING(1)
+        .BUILD(BUILD), .CLK_MHZ(CLK_MHZ), .MAX_OUTSTANDING(IDS), .CAP_PORTS(4'b0001),
+        .CAP_SIZE32(0), .CAP_MIXED(1), .CAP_ORDER(0), .CAP_PATTERNS(1), .CAP_VERIFY(1)
     ) regs (
         .clk(clk_s), .rst(rst_s),
         .awaddr(gp_awaddr), .awid(gp_awid), .awlen(gp_awlen), .awvalid(gp_awvalid),
@@ -113,7 +123,10 @@ module memprobe_core #(
         .mmcm_locked(locked_s), .cmd_toggle(cmd_toggle), .cmd_clear(cmd_clear),
         .stop(stop_s), .ack_toggle(ack_s), .run_resp_err(run_resp_err),
         .run_data_err(run_data_err), .run_hist_drop(run_hist_drop), .busy(busy),
-        .cfg_op(cfg_op), .cfg_len(cfg_len), .cfg_base(cfg_base),
+        .cfg_op(cfg_op), .cfg_pattern(cfg_pattern), .cfg_len(cfg_len), .cfg_size(cfg_size),
+        .cfg_rd_port(cfg_rd_port), .cfg_wr_port(cfg_wr_port), .cfg_verify(cfg_verify),
+        .cfg_order_reverse(cfg_order_reverse), .cfg_outstanding(cfg_outstanding),
+        .cfg_read_share(cfg_read_share), .cfg_base(cfg_base),
         .cfg_span_log2(cfg_span_log2), .cfg_count(cfg_count), .cfg_gap(cfg_gap),
         .cfg_seed(cfg_seed)
     );
@@ -124,11 +137,13 @@ module memprobe_core #(
     memprobe_sync sync_stop (.clk(clk_m), .rst(rst_m), .d(stop_s),     .q(stop_m));
 
     logic [2:0]       m_op;
+    logic [1:0]       m_pattern;
     logic [3:0]       m_len;
     logic [OFF_W-1:0] m_base;
-    logic [4:0]       m_span_log2;
+    logic [4:0]       m_span_log2, m_outstanding;
     logic [31:0]      m_count, m_seed;
-    logic [15:0]      m_gap;
+    logic [15:0]      m_gap, m_read_share;
+    logic             m_verify;
     logic             gen_start, gen_clear, gen_busy;
     logic [2:0]       hist_busy;
 
@@ -145,6 +160,10 @@ module memprobe_core #(
             cmd_prev    <= 1'b0;
             ack_toggle  <= 1'b0;
             m_op        <= '0;
+            m_pattern   <= '0;
+            m_outstanding <= 5'd1;
+            m_read_share  <= '0;
+            m_verify    <= 1'b0;
             m_len       <= '0;
             m_base      <= '0;
             m_span_log2 <= '0;
@@ -160,6 +179,10 @@ module memprobe_core #(
                     else begin
                         gen_start   <= 1'b1;
                         m_op        <= cfg_op;
+                        m_pattern   <= cfg_pattern;
+                        m_outstanding <= cfg_outstanding;
+                        m_read_share  <= cfg_read_share;
+                        m_verify    <= cfg_verify;
                         m_len       <= cfg_len;
                         m_base      <= cfg_base;
                         m_span_log2 <= cfg_span_log2;
@@ -181,22 +204,27 @@ module memprobe_core #(
 
     // ---- Domain of clk_m: generator and histograms ---------------------------------------
     logic        smp_rd_first, smp_rd_last, smp_wr_resp;
-    logic [31:0] smp_latency;
+    logic [31:0] smp_r_latency, smp_b_latency;
+    logic [GEN_ID_W-1:0] gen_arid, gen_awid, gen_wid;
     logic [63:0] run_cycles, reads, writes, stalls, first_err_data;
     logic [31:0] data_errors, first_err_addr, resp_errors;
 
-    memprobe_gen #(.OFF_W(OFF_W)) gen (
+    memprobe_gen #(.OFF_W(OFF_W), .IDS(IDS), .ID_W(GEN_ID_W)) gen (
         .clk(clk_m), .rst(rst_m),
         .start(gen_start), .clear(gen_clear), .stop(stop_m), .busy(gen_busy),
-        .cfg_op(m_op), .cfg_len(m_len), .cfg_base(m_base), .cfg_span_log2(m_span_log2),
-        .cfg_count(m_count), .cfg_gap(m_gap), .cfg_seed(m_seed),
-        .araddr(hp_araddr), .arlen(hp_arlen), .arvalid(hp_arvalid), .arready(hp_arready),
-        .rdata(hp_rdata), .rresp(hp_rresp), .rlast(hp_rlast), .rvalid(hp_rvalid),
-        .rready(hp_rready), .awaddr(hp_awaddr), .awlen(hp_awlen), .awvalid(hp_awvalid),
-        .awready(hp_awready), .wdata(hp_wdata), .wlast(hp_wlast), .wvalid(hp_wvalid),
-        .wready(hp_wready), .bresp(hp_bresp), .bvalid(hp_bvalid), .bready(hp_bready),
-        .smp_rd_first(smp_rd_first), .smp_rd_last(smp_rd_last), .smp_wr_resp(smp_wr_resp),
-        .smp_latency(smp_latency),
+        .cfg_op(m_op), .cfg_pattern(m_pattern), .cfg_len(m_len), .cfg_base(m_base),
+        .cfg_span_log2(m_span_log2), .cfg_count(m_count), .cfg_gap(m_gap),
+        .cfg_outstanding(m_outstanding), .cfg_read_share(m_read_share), .cfg_seed(m_seed),
+        .cfg_verify(m_verify),
+        .araddr(hp_araddr), .arlen(hp_arlen), .arid(gen_arid), .arvalid(hp_arvalid),
+        .arready(hp_arready), .rdata(hp_rdata), .rresp(hp_rresp), .rlast(hp_rlast),
+        .rid(hp_rid[GEN_ID_W-1:0]), .rvalid(hp_rvalid), .rready(hp_rready),
+        .awaddr(hp_awaddr), .awlen(hp_awlen), .awid(gen_awid), .awvalid(hp_awvalid),
+        .awready(hp_awready), .wdata(hp_wdata), .wid(gen_wid), .wlast(hp_wlast),
+        .wvalid(hp_wvalid), .wready(hp_wready), .bresp(hp_bresp), .bid(hp_bid[GEN_ID_W-1:0]),
+        .bvalid(hp_bvalid), .bready(hp_bready),
+        .smp_rd_first(smp_rd_first), .smp_rd_last(smp_rd_last), .smp_r_latency(smp_r_latency),
+        .smp_wr_resp(smp_wr_resp), .smp_b_latency(smp_b_latency),
         .run_cycles(run_cycles), .reads(reads), .writes(writes), .stalls(stalls),
         .data_errors(data_errors), .first_err_addr(first_err_addr),
         .first_err_data(first_err_data), .resp_errors(resp_errors),
@@ -210,12 +238,23 @@ module memprobe_core #(
     logic [31:0]         h_drops [0:2];
     logic [31:0]         h_rd [0:2];
     wire  [2:0]          h_smp = {smp_wr_resp, smp_rd_last, smp_rd_first};
+    wire  [31:0]         h_val [0:2];
+    assign h_val[0] = smp_r_latency;
+    assign h_val[1] = smp_r_latency;
+    assign h_val[2] = smp_b_latency;
+    assign hp_arid = 6'(gen_arid);
+    assign hp_awid = 6'(gen_awid);
+    assign hp_wid  = 6'(gen_wid);
+    // The design uses IDs below IDS; the upper bits of RID and BID are 0. The
+    // configuration fields of the next versions are not used yet.
+    wire unused_cfg = &{1'b0, hp_rid[5:GEN_ID_W], hp_bid[5:GEN_ID_W], cfg_size, cfg_rd_port,
+                        cfg_wr_port, cfg_order_reverse};
 
     genvar g;
     generate for (g = 0; g < 3; g++) begin : hist
         memprobe_hist #(.BINS_LOG2(BINS_LOG2)) h (
             .clk(clk_m), .rst(rst_m), .clear(gen_clear),
-            .smp_valid(h_smp[g]), .smp_value(smp_latency),
+            .smp_valid(h_smp[g]), .smp_value(h_val[g]),
             .busy(hist_busy[g]), .drop(hist_drop[g]),
             .min(h_min[g]), .max(h_max[g]), .sum(h_sum[g]), .drops(h_drops[g]),
             .rd_clk(clk_s), .rd_addr(ext_addr[BINS_LOG2+1:2]), .rd_data(h_rd[g])

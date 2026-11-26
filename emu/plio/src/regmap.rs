@@ -3,9 +3,11 @@
 
 /// Test design for the memory path between the PL and the PS DDR (docs/mem-path-experiment.md, Part B). A traffic generator on the HP ports, latency timers, histograms and a data checker.
 ///
-/// Latency: A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency.
+/// Latency: A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency. Each transaction has its own start, the address handshake of its ID. The design sends the W beats in the order of the AW, from the cycle in which it sets AWVALID. Thus WR_RESP includes the time in which the W beats of a write wait for the W beats of earlier writes.
 ///
-/// Data pattern: FILL writes this data and CHECK expects it. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values.
+/// Transactions in progress: A transaction is in progress from the cycle in which the design sets its ARVALID or AWVALID to the cycle of its RLAST or B handshake. Reads and writes count together. Each transaction in progress has an AXI ID that no other transaction in progress has. The R beats of different IDs can come in any order (AXI3).
+///
+/// Data pattern: FILL, WRITE and MIXED write this data. CHECK expects it; READ and MIXED expect it if MODE.VERIFY is 1. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values. ORDER does not use this pattern: its write number n, from 0, writes SEED ^ n in bits 31:0 and SEED ^ ~n in bits 63:32.
 pub mod memprobe {
     use crate::{Field, Mem, Reg};
 
@@ -14,7 +16,7 @@ pub mod memprobe {
     /// Value of the ID register.
     pub const ID_VALUE: u32 = 0x4d50_5242;
     /// Version of the register map.
-    pub const VERSION_VALUE: u32 = 1;
+    pub const VERSION_VALUE: u32 = 2;
     /// Bus address of the HP memory. The reserved region of the board interface: docs/pl-interface.md of https://github.com/NeoChen1024/PYNQ-Z2, tag pl-interface-v1.
     pub const HP_BASE: u32 = 0x1f00_0000;
     /// Size of the HP memory in bytes.
@@ -29,7 +31,7 @@ pub mod memprobe {
     /// Version of this register map. Access: ro.
     pub const VERSION: Reg = Reg {
         offset: 0x004,
-        reset: 0x0000_0001,
+        reset: 0x0000_0002,
     };
 
     /// The first 32 bits of the git commit of the build. The Vivado script sets it. Access: ro.
@@ -80,19 +82,19 @@ pub mod memprobe {
         reset: 0x0000_0016,
     };
 
-    /// Transactions in the run. In FILL and CHECK mode, the run covers the span once and ignores COUNT. Access: rw.
+    /// Bursts of a READ, WRITE or MIXED run; iterations of an ORDER run. FILL and CHECK cover the span once and ignore COUNT. Access: rw.
     pub const COUNT: Reg = Reg {
         offset: 0x02c,
         reset: 0x0000_0001,
     };
 
-    /// Minimum number of clk_m cycles from one address handshake to the next issue. Access: rw.
+    /// Without ORDER: the minimum number of clk_m cycles from an address handshake (AR or AW) to the next ARVALID or AWVALID. ORDER: the number of cycles from the WLAST handshake of the write to the ARVALID of its read (with ORDER_REVERSE: from the AR handshake of the read to the AWVALID of its write); 0 sets the VALID in the next cycle. All beats of an ORDER write and read carry the value of the iteration. Access: rw.
     pub const GAP: Reg = Reg {
         offset: 0x030,
         reset: 0x0000_0000,
     };
 
-    /// Maximum number of transactions in progress. From 1 to CAPS.MAX_OUTSTANDING. Access: rw.
+    /// Maximum number of transactions in progress (note "Transactions in progress"), reads and writes together. From 1 to CAPS.MAX_OUTSTANDING. ORDER ignores it: one iteration at a time. Access: rw.
     pub const OUTSTANDING: Reg = Reg {
         offset: 0x034,
         reset: 0x0000_0001,
@@ -146,7 +148,7 @@ pub mod memprobe {
         reset: 0x0000_0000,
     };
 
-    /// Cycles in which a transaction was ready to issue but the limit of OUTSTANDING or AxREADY stopped it, bits 31:0. Access: ro.
+    /// Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0. Access: ro.
     pub const STALLS_LO: Reg = Reg {
         offset: 0x098,
         reset: 0x0000_0000,
@@ -164,7 +166,7 @@ pub mod memprobe {
         reset: 0x0000_0000,
     };
 
-    /// Byte offset in the HP memory of the first word that is not the expected value. Access: ro.
+    /// Byte offset in the HP memory of the first word that is not the expected value, in the order of the R handshakes. Access: ro.
     pub const FIRST_ERR_ADDR: Reg = Reg {
         offset: 0x0a4,
         reset: 0x0000_0000,
@@ -182,7 +184,7 @@ pub mod memprobe {
         reset: 0x0000_0000,
     };
 
-    /// In ORDER mode: reads that gave the value from before the write that preceded them. Access: ro.
+    /// ORDER: reads with a beat that is not the value of their iteration (note "Data pattern"). Stops at 0xFFFFFFFF. Access: ro.
     pub const ORDER_MISMATCHES: Reg = Reg {
         offset: 0x0b0,
         reset: 0x0000_0000,
@@ -300,12 +302,6 @@ pub mod memprobe {
             width: 5,
         };
 
-        /// 1: the design has a master on S_AXI_HP1. Access: ro.
-        pub const HP1: Field = Field {
-            lsb: 16,
-            width: 1,
-        };
-
         /// 1: MODE.SIZE accepts 32-bit transfers. Access: ro.
         pub const SIZE32: Field = Field {
             lsb: 17,
@@ -328,6 +324,18 @@ pub mod memprobe {
         pub const PATTERNS: Field = Field {
             lsb: 20,
             width: 1,
+        };
+
+        /// 1: MODE.VERIFY can be 1. Access: ro.
+        pub const VERIFY: Field = Field {
+            lsb: 21,
+            width: 1,
+        };
+
+        /// Bit n is 1 if the design has a master on S_AXI_HPn. MODE.RD_PORT and MODE.WR_PORT accept these ports. Access: ro.
+        pub const PORTS: Field = Field {
+            lsb: 24,
+            width: 4,
         };
     }
 
@@ -416,13 +424,13 @@ pub mod memprobe {
     pub mod mode {
         use super::Field;
 
-        /// Operation. Access: rw.
+        /// Operation. READ, WRITE: COUNT bursts. MIXED: COUNT bursts; each is a read if a 16-bit LFSR value is less than READ_SHARE, else a write. ORDER: COUNT iterations, one at a time; each writes a value to an address and reads the address again (ORDER_MISMATCHES). FILL, CHECK: write or check the span once, in sequence. Access: rw.
         pub const OP: Field = Field {
             lsb: 0,
             width: 3,
         };
 
-        /// Address sequence. SEQ increments by one burst and wraps in the span. RANDOM uses an LFSR from SEED. FIXED uses BASE. Access: rw.
+        /// Address sequence. SEQ increments by one burst and wraps in the span. RANDOM takes burst-aligned addresses in the span from an LFSR that starts from SEED. FIXED uses BASE for each burst. FILL and CHECK need SEQ. Access: rw.
         pub const PATTERN: Field = Field {
             lsb: 4,
             width: 2,
@@ -440,15 +448,27 @@ pub mod memprobe {
             width: 2,
         };
 
-        /// HP port of the reads. Access: rw.
+        /// HP port of the reads. HP0 and HP1 share a port of the DDR controller, and HP2 and HP3 share another (UG585 v1.7, Table 5-11). Access: rw.
         pub const RD_PORT: Field = Field {
             lsb: 16,
-            width: 1,
+            width: 2,
         };
 
         /// HP port of the writes. Access: rw.
         pub const WR_PORT: Field = Field {
-            lsb: 17,
+            lsb: 18,
+            width: 2,
+        };
+
+        /// 1: READ and MIXED compare the read data with the data pattern of SEED. Fill the span with the same SEED first. Access: rw.
+        pub const VERIFY: Field = Field {
+            lsb: 20,
+            width: 1,
+        };
+
+        /// ORDER only. 0: the read comes after the write. 1: the write comes after the read; the read then gives the old value, a check that the comparison works. Access: rw.
+        pub const ORDER_REVERSE: Field = Field {
+            lsb: 21,
             width: 1,
         };
 
@@ -479,12 +499,16 @@ pub mod memprobe {
         pub mod rd_port {
             pub const HP0: u32 = 0;
             pub const HP1: u32 = 1;
+            pub const HP2: u32 = 2;
+            pub const HP3: u32 = 3;
         }
 
         /// Values of [`WR_PORT`].
         pub mod wr_port {
             pub const HP0: u32 = 0;
             pub const HP1: u32 = 1;
+            pub const HP2: u32 = 2;
+            pub const HP3: u32 = 3;
         }
     }
 

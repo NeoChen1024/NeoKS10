@@ -11,7 +11,8 @@ NICE      ?= nice -n 19
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
                rtl/memprobe/memprobe_pattern.sv rtl/memprobe/memprobe_gen.sv \
-               rtl/memprobe/memprobe_hist.sv rtl/memprobe/memprobe_regs.sv \
+               rtl/memprobe/memprobe_hist_bank.sv rtl/memprobe/memprobe_hist.sv \
+               rtl/memprobe/memprobe_regs.sv \
                rtl/memprobe/memprobe_core.sv
 MEMPROBE_TOP = rtl/memprobe/memprobe_top.sv
 COSIM_SEEDS ?= 1 2 3 4 5 6
@@ -48,33 +49,42 @@ $(TB_CORE): $(MEMPROBE_RTL) tb/memprobe/tb_core.cpp tb/gen/regmap.h
 	    -GBUILD=32\'h5EED0001 -Mdir $(BUILD_DIR)/tb/memprobe/obj -o ../tb_core \
 	    -CFLAGS -O1 -CFLAGS -std=c++17 $(MEMPROBE_RTL) tb/memprobe/tb_core.cpp
 
-TB_HIST = $(BUILD_DIR)/tb/memprobe/tb_hist
+# tb_hist with the 4 banks of the design, and with 1 bank (a full FIFO).
+TB_HIST4 = $(BUILD_DIR)/tb/memprobe/tb_hist4
+TB_HIST1 = $(BUILD_DIR)/tb/memprobe/tb_hist1
+HIST_SRC = rtl/memprobe/memprobe_hist_bank.sv rtl/memprobe/memprobe_hist.sv tb/memprobe/tb_hist.cpp
 
-$(TB_HIST): rtl/memprobe/memprobe_hist.sv tb/memprobe/tb_hist.cpp
-	mkdir -p $(BUILD_DIR)/tb/memprobe/obj_hist
-	$(NICE) $(VERILATOR) --cc --exe --build -j 0 -Wall --top-module memprobe_hist \
-	    -Mdir $(BUILD_DIR)/tb/memprobe/obj_hist -o ../tb_hist \
-	    -CFLAGS -O1 -CFLAGS -std=c++17 rtl/memprobe/memprobe_hist.sv tb/memprobe/tb_hist.cpp
+$(TB_HIST4): $(HIST_SRC)
+	mkdir -p $(BUILD_DIR)/tb/memprobe/obj_hist4
+	$(NICE) $(VERILATOR) --cc --exe --build -j 0 -Wall --top-module memprobe_hist -GBANKS_LOG2=2 \
+	    -Mdir $(BUILD_DIR)/tb/memprobe/obj_hist4 -o ../tb_hist4 -CFLAGS -O1 -CFLAGS -std=c++17 $(HIST_SRC)
 
-cosim: $(TB_CORE) $(TB_HIST)
+$(TB_HIST1): $(HIST_SRC)
+	mkdir -p $(BUILD_DIR)/tb/memprobe/obj_hist1
+	$(NICE) $(VERILATOR) --cc --exe --build -j 0 -Wall --top-module memprobe_hist -GBANKS_LOG2=0 \
+	    -Mdir $(BUILD_DIR)/tb/memprobe/obj_hist1 -o ../tb_hist1 -CFLAGS -O1 -CFLAGS -std=c++17 $(HIST_SRC)
+
+cosim: $(TB_CORE) $(TB_HIST4) $(TB_HIST1)
 	for s in $(COSIM_SEEDS); do \
-	    $(NICE) $(TB_HIST) --seed $$s || exit 1; \
+	    $(NICE) $(TB_HIST4) --banks 4 --seed $$s || exit 1; \
+	    $(NICE) $(TB_HIST1) --banks 1 --seed $$s || exit 1; \
 	    $(NICE) $(TB_CORE) --pattern tests/memprobe-pattern.txt --seed $$s || exit 1; \
 	done
 
 # SymbiYosys tasks: proof and reachability, each with a limit of 600 s
-# (the timeout option of the .sby file). A timeout is not a pass.
+# (the timeout option of the .sby file). A timeout is not a pass. All modules
+# run; the exit status is 1 if a task of any module did not pass.
 # MODULE selects one of: gen regs. Without MODULE, all run.
 FORMAL_MODULES = gen regs
 formal:
 	@mkdir -p $(CURDIR)/$(BUILD_DIR)/formal
-	@for m in $(or $(MODULE),$(FORMAL_MODULES)); do \
+	@fail=0; for m in $(or $(MODULE),$(FORMAL_MODULES)); do \
 	    log=$(CURDIR)/$(BUILD_DIR)/formal/$$m.log; \
 	    (cd tb/memprobe && $(NICE) sby -f --prefix $(CURDIR)/$(BUILD_DIR)/formal/$$m $$m.sby) \
 	        > $$log 2>&1; rc=$$?; \
 	    grep -E "DONE \(" $$log | sed "s/^/$$m: /"; \
-	    if [ $$rc -ne 0 ]; then echo "$$m: sby exit status $$rc, see $$log"; exit 1; fi; \
-	done
+	    if [ $$rc -ne 0 ]; then echo "$$m: sby exit status $$rc, see $$log"; fail=1; fi; \
+	done; exit $$fail
 
 # Mutation test of one module of rtl/memprobe: make mutate MODULE=memprobe_gen
 MUTANTS ?= 20

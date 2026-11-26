@@ -1,23 +1,41 @@
-# Proof of the AXI master properties of memprobe_gen (gen_formal.sv), and a
-# check that the assumptions do not exclude the transactions (task cover).
-# make formal runs both tasks with a time limit.
+# Properties of memprobe_gen (gen_formal.sv).
+#   prove_region: each address is in the HP memory; the parameters of the design (IDS 16)
+#   prove_addr, prove_id: the other properties, IDS 4 (unbounded proofs)
+#   bmc: all properties, IDS 4, bounded to 30 cycles (a bound, not a proof)
+#   cover: the assumptions do not exclude the transactions, IDS 4
+# make formal runs all tasks; each has a limit of 600 s. A timeout is not a pass.
 [tasks]
-prove
+prove_region
+prove_addr
+prove_id
+bmc
 cover
 
 [options]
 timeout 600
-prove: mode prove
+prove_region: mode prove
+prove_addr: mode prove
+prove_id: mode prove
+bmc: mode bmc
+bmc: depth 30
 cover: mode cover
 cover: depth 30
 
 [engines]
-prove: abc pdr
+prove_region: abc pdr
+prove_addr: abc pdr
+prove_id: abc pdr
+bmc: smtbmc
 cover: smtbmc
 
 [script]
-read_verilog -sv -formal regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
-prep -top gen_formal
+prove_region: read_verilog -sv -formal -D PROPS_REGION regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+prove_region: chparam -set IDS 16 -set ID_W 4 gen_formal
+prove_addr: read_verilog -sv -formal -D PROPS_ADDR regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+prove_id: read_verilog -sv -formal -D PROPS_ID regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+bmc: read_verilog -sv -formal -D PROPS_ADDR -D PROPS_ID regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+cover: read_verilog -sv -formal regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+prep -flatten -top gen_formal
 
 [files]
 ../../rtl/gen/regmap_pkg.sv

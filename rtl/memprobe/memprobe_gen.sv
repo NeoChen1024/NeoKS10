@@ -1,21 +1,28 @@
 // Traffic generator of the memory path test design (docs/mem-path-experiment.md,
-// Part B), on one AXI3 HP port, in the domain of clk_m.
+// Part B), on one AXI3 master, in the domain of clk_m. The register map is
+// spec/regmap.toml, block memprobe (version 2); its notes "Latency",
+// "Transactions in progress" and "Data pattern" define the results.
 //
-// This version has one transaction in progress at a time, sequential
-// addresses and 64-bit beats (CAPS of the block memprobe gives this to the PS).
-// The register map is spec/regmap.toml, block memprobe.
+// Operations (MODE.OP): READ, WRITE, MIXED (COUNT bursts), FILL and CHECK (the
+// span once, in sequence). ORDER is not in this version (CAPS.ORDER = 0).
+// Up to IDS transactions in progress, each with its own AXI ID.
 //
-// Operations (MODE.OP):
-//   READ   cfg_count read bursts; the data is not checked
-//   WRITE  cfg_count write bursts with the data pattern
-//   FILL   write bursts with the data pattern over the span once
-//   CHECK  read bursts over the span once; compare with the data pattern
+// Structure:
+//   - Sequencer: prepares the next burst (operation, address), and sets its
+//     ARVALID or AWVALID when GAP is over and the OUTSTANDING limit allows.
+//   - W engine: sends the W beats in the order of the AW. A write starts its
+//     W beats in the cycle of its AWVALID if no earlier write has W beats left.
+//   - Responses: RREADY and BREADY are 1. The R and B signals go into a
+//     register first (stage 1); stage 2 looks up the ID table, makes the
+//     latency samples and frees the ID; the data check is in stages 3 and 4.
 //
 // The bus address is the base of the HP memory with the offset in the low
-// OFF_W bits. The offset register has OFF_W bits, so no address is outside
-// the HP memory, whatever the configuration.
+// OFF_W bits. The offsets have OFF_W bits, so no address is outside the HP
+// memory, whatever the configuration.
 module memprobe_gen #(
-    parameter OFF_W = memprobe_regmap_pkg::HP_SIZE_LOG2
+    parameter OFF_W = memprobe_regmap_pkg::HP_SIZE_LOG2,
+    parameter IDS   = 16,
+    parameter ID_W  = $clog2(IDS)
 ) (
     input  logic             clk,
     input  logic             rst,
@@ -23,48 +30,56 @@ module memprobe_gen #(
     // Commands. start and clear are pulses, accepted only while busy is 0.
     input  logic             start,
     input  logic             clear,
-    input  logic             stop,        // level: ABORT, issue no new transaction
+    input  logic             stop,        // level: ABORT, start no new burst
     output logic             busy,
 
-    // Configuration. Stable from start to the end of the run. The PS side
-    // has checked it (memprobe_regs).
+    // Configuration. Stable from start to the end of the run. memprobe_regs
+    // has checked it.
     input  logic [2:0]       cfg_op,
+    input  logic [1:0]       cfg_pattern,
     input  logic [3:0]       cfg_len,     // AxLEN: 0, 1, 3, 7 or 15
     input  logic [OFF_W-1:0] cfg_base,    // a multiple of the span
     input  logic [4:0]       cfg_span_log2,
     input  logic [31:0]      cfg_count,
     input  logic [15:0]      cfg_gap,
+    input  logic [4:0]       cfg_outstanding,   // 1 to IDS
+    input  logic [15:0]      cfg_read_share,
     input  logic [31:0]      cfg_seed,
+    input  logic             cfg_verify,
 
-    // AXI3 master, ID 0, INCR bursts of 8-byte beats.
+    // AXI3 master: INCR bursts of 8-byte beats.
     output logic [31:0]      araddr,
     output logic [3:0]       arlen,
+    output logic [ID_W-1:0]  arid,
     output logic             arvalid,
     input  logic             arready,
     input  logic [63:0]      rdata,
     input  logic [1:0]       rresp,
     input  logic             rlast,
+    input  logic [ID_W-1:0]  rid,
     input  logic             rvalid,
     output logic             rready,
     output logic [31:0]      awaddr,
     output logic [3:0]       awlen,
+    output logic [ID_W-1:0]  awid,
     output logic             awvalid,
     input  logic             awready,
     output logic [63:0]      wdata,
+    output logic [ID_W-1:0]  wid,
     output logic             wlast,
     output logic             wvalid,
     input  logic             wready,
     input  logic [1:0]       bresp,
+    input  logic [ID_W-1:0]  bid,
     input  logic             bvalid,
     output logic             bready,
 
-    // Latency samples (spec/regmap.toml, note "Latency"), one cycle after the
-    // handshake. One value for all three: with one transaction in progress,
-    // they have the same start.
+    // Latency samples (note "Latency"), two cycles after the handshake.
     output logic             smp_rd_first,
     output logic             smp_rd_last,
+    output logic [31:0]      smp_r_latency,
     output logic             smp_wr_resp,
-    output logic [31:0]      smp_latency,
+    output logic [31:0]      smp_b_latency,
 
     // Results. clear sets them to 0; each run adds to them.
     output logic [63:0]      run_cycles,
@@ -80,96 +95,206 @@ module memprobe_gen #(
     output logic             run_data_err
 );
     localparam [2:0] OP_READ  = memprobe_regmap_pkg::MODE_OP_READ;
+    localparam [2:0] OP_MIXED = memprobe_regmap_pkg::MODE_OP_MIXED;
     localparam [2:0] OP_FILL  = memprobe_regmap_pkg::MODE_OP_FILL;
     localparam [2:0] OP_CHECK = memprobe_regmap_pkg::MODE_OP_CHECK;
+    localparam [1:0] PAT_RANDOM = memprobe_regmap_pkg::MODE_PATTERN_RANDOM;
+    localparam [1:0] PAT_FIXED  = memprobe_regmap_pkg::MODE_PATTERN_FIXED;
     localparam [31:0] HP_ADDR = memprobe_regmap_pkg::HP_BASE;
+    // Galois LFSR, x^32 + x^22 + x^2 + x + 1 (maximum length).
+    localparam [31:0] LFSR_TAPS = 32'h8020_0003;
 
-    localparam [2:0] S_IDLE  = 3'd0,
-                     S_NEXT  = 3'd1,     // decide on the next transaction
-                     S_AR    = 3'd2,     // ARVALID
-                     S_R     = 3'd3,     // read data
-                     S_AW_W  = 3'd4,     // AWVALID and the write data
-                     S_B     = 3'd5;     // write response
-    logic [2:0] state;
+    function automatic [31:0] lfsr_next(input [31:0] l);
+        lfsr_next = {1'b0, l[31:1]} ^ (l[0] ? LFSR_TAPS : 32'd0);
+    endfunction
 
-    wire is_read = (cfg_op == OP_READ) || (cfg_op == OP_CHECK);
+    // ---- Configuration values ------------------------------------------------------
     wire whole_span = (cfg_op == OP_FILL) || (cfg_op == OP_CHECK);
-
-    // Bytes in a burst: 8 << log2(len + 1). For the accepted lengths, log2(len + 1)
-    // is the number of 1 bits of len.
+    wire check_en   = (cfg_op == OP_CHECK) || (cfg_verify && (cfg_op == OP_READ || cfg_op == OP_MIXED));
+    // For the accepted lengths, log2(len + 1) is the number of 1 bits of len.
     wire [2:0] len_log2 = 3'(cfg_len[0]) + 3'(cfg_len[1]) + 3'(cfg_len[2]) + 3'(cfg_len[3]);
     wire [5:0] burst_log2 = 6'd3 + 6'(len_log2);
-    // The span is at most the HP memory (memprobe_regs checks it): 2^OFF_W - 1 at most.
+    // The span is at most the HP memory (memprobe_regs checks it).
     wire [OFF_W:0] span_mask_w = ({{OFF_W{1'b0}}, 1'b1} << cfg_span_log2) - 1'b1;
     wire [OFF_W-1:0] span_mask = span_mask_w[OFF_W-1:0];
     wire unused_mask_bit = span_mask_w[OFF_W];
     wire [OFF_W-1:0] burst_bytes = OFF_W'(1) << burst_log2;
+    wire [31:0] seed_op = {cfg_seed[15:0], cfg_seed[31:16]} ^ 32'h0000_0001;
+    wire [31:0] run_bursts = whole_span ? 32'(1) << (cfg_span_log2 - 5'(burst_log2)) : cfg_count;
 
-    logic [OFF_W-1:0] seq;        // offset of the next burst in the span
-    logic [OFF_W-1:0] cur;        // offset of the burst in progress
-    logic [OFF_W-1:0] beat_off;   // offset of the next R or W beat
-    logic [31:0]      remaining;  // transactions to issue
-    logic [15:0]      since;      // edges since the last address handshake (saturates)
-    logic [31:0]      now;        // free-running time of the latency samples
-    logic [31:0]      t_addr;     // time of the last address handshake
-    logic [3:0]       wbeat;
-    logic             aw_done, w_done, r_first, err_seen;
+    // ---- State ---------------------------------------------------------------------
+    logic             running;        // a run: from start until all is done
+    logic [31:0]      now;            // free-running time of the latency samples
+    logic [15:0]      since;          // edges since the last address handshake (saturates)
+    logic [31:0]      to_prep;        // bursts not yet prepared
+    logic [31:0]      to_issue;       // bursts without address handshake
+    logic [OFF_W-1:0] seq;
+    logic [31:0]      lfsr_a, lfsr_op;
 
-    wire [63:0] expect_beat;
+    logic             nx_v, nx_read;  // the prepared next burst
+    logic [OFF_W-1:0] nx_off;
+    logic [OFF_W-1:0] pres_off;       // the burst whose VALID is set
 
-    // The data check is one cycle after the R beat, for the timing from the
-    // PS7 cell at 150 MHz.
-    logic             chk_v;
-    logic [63:0]      chk_data, chk_expect;
-    logic [OFF_W-1:0] chk_off;
-    wire        bad_lo = chk_data[31:0] != chk_expect[31:0];
-    wire        bad_hi = chk_data[63:32] != chk_expect[63:32];
-    wire [32:0] errors_sum = 33'(data_errors) + 33'(bad_lo) + 33'(bad_hi);
-    memprobe_pattern #(.OFF_W(OFF_W)) pat (
-        .seed(cfg_seed), .index(beat_off[OFF_W-1:3]), .beat(expect_beat));
+    logic [IDS-1:0]   id_busy;
+    logic [31:0]      id_start [0:IDS-1];
+    logic [OFF_W-1:0] id_off   [0:IDS-1];    // offset of the next R beat
+    logic [IDS-1:0]   id_first;
+    logic [5:0]       inflight;       // after the address handshake, not complete
+    logic             first_seen;     // a data error since CLEAR
 
-    assign araddr  = HP_ADDR | 32'(cur);
-    assign awaddr  = HP_ADDR | 32'(cur);
-    assign arlen   = cfg_len;
-    assign awlen   = cfg_len;
-    assign arvalid = (state == S_AR);
-    assign rready  = (state == S_R);
-    assign awvalid = (state == S_AW_W) && !aw_done;
-    assign wvalid  = (state == S_AW_W) && !w_done;
-    assign wdata   = expect_beat;
-    assign wlast   = (wbeat == cfg_len);
-    assign bready  = (state == S_B);
-    assign busy    = (state != S_IDLE) || chk_v || smp_rd_last || smp_wr_resp;
+    wire pres_v = arvalid || awvalid;
+    wire ar_hs  = arvalid && arready;
+    wire aw_hs  = awvalid && awready;
+    wire w_hs   = wvalid && wready;
 
-    wire ar_hs = arvalid && arready;
-    wire r_hs  = rvalid && rready;
-    wire aw_hs = awvalid && awready;
-    wire w_hs  = wvalid && wready;
-    wire b_hs  = bvalid && bready;
+    // ---- Stage 1: R and B into registers -----------------------------------------
+    logic             r1_v, r1_last;
+    logic [ID_W-1:0]  r1_id;
+    logic [63:0]      r1_data;
+    logic [1:0]       r1_resp;
+    logic [31:0]      r1_time;
+    logic             b1_v;
+    logic [ID_W-1:0]  b1_id;
+    logic [1:0]       b1_resp;
+    logic [31:0]      b1_time;
+    assign rready = 1'b1;
+    assign bready = 1'b1;
 
-    wire gap_ok = (since >= cfg_gap);
-    wire more = (remaining != 0) && !stop;
-
-    // The samples are registers: they come one cycle after the handshake,
-    // with the latency of the handshake.
-    always_ff @(posedge clk) begin
-        smp_rd_first <= !rst && r_hs && r_first;
-        smp_rd_last  <= !rst && r_hs && rlast;
-        smp_wr_resp  <= !rst && b_hs;
-        smp_latency  <= now - t_addr;
+    // ---- Stage 2 values ------------------------------------------------------------
+    wire              r_done = r1_v && r1_last;
+    wire              b_done = b1_v;
+    wire [1:0]        dec = 2'(r_done) + 2'(b_done);
+    wire [IDS-1:0]    freeing = (r_done ? (IDS'(1) << r1_id) : '0) | (b_done ? (IDS'(1) << b1_id) : '0);
+    wire [IDS-1:0]    id_free = ~id_busy | freeing;
+    logic [ID_W-1:0]  free_id;
+    always_comb begin
+        free_id = '0;
+        for (int i = IDS - 1; i >= 0; i--) if (id_free[i]) free_id = ID_W'(i);
     end
+    wire              r_err = r1_v && r1_resp != 2'b00;
+    wire              b_err = b1_v && b1_resp != 2'b00;
+    wire [32:0]       resp_sum = 33'(resp_errors) + 33'(r_err) + 33'(b_err);
 
-    // A stall: the next transaction could issue, but the bus or the limit of one
-    // transaction in progress stops it.
-    wire stall = (state == S_AR && !arready)
-              || (state == S_AW_W && !aw_done && !awready)
-              || ((state == S_R || state == S_B || (state == S_AW_W && aw_done)) && more && gap_ok);
+    wire gap_ok  = (since >= cfg_gap);
+    wire room    = (inflight - 6'(dec)) < 6'(cfg_outstanding);
+    wire present = running && nx_v && !pres_v && !stop && gap_ok && room;
+    wire stall   = running && !stop && gap_ok && to_issue != 0
+                && ((arvalid && !arready) || (awvalid && !awready) || (!pres_v && !room));
+
+    // ---- W engine ------------------------------------------------------------------
+    localparam WQ = IDS;
+    logic [ID_W-1:0]  wq_id  [0:WQ-1];
+    logic [OFF_W-1:0] wq_off [0:WQ-1];
+    logic [ID_W:0]    wq_wp, wq_rp;
+    wire              wq_empty = (wq_wp == wq_rp);
+    logic             w_active;
+    logic [3:0]       w_beat;
+    logic [OFF_W-1:0] w_off;
+    wire              w_free_next = !w_active || (w_hs && wlast);
+    wire              present_w = present && !nx_read;
+    wire              w_bypass = w_free_next && wq_empty && present_w;
+
+    wire [63:0] w_pattern;
+    memprobe_pattern #(.OFF_W(OFF_W)) wpat (.seed(cfg_seed), .index(w_off[OFF_W-1:3]), .beat(w_pattern));
+    assign wvalid = w_active;
+    assign wdata  = w_pattern;
+    assign wlast  = (w_beat == cfg_len);
+
+    // ---- Checker stages 3 and 4 ----------------------------------------------------
+    logic             c_v;
+    logic [63:0]      c_data;
+    logic [OFF_W-1:0] c_off;
+    wire  [63:0]      c_expect;
+    memprobe_pattern #(.OFF_W(OFF_W)) rpat (.seed(cfg_seed), .index(c_off[OFF_W-1:3]), .beat(c_expect));
+    logic             d_v, d_lo, d_hi;
+    logic [63:0]      d_data;
+    logic [OFF_W-1:0] d_off;
+    wire  [32:0]      errors_sum = 33'(data_errors) + 33'(d_lo) + 33'(d_hi);
+
+    wire pipe_busy = r1_v || b1_v || c_v || d_v || smp_rd_last || smp_wr_resp;
+    assign busy = running || pipe_busy;
+
+    assign araddr = HP_ADDR | 32'(pres_off);
+    assign awaddr = HP_ADDR | 32'(pres_off);
+    assign arlen  = cfg_len;
+    assign awlen  = cfg_len;
+
+    // The offset of a new burst in the span.
+    wire [OFF_W-1:0] lfsr_off = OFF_W'(lfsr_a << burst_log2) & span_mask;
+    wire [OFF_W-1:0] new_off  = cfg_base | (cfg_pattern == PAT_RANDOM ? lfsr_off
+                                          : cfg_pattern == PAT_FIXED  ? OFF_W'(0)
+                                          :                             (seq & span_mask));
+    wire new_read = (cfg_op == OP_READ) || (cfg_op == OP_CHECK)
+                 || (cfg_op == OP_MIXED && lfsr_op[15:0] < cfg_read_share);
+
+    // The ID table: one write port for the address handshake, one for stage 2.
+    // The two never use the same ID in one cycle: stage 2 sees only IDs after
+    // their address handshake.
+    always_ff @(posedge clk) begin
+        for (int i = 0; i < IDS; i++) begin
+            if (ar_hs && arid == ID_W'(i)) begin
+                id_start[i] <= now;
+                id_off[i]   <= pres_off;
+                id_first[i] <= 1'b1;
+            end else if (aw_hs && awid == ID_W'(i)) begin
+                id_start[i] <= now;
+            end else if (r1_v && r1_id == ID_W'(i)) begin
+                id_first[i] <= 1'b0;
+                id_off[i]   <= id_off[i] + 8;
+            end
+        end
+    end
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            state          <= S_IDLE;
+            running        <= 1'b0;
             now            <= '0;
             since          <= '1;
+            to_prep        <= '0;
+            to_issue       <= '0;
+            seq            <= '0;
+            lfsr_a         <= 32'd1;
+            lfsr_op        <= 32'd1;
+            nx_v           <= 1'b0;
+            nx_read        <= 1'b0;
+            nx_off         <= '0;
+            pres_off       <= '0;
+            arvalid        <= 1'b0;
+            awvalid        <= 1'b0;
+            arid           <= '0;
+            awid           <= '0;
+            id_busy        <= '0;
+            inflight       <= '0;
+            wq_wp          <= '0;
+            wq_rp          <= '0;
+            w_active       <= 1'b0;
+            w_beat         <= '0;
+            w_off          <= '0;
+            wid            <= '0;
+            r1_v           <= 1'b0;
+            r1_last        <= 1'b0;
+            r1_id          <= '0;
+            r1_data        <= '0;
+            r1_resp        <= '0;
+            r1_time        <= '0;
+            b1_v           <= 1'b0;
+            b1_id          <= '0;
+            b1_resp        <= '0;
+            b1_time        <= '0;
+            smp_rd_first   <= 1'b0;
+            smp_rd_last    <= 1'b0;
+            smp_wr_resp    <= 1'b0;
+            smp_r_latency  <= '0;
+            smp_b_latency  <= '0;
+            c_v            <= 1'b0;
+            c_data         <= '0;
+            c_off          <= '0;
+            d_v            <= 1'b0;
+            d_lo           <= 1'b0;
+            d_hi           <= 1'b0;
+            d_data         <= '0;
+            d_off          <= '0;
+            first_seen     <= 1'b0;
             run_cycles     <= '0;
             reads          <= '0;
             writes         <= '0;
@@ -178,43 +303,138 @@ module memprobe_gen #(
             first_err_addr <= '0;
             first_err_data <= '0;
             resp_errors    <= '0;
-            err_seen       <= 1'b0;
             run_resp_err   <= 1'b0;
             run_data_err   <= 1'b0;
-            seq            <= '0;
-            cur            <= '0;
-            beat_off       <= '0;
-            remaining      <= '0;
-            t_addr         <= '0;
-            wbeat          <= '0;
-            aw_done        <= 1'b0;
-            w_done         <= 1'b0;
-            r_first        <= 1'b0;
-            chk_v          <= 1'b0;
-            chk_data       <= '0;
-            chk_expect     <= '0;
-            chk_off        <= '0;
         end else begin
-            chk_v      <= r_hs && cfg_op == OP_CHECK;
-            chk_data   <= rdata;
-            chk_expect <= expect_beat;
-            chk_off    <= beat_off;
-            if (chk_v && (bad_lo || bad_hi)) begin
-                // Count 32-bit words; stop at 0xFFFFFFFF.
-                data_errors  <= errors_sum[32] ? 32'hFFFF_FFFF : errors_sum[31:0];
-                run_data_err <= 1'b1;
-                if (!err_seen) begin
-                    err_seen       <= 1'b1;
-                    // The first word of the beat that differs.
-                    first_err_addr <= 32'(chk_off) | (bad_lo ? 32'd0 : 32'd4);
-                    first_err_data <= chk_data;
-                end
-            end
-
             now <= now + 1'b1;
             if (since != '1) since <= since + 1'b1;
             if (busy) run_cycles <= run_cycles + 1'b1;
             if (stall) stalls <= stalls + 1'b1;
+
+            // ---- Start and end of a run ----
+            if (start && !busy) begin
+                running      <= 1'b1;
+                since        <= '1;
+                seq          <= '0;
+                lfsr_a       <= cfg_seed;
+                lfsr_op      <= (seed_op == 32'd0) ? 32'd1 : seed_op;
+                to_prep      <= run_bursts;
+                to_issue     <= run_bursts;
+                run_resp_err <= 1'b0;
+                run_data_err <= 1'b0;
+            end else if (running && !pres_v && inflight == 0 && !w_active && wq_empty
+                         && (to_issue == 0 || stop)) begin
+                running <= 1'b0;
+                nx_v    <= 1'b0;
+            end
+
+            // ---- Prepare the next burst ----
+            if (running && !nx_v && to_prep != 0 && !stop) begin
+                nx_v    <= 1'b1;
+                nx_read <= new_read;
+                nx_off  <= new_off;
+                to_prep <= to_prep - 1'b1;
+                seq     <= (seq + burst_bytes) & span_mask;
+                lfsr_a  <= lfsr_next(lfsr_a);
+                lfsr_op <= lfsr_next(lfsr_op);
+            end
+
+            // ---- Set VALID ----
+            if (present) begin
+                nx_v     <= 1'b0;
+                pres_off <= nx_off;
+                if (nx_read) begin
+                    arvalid <= 1'b1;
+                    arid    <= free_id;
+                end else begin
+                    awvalid <= 1'b1;
+                    awid    <= free_id;
+                end
+            end
+
+            // ---- Address handshakes ----
+            if (ar_hs) begin
+                arvalid  <= 1'b0;
+                since    <= 16'd1;
+                to_issue <= to_issue - 1'b1;
+            end
+            if (aw_hs) begin
+                awvalid  <= 1'b0;
+                since    <= 16'd1;
+                to_issue <= to_issue - 1'b1;
+            end
+            inflight <= inflight + 6'(ar_hs) + 6'(aw_hs) - 6'(dec);
+            id_busy  <= (id_busy & ~freeing) | (present ? (IDS'(1) << free_id) : '0);
+
+            // ---- W engine ----
+            if (present_w && !w_bypass) begin
+                wq_id[wq_wp[ID_W-1:0]]  <= free_id;
+                wq_off[wq_wp[ID_W-1:0]] <= nx_off;
+                wq_wp <= wq_wp + 1'b1;
+            end
+            if (w_free_next) begin
+                if (!wq_empty) begin
+                    w_active <= 1'b1;
+                    wid      <= wq_id[wq_rp[ID_W-1:0]];
+                    w_off    <= wq_off[wq_rp[ID_W-1:0]];
+                    w_beat   <= '0;
+                    wq_rp    <= wq_rp + 1'b1;
+                end else if (w_bypass) begin
+                    w_active <= 1'b1;
+                    wid      <= free_id;
+                    w_off    <= nx_off;
+                    w_beat   <= '0;
+                end else begin
+                    w_active <= 1'b0;
+                end
+            end else if (w_hs) begin
+                w_beat <= w_beat + 1'b1;
+                w_off  <= w_off + 8;
+            end
+
+            // ---- Stage 1 ----
+            r1_v    <= rvalid;
+            r1_last <= rlast;
+            r1_id   <= rid;
+            r1_data <= rdata;
+            r1_resp <= rresp;
+            r1_time <= now;
+            b1_v    <= bvalid;
+            b1_id   <= bid;
+            b1_resp <= bresp;
+            b1_time <= now;
+
+            // ---- Stage 2 ----
+            smp_rd_first  <= r1_v && id_first[r1_id];
+            smp_rd_last   <= r_done;
+            smp_r_latency <= r1_time - id_start[r1_id];
+            smp_wr_resp   <= b_done;
+            smp_b_latency <= b1_time - id_start[b1_id];
+            c_v           <= r1_v && check_en;
+            c_data        <= r1_data;
+            c_off         <= id_off[r1_id];
+            if (r_done) reads <= reads + 1'b1;
+            if (b_done) writes <= writes + 1'b1;
+            if (r_err || b_err) begin
+                resp_errors  <= resp_sum[32] ? 32'hFFFF_FFFF : resp_sum[31:0];
+                run_resp_err <= 1'b1;
+            end
+
+            // ---- Stages 3 and 4: data check ----
+            d_v    <= c_v;
+            d_lo   <= c_v && (c_data[31:0] != c_expect[31:0]);
+            d_hi   <= c_v && (c_data[63:32] != c_expect[63:32]);
+            d_data <= c_data;
+            d_off  <= c_off;
+            if (d_v && (d_lo || d_hi)) begin
+                data_errors  <= errors_sum[32] ? 32'hFFFF_FFFF : errors_sum[31:0];
+                run_data_err <= 1'b1;
+                if (!first_seen) begin
+                    first_seen     <= 1'b1;
+                    first_err_addr <= 32'(d_off) | (d_lo ? 32'd0 : 32'd4);
+                    first_err_data <= d_data;
+                end
+            end
 
             if (clear && !busy) begin
                 run_cycles     <= '0;
@@ -225,83 +445,8 @@ module memprobe_gen #(
                 first_err_addr <= '0;
                 first_err_data <= '0;
                 resp_errors    <= '0;
-                err_seen       <= 1'b0;
+                first_seen     <= 1'b0;
             end
-
-            case (state)
-                S_IDLE:
-                    if (start) begin
-                        seq          <= '0;
-                        since        <= '1;
-                        run_resp_err <= 1'b0;
-                        run_data_err <= 1'b0;
-                        remaining    <= whole_span ? 32'(1) << (cfg_span_log2 - 5'(burst_log2))
-                                                   : cfg_count;
-                        state        <= S_NEXT;
-                    end
-
-                S_NEXT:
-                    if (!more) state <= S_IDLE;
-                    else if (gap_ok) begin
-                        cur      <= cfg_base | (seq & span_mask);
-                        beat_off <= cfg_base | (seq & span_mask);
-                        seq      <= (seq + burst_bytes) & span_mask;
-                        wbeat    <= '0;
-                        aw_done  <= 1'b0;
-                        w_done   <= 1'b0;
-                        r_first  <= 1'b1;
-                        state    <= is_read ? S_AR : S_AW_W;
-                    end
-
-                S_AR:
-                    if (ar_hs) begin
-                        t_addr    <= now;
-                        since     <= 16'd1;
-                        remaining <= remaining - 1'b1;
-                        state     <= S_R;
-                    end
-
-                S_R:
-                    if (r_hs) begin
-                        r_first  <= 1'b0;
-                        beat_off <= beat_off + 8;
-                        if (rresp != 2'b00) begin
-                            if (resp_errors != '1) resp_errors <= resp_errors + 1'b1;
-                            run_resp_err <= 1'b1;
-                        end
-                        if (rlast) begin
-                            reads <= reads + 1'b1;
-                            state <= S_NEXT;
-                        end
-                    end
-
-                S_AW_W: begin
-                    if (aw_hs) begin
-                        aw_done   <= 1'b1;
-                        t_addr    <= now;
-                        since     <= 16'd1;
-                        remaining <= remaining - 1'b1;
-                    end
-                    if (w_hs) begin
-                        wbeat    <= wbeat + 1'b1;
-                        beat_off <= beat_off + 8;
-                        if (wlast) w_done <= 1'b1;
-                    end
-                    if ((aw_done || aw_hs) && (w_done || (w_hs && wlast))) state <= S_B;
-                end
-
-                S_B:
-                    if (b_hs) begin
-                        writes <= writes + 1'b1;
-                        if (bresp != 2'b00) begin
-                            if (resp_errors != '1) resp_errors <= resp_errors + 1'b1;
-                            run_resp_err <= 1'b1;
-                        end
-                        state <= S_NEXT;
-                    end
-
-                default: state <= S_IDLE;
-            endcase
         end
     end
 endmodule

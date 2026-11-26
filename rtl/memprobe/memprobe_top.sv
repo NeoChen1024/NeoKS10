@@ -52,6 +52,7 @@ module memprobe_top #(
     // S_AXI_HP0
     logic [31:0] hp_awaddr, hp_araddr;
     logic [3:0]  hp_awlen, hp_arlen;
+    logic [5:0]  hp_awid, hp_arid, hp_wid, hp_rid, hp_bid;
     logic [63:0] hp_wdata, hp_rdata;
     logic [1:0]  hp_bresp, hp_rresp;
     logic        hp_awvalid, hp_awready, hp_wvalid, hp_wready, hp_wlast;
@@ -76,18 +77,18 @@ module memprobe_top #(
         .MAXIGP0RLAST(gp_rlast), .MAXIGP0RVALID(gp_rvalid), .MAXIGP0RREADY(gp_rready),
 
         .SAXIHP0ACLK(clk_m),
-        .SAXIHP0AWADDR(hp_awaddr), .SAXIHP0AWID(6'd0), .SAXIHP0AWLEN(hp_awlen),
+        .SAXIHP0AWADDR(hp_awaddr), .SAXIHP0AWID(hp_awid), .SAXIHP0AWLEN(hp_awlen),
         .SAXIHP0AWSIZE(2'b11), .SAXIHP0AWBURST(2'b01), .SAXIHP0AWCACHE(4'b0011),
         .SAXIHP0AWPROT(3'b000), .SAXIHP0AWLOCK(2'b00), .SAXIHP0AWQOS(4'd0),
         .SAXIHP0AWVALID(hp_awvalid), .SAXIHP0AWREADY(hp_awready),
-        .SAXIHP0WDATA(hp_wdata), .SAXIHP0WID(6'd0), .SAXIHP0WSTRB(8'hFF),
+        .SAXIHP0WDATA(hp_wdata), .SAXIHP0WID(hp_wid), .SAXIHP0WSTRB(8'hFF),
         .SAXIHP0WLAST(hp_wlast), .SAXIHP0WVALID(hp_wvalid), .SAXIHP0WREADY(hp_wready),
-        .SAXIHP0BRESP(hp_bresp), .SAXIHP0BVALID(hp_bvalid), .SAXIHP0BREADY(hp_bready),
-        .SAXIHP0ARADDR(hp_araddr), .SAXIHP0ARID(6'd0), .SAXIHP0ARLEN(hp_arlen),
+        .SAXIHP0BRESP(hp_bresp), .SAXIHP0BID(hp_bid), .SAXIHP0BVALID(hp_bvalid), .SAXIHP0BREADY(hp_bready),
+        .SAXIHP0ARADDR(hp_araddr), .SAXIHP0ARID(hp_arid), .SAXIHP0ARLEN(hp_arlen),
         .SAXIHP0ARSIZE(2'b11), .SAXIHP0ARBURST(2'b01), .SAXIHP0ARCACHE(4'b0011),
         .SAXIHP0ARPROT(3'b000), .SAXIHP0ARLOCK(2'b00), .SAXIHP0ARQOS(4'd0),
         .SAXIHP0ARVALID(hp_arvalid), .SAXIHP0ARREADY(hp_arready),
-        .SAXIHP0RDATA(hp_rdata), .SAXIHP0RRESP(hp_rresp), .SAXIHP0RLAST(hp_rlast),
+        .SAXIHP0RDATA(hp_rdata), .SAXIHP0RID(hp_rid), .SAXIHP0RRESP(hp_rresp), .SAXIHP0RLAST(hp_rlast),
         .SAXIHP0RVALID(hp_rvalid), .SAXIHP0RREADY(hp_rready),
         .SAXIHP0RDISSUECAP1EN(1'b0), .SAXIHP0WRISSUECAP1EN(1'b0)
     );
@@ -103,12 +104,12 @@ module memprobe_top #(
         .gp_rdata(gp_rdata), .gp_rid(gp_rid), .gp_rresp(gp_rresp), .gp_rlast(gp_rlast),
         .gp_rvalid(gp_rvalid), .gp_rready(gp_rready), .irq(irq), .busy(busy),
         .clk_m(clk_m), .rst_m(!rst_m_sync[1]), .mmcm_locked(mmcm_locked),
-        .hp_araddr(hp_araddr), .hp_arlen(hp_arlen), .hp_arvalid(hp_arvalid),
+        .hp_araddr(hp_araddr), .hp_arlen(hp_arlen), .hp_arid(hp_arid), .hp_arvalid(hp_arvalid),
         .hp_arready(hp_arready), .hp_rdata(hp_rdata), .hp_rresp(hp_rresp),
-        .hp_rlast(hp_rlast), .hp_rvalid(hp_rvalid), .hp_rready(hp_rready),
-        .hp_awaddr(hp_awaddr), .hp_awlen(hp_awlen), .hp_awvalid(hp_awvalid),
-        .hp_awready(hp_awready), .hp_wdata(hp_wdata), .hp_wlast(hp_wlast),
-        .hp_wvalid(hp_wvalid), .hp_wready(hp_wready), .hp_bresp(hp_bresp),
+        .hp_rlast(hp_rlast), .hp_rid(hp_rid), .hp_rvalid(hp_rvalid), .hp_rready(hp_rready),
+        .hp_awaddr(hp_awaddr), .hp_awlen(hp_awlen), .hp_awid(hp_awid), .hp_awvalid(hp_awvalid),
+        .hp_awready(hp_awready), .hp_wdata(hp_wdata), .hp_wlast(hp_wlast), .hp_wid(hp_wid),
+        .hp_wvalid(hp_wvalid), .hp_wready(hp_wready), .hp_bresp(hp_bresp), .hp_bid(hp_bid),
         .hp_bvalid(hp_bvalid), .hp_bready(hp_bready)
     );
 

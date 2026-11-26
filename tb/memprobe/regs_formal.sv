@@ -27,7 +27,7 @@ module regs_formal (
     input logic [31:0] wdata, ext_data,
     input logic        mmcm_locked, ack_toggle, run_resp_err, run_data_err, run_hist_drop
 );
-    localparam FETCH = 3;
+    localparam FETCH = 5;
 
     logic init = 1'b1;
     always_ff @(posedge clk) init <= 1'b0;
@@ -40,6 +40,10 @@ module regs_formal (
     logic [31:0] rdata;
     logic [19:0] ext_addr;
     logic [2:0]  cfg_op;
+    logic [1:0]  cfg_pattern, cfg_size, cfg_rd_port, cfg_wr_port;
+    logic        cfg_verify, cfg_order_reverse;
+    logic [4:0]  cfg_outstanding;
+    logic [15:0] cfg_read_share;
     logic [3:0]  cfg_len;
     logic [23:0] cfg_base;
     logic [4:0]  cfg_span_log2;
@@ -57,7 +61,10 @@ module regs_formal (
         .mmcm_locked(mmcm_locked), .cmd_toggle(cmd_toggle), .cmd_clear(cmd_clear), .stop(stop),
         .ack_toggle(ack_toggle), .run_resp_err(run_resp_err), .run_data_err(run_data_err),
         .run_hist_drop(run_hist_drop), .busy(busy),
-        .cfg_op(cfg_op), .cfg_len(cfg_len), .cfg_base(cfg_base), .cfg_span_log2(cfg_span_log2),
+        .cfg_op(cfg_op), .cfg_pattern(cfg_pattern), .cfg_len(cfg_len), .cfg_size(cfg_size),
+        .cfg_rd_port(cfg_rd_port), .cfg_wr_port(cfg_wr_port), .cfg_verify(cfg_verify),
+        .cfg_order_reverse(cfg_order_reverse), .cfg_outstanding(cfg_outstanding),
+        .cfg_read_share(cfg_read_share), .cfg_base(cfg_base), .cfg_span_log2(cfg_span_log2),
         .cfg_count(cfg_count), .cfg_gap(cfg_gap), .cfg_seed(cfg_seed)
     );
 
@@ -76,7 +83,7 @@ module regs_formal (
     logic        rd_act, wr_act, w_end;
     logic [3:0]  r_len, r_beat, w_len, w_beat;
     logic [11:0] r_id, w_id;
-    logic [3:0]  r_wait;     // cycles without an R beat during a read
+    logic [3:0]  r_wait;     // cycles without an R beat during a read (at most FETCH)
     logic [1:0]  b_wait;     // cycles without B after WLAST
     always_ff @(posedge clk)
         if (rst) begin
@@ -128,7 +135,11 @@ module regs_formal (
                 assert(rvalid && rdata == $past(rdata) && rlast == $past(rlast) && rid == $past(rid));
             if ($past(bvalid && !bready)) assert(bvalid && bid == $past(bid));
             if ($past(busy) && busy)
-                assert(cfg_op == $past(cfg_op) && cfg_len == $past(cfg_len)
+                assert(cfg_op == $past(cfg_op) && cfg_len == $past(cfg_len) && cfg_pattern == $past(cfg_pattern)
+                       && cfg_size == $past(cfg_size) && cfg_rd_port == $past(cfg_rd_port)
+                       && cfg_wr_port == $past(cfg_wr_port) && cfg_verify == $past(cfg_verify)
+                       && cfg_order_reverse == $past(cfg_order_reverse)
+                       && cfg_outstanding == $past(cfg_outstanding) && cfg_read_share == $past(cfg_read_share)
                        && cfg_base == $past(cfg_base) && cfg_span_log2 == $past(cfg_span_log2)
                        && cfg_count == $past(cfg_count) && cfg_gap == $past(cfg_gap)
                        && cfg_seed == $past(cfg_seed) && cmd_clear == $past(cmd_clear));

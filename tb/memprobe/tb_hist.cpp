@@ -1,16 +1,19 @@
 // Verilator testbench of memprobe_hist (rtl/memprobe/memprobe_hist.sv): one
-// latency histogram with its FIFO, statistics and read port.
+// latency histogram with its banks, FIFOs, statistics and read port. The
+// Makefile builds it with 4 banks (the design) and with 1 bank, so that a
+// sample in each cycle also fills a FIFO.
 //
 // The expected values come from a model in this file:
 //   - At one sample in 4 cycles or less, the FIFO never fills: each bin must
 //     be exact.
-//   - At one sample per cycle the FIFO fills: the statistics (MIN, MAX, SUM)
-//     must still be exact, each bin must be at most the model value, and the
-//     missing samples must be equal to the drop counter and the drop pulses.
+//   - At one sample per cycle: with 4 banks, each bin must be exact. With 1
+//     bank the FIFO fills: the statistics (MIN, MAX, SUM) must still be exact,
+//     each bin must be at most the model value, and the missing samples must be
+//     equal to the drop counter and the drop pulses.
 //   - CLEAR sets everything to 0 (MIN to 0xFFFFFFFF).
 // The read port has its own clock.
 //
-// Usage: tb_hist [--seed N]
+// Usage: tb_hist --banks N [--seed N]   (N: the BANKS_LOG2 of the build, as 2^N)
 
 #include <cstdint>
 #include <cstdio>
@@ -103,12 +106,15 @@ struct Tb {
         for (int i = 0; i < 5000 && d->busy; i++) tick();
         CHECK(!d->busy, "busy does not end");
     }
+    // rd_data is three cycles of rd_clk after rd_addr.
     uint32_t read_bin(unsigned b) {
         d->rd_addr = b;
-        d->rd_clk = 1;
-        d->eval();
-        d->rd_clk = 0;
-        d->eval();
+        for (int i = 0; i < 3; i++) {
+            d->rd_clk = 1;
+            d->eval();
+            d->rd_clk = 0;
+            d->eval();
+        }
         return d->rd_data;
     }
     void check_stats() {
@@ -149,10 +155,13 @@ struct Tb {
 
 int main(int argc, char** argv) {
     uint64_t seed = 1;
+    unsigned banks = 0;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 0);
-        else { std::fprintf(stderr, "usage: tb_hist [--seed N]\n"); return 2; }
+        else if (!std::strcmp(argv[i], "--banks") && i + 1 < argc) banks = unsigned(std::strtoul(argv[++i], nullptr, 0));
+        else { std::fprintf(stderr, "usage: tb_hist --banks N [--seed N]\n"); return 2; }
     }
+    if (banks != 1 && banks != 4) { std::fprintf(stderr, "--banks must be 1 or 4\n"); return 2; }
     Tb t(seed);
 
     g_step = "reset";
@@ -193,8 +202,12 @@ int main(int argc, char** argv) {
         for (unsigned k = t.rng.below(40); k > 0; k--) t.cycle(false);
     }
     t.wait_idle();
-    CHECK(t.d->drops > 0, "no drop at one sample each cycle");
-    t.check_with_drops();
+    if (banks == 4) {
+        t.check_exact();
+    } else {
+        CHECK(t.d->drops > 0, "no drop at one sample each cycle");
+        t.check_with_drops();
+    }
 
     g_step = "clear after drops";
     t.clear();
@@ -203,6 +216,6 @@ int main(int argc, char** argv) {
         std::printf("seed %llu: %d failures\n", (unsigned long long)seed, g_failures);
         return 1;
     }
-    std::printf("seed %llu: pass\n", (unsigned long long)seed);
+    std::printf("seed %llu, %u banks: pass\n", (unsigned long long)seed, banks);
     return 0;
 }

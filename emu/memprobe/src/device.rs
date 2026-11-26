@@ -1,5 +1,5 @@
 //! The memory path test design (rtl/memprobe) through its register window.
-//! The register map is the block memprobe of spec/regmap.toml.
+//! The register map is the block memprobe of spec/regmap.toml (version 2).
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -41,11 +41,13 @@ impl From<BoardError> for Error {
 pub struct Caps {
     pub clk_mhz: u32,
     pub max_outstanding: u32,
-    pub hp1: bool,
+    /// Bit n: a master on S_AXI_HPn.
+    pub ports: u32,
     pub size32: bool,
     pub mixed: bool,
     pub order: bool,
     pub patterns: bool,
+    pub verify: bool,
 }
 
 impl Caps {
@@ -53,11 +55,12 @@ impl Caps {
         Caps {
             clk_mhz: mp::caps::CLK_MHZ.get(v),
             max_outstanding: mp::caps::MAX_OUTSTANDING.get(v),
-            hp1: mp::caps::HP1.get(v) != 0,
+            ports: mp::caps::PORTS.get(v),
             size32: mp::caps::SIZE32.get(v) != 0,
             mixed: mp::caps::MIXED.get(v) != 0,
             order: mp::caps::ORDER.get(v) != 0,
             patterns: mp::caps::PATTERNS.get(v) != 0,
+            verify: mp::caps::VERIFY.get(v) != 0,
         }
     }
 }
@@ -67,15 +70,19 @@ impl Caps {
 pub enum Op {
     Read,
     Write,
+    Mixed,
     Fill,
     Check,
 }
 
 impl Op {
+    const ALL: [Op; 5] = [Op::Read, Op::Write, Op::Mixed, Op::Fill, Op::Check];
+
     fn value(self) -> u32 {
         match self {
             Op::Read => mp::mode::op::READ,
             Op::Write => mp::mode::op::WRITE,
+            Op::Mixed => mp::mode::op::MIXED,
             Op::Fill => mp::mode::op::FILL,
             Op::Check => mp::mode::op::CHECK,
         }
@@ -85,15 +92,46 @@ impl Op {
         match self {
             Op::Read => "read",
             Op::Write => "write",
+            Op::Mixed => "mixed",
             Op::Fill => "fill",
             Op::Check => "check",
         }
     }
 
     pub fn parse(s: &str) -> Option<Op> {
-        [Op::Read, Op::Write, Op::Fill, Op::Check]
-            .into_iter()
-            .find(|o| o.name() == s)
+        Op::ALL.into_iter().find(|o| o.name() == s)
+    }
+}
+
+/// Address sequence of a run (MODE.PATTERN).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pattern {
+    Seq,
+    Random,
+    Fixed,
+}
+
+impl Pattern {
+    const ALL: [Pattern; 3] = [Pattern::Seq, Pattern::Random, Pattern::Fixed];
+
+    fn value(self) -> u32 {
+        match self {
+            Pattern::Seq => mp::mode::pattern::SEQ,
+            Pattern::Random => mp::mode::pattern::RANDOM,
+            Pattern::Fixed => mp::mode::pattern::FIXED,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Pattern::Seq => "seq",
+            Pattern::Random => "random",
+            Pattern::Fixed => "fixed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Pattern> {
+        Pattern::ALL.into_iter().find(|p| p.name() == s)
     }
 }
 
@@ -102,6 +140,13 @@ impl Op {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunConfig {
     pub op: Op,
+    pub pattern: Pattern,
+    /// Transactions in progress at most.
+    pub outstanding: u32,
+    /// MIXED: share of reads in units of 1/65536.
+    pub read_share: u32,
+    /// READ and MIXED compare the data with the pattern of `seed`.
+    pub verify: bool,
     /// Beats in each burst: 1, 2, 4, 8 or 16.
     pub beats: u32,
     pub base: u32,
@@ -112,7 +157,25 @@ pub struct RunConfig {
 }
 
 impl RunConfig {
-    /// The value of MODE: sequential addresses, 64-bit beats, HP0.
+    /// A run of `op` with sequential addresses, one transaction in progress,
+    /// and no check of reads.
+    pub fn simple(op: Op, beats: u32, span_log2: u32, count: u32, gap: u32, seed: u32) -> Self {
+        RunConfig {
+            op,
+            pattern: Pattern::Seq,
+            outstanding: 1,
+            read_share: 0x8000,
+            verify: false,
+            beats,
+            base: 0,
+            span_log2,
+            count,
+            gap,
+            seed,
+        }
+    }
+
+    /// The value of MODE: 64-bit beats, HP0.
     pub fn mode(&self) -> Result<u32, Error> {
         let len = self.beats.wrapping_sub(1);
         if !matches!(self.beats, 1 | 2 | 4 | 8 | 16) {
@@ -127,11 +190,12 @@ impl RunConfig {
         };
         let mut m = 0;
         m = put(m, mp::mode::OP, self.op.value())?;
-        m = put(m, mp::mode::PATTERN, mp::mode::pattern::SEQ)?;
+        m = put(m, mp::mode::PATTERN, self.pattern.value())?;
         m = put(m, mp::mode::LEN, len)?;
         m = put(m, mp::mode::SIZE, mp::mode::size::B8)?;
         m = put(m, mp::mode::RD_PORT, mp::mode::rd_port::HP0)?;
         m = put(m, mp::mode::WR_PORT, mp::mode::wr_port::HP0)?;
+        m = put(m, mp::mode::VERIFY, u32::from(self.verify))?;
         Ok(m)
     }
 
@@ -139,7 +203,7 @@ impl RunConfig {
     pub fn transactions(&self) -> u64 {
         match self.op {
             Op::Fill | Op::Check => (1u64 << self.span_log2) / (u64::from(self.beats) * 8),
-            Op::Read | Op::Write => u64::from(self.count),
+            Op::Read | Op::Write | Op::Mixed => u64::from(self.count),
         }
     }
 }
@@ -279,19 +343,23 @@ impl Memprobe {
         Ok(())
     }
 
+    /// Refuse a configuration that CAPS of the bitstream does not allow.
+    pub fn supports(&self, cfg: &RunConfig) -> Result<(), Error> {
+        check_caps(&self.caps, cfg)
+    }
+
     /// One run. The caller makes a barrier after its own writes to the
     /// region (plio::mmio::barrier), before this call.
     pub fn run(&self, cfg: &RunConfig, timeout: Duration) -> Result<RunStatus, Error> {
         let mode = cfg.mode()?;
-        if self.caps.max_outstanding < 1 {
-            return Err(Error::Unsupported("CAPS.MAX_OUTSTANDING is 0".into()));
-        }
+        self.supports(cfg)?;
         self.wr(mp::MODE, mode);
         self.wr(mp::BASE, cfg.base);
         self.wr(mp::SPAN_LOG2, cfg.span_log2);
         self.wr(mp::COUNT, cfg.count);
         self.wr(mp::GAP, cfg.gap);
-        self.wr(mp::OUTSTANDING, 1);
+        self.wr(mp::OUTSTANDING, cfg.outstanding);
+        self.wr(mp::READ_SHARE, cfg.read_share);
         self.wr(mp::SEED, cfg.seed);
         if self.rd(mp::MODE) != mode {
             return Err(Error::Device("MODE does not keep the value".into()));
@@ -376,27 +444,53 @@ impl Memprobe {
     }
 }
 
+/// The check of [`Memprobe::supports`], without the hardware.
+pub fn check_caps(c: &Caps, cfg: &RunConfig) -> Result<(), Error> {
+    if cfg.outstanding < 1 || cfg.outstanding > c.max_outstanding {
+        return Err(Error::Unsupported(format!(
+            "{} transactions in progress; CAPS.MAX_OUTSTANDING is {}",
+            cfg.outstanding, c.max_outstanding
+        )));
+    }
+    if cfg.op == Op::Mixed && !c.mixed {
+        return Err(Error::Unsupported("MIXED".into()));
+    }
+    if cfg.pattern != Pattern::Seq && !c.patterns {
+        return Err(Error::Unsupported(format!(
+            "pattern {}",
+            cfg.pattern.name()
+        )));
+    }
+    if cfg.verify && !c.verify {
+        return Err(Error::Unsupported("VERIFY".into()));
+    }
+    if c.ports & 1 == 0 {
+        return Err(Error::Unsupported("HP0".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // The expected MODE values come from the field table of docs/regmap.md,
-    // computed by hand: OP in bits 2:0, LEN in 11:8, SIZE in 13:12.
+    // computed by hand: OP in bits 2:0, PATTERN 5:4, LEN 11:8, SIZE 13:12,
+    // VERIFY 20.
     #[test]
     fn mode_values() {
-        let mut c = RunConfig {
-            op: Op::Read,
-            beats: 16,
-            base: 0,
-            span_log2: 22,
-            count: 1,
-            gap: 0,
-            seed: 1,
-        };
+        let mut c = RunConfig::simple(Op::Read, 16, 22, 1, 0, 1);
         assert_eq!(c.mode().unwrap(), 0x0000_3F00);
         c.op = Op::Check;
         c.beats = 1;
         assert_eq!(c.mode().unwrap(), 0x0000_3005);
+        let m = RunConfig {
+            op: Op::Mixed,
+            pattern: Pattern::Random,
+            verify: true,
+            ..c
+        };
+        assert_eq!(m.mode().unwrap(), 0x0010_3012);
         c.beats = 3;
         assert!(c.mode().is_err());
         c.beats = 0;
@@ -405,28 +499,77 @@ mod tests {
 
     #[test]
     fn transactions() {
-        let c = RunConfig {
-            op: Op::Fill,
-            beats: 16,
-            base: 0,
-            span_log2: 22,
-            count: 5,
-            gap: 0,
-            seed: 1,
-        };
+        let c = RunConfig::simple(Op::Fill, 16, 22, 5, 0, 1);
         assert_eq!(c.transactions(), (4 << 20) / 128);
-        let r = RunConfig { op: Op::Read, ..c };
+        let r = RunConfig { op: Op::Mixed, ..c };
         assert_eq!(r.transactions(), 5);
     }
 
     #[test]
     fn caps_fields() {
-        // CLK_MHZ 7:0, MAX_OUTSTANDING 12:8, HP1 16 (docs/regmap.md).
-        let c = Caps::from_reg(0x0001_0196);
+        // CLK_MHZ 7:0, MAX_OUTSTANDING 12:8, MIXED 18, PATTERNS 20, VERIFY 21,
+        // PORTS 27:24 (docs/regmap.md).
+        let c = Caps::from_reg(0x0134_1096);
         assert_eq!(c.clk_mhz, 150);
-        assert_eq!(c.max_outstanding, 1);
-        assert!(c.hp1 && !c.size32 && !c.mixed);
-        assert_eq!(Op::parse("check"), Some(Op::Check));
+        assert_eq!(c.max_outstanding, 16);
+        assert_eq!(c.ports, 1);
+        assert!(c.mixed && c.patterns && c.verify && !c.size32 && !c.order);
+        assert_eq!(Op::parse("mixed"), Some(Op::Mixed));
         assert_eq!(Op::parse("x"), None);
+        assert_eq!(Pattern::parse("random"), Some(Pattern::Random));
+    }
+
+    #[test]
+    fn caps_refuse() {
+        let m1 = Caps::from_reg(0x0100_0164); // the M1 bitstream: 100 MHz, 1 in progress, HP0
+        let v2 = Caps::from_reg(0x0134_1064);
+        let simple = RunConfig::simple(Op::Read, 1, 22, 10, 0, 1);
+        assert!(check_caps(&m1, &simple).is_ok());
+        let many = RunConfig {
+            outstanding: 8,
+            ..simple
+        };
+        assert!(check_caps(&m1, &many).is_err());
+        assert!(check_caps(&v2, &many).is_ok());
+        assert!(
+            check_caps(
+                &v2,
+                &RunConfig {
+                    outstanding: 17,
+                    ..simple
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            check_caps(
+                &m1,
+                &RunConfig {
+                    op: Op::Mixed,
+                    ..simple
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            check_caps(
+                &m1,
+                &RunConfig {
+                    pattern: Pattern::Random,
+                    ..simple
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            check_caps(
+                &m1,
+                &RunConfig {
+                    verify: true,
+                    ..simple
+                }
+            )
+            .is_err()
+        );
     }
 }

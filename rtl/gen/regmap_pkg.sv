@@ -6,13 +6,14 @@
 package memprobe_regmap_pkg;
   localparam [31:0] WINDOW_BYTES = 32'h00100000;
   localparam [31:0] ID_VALUE = 32'h4D505242;
-  localparam [31:0] VERSION_VALUE = 32'h00000001;
+  localparam [31:0] VERSION_VALUE = 32'h00000002;
   // The reserved region of the board interface: docs/pl-interface.md of https://github.com/NeoChen1024/PYNQ-Z2, tag pl-interface-v1.
   localparam [31:0] HP_BASE = 32'h1F000000;
   localparam [31:0] HP_SIZE = 32'h01000000;
   localparam [31:0] HP_SIZE_LOG2 = 32'd24;
-  // Latency: A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency.
-  // Data pattern: FILL writes this data and CHECK expects it. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values.
+  // Latency: A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency. Each transaction has its own start, the address handshake of its ID. The design sends the W beats in the order of the AW, from the cycle in which it sets AWVALID. Thus WR_RESP includes the time in which the W beats of a write wait for the W beats of earlier writes.
+  // Transactions in progress: A transaction is in progress from the cycle in which the design sets its ARVALID or AWVALID to the cycle of its RLAST or B handshake. Reads and writes count together. Each transaction in progress has an AXI ID that no other transaction in progress has. The R beats of different IDs can come in any order (AXI3).
+  // Data pattern: FILL, WRITE and MIXED write this data. CHECK expects it; READ and MIXED expect it if MODE.VERIFY is 1. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values. ORDER does not use this pattern: its write number n, from 0, writes SEED ^ n in bits 31:0 and SEED ^ ~n in bits 63:32.
 
   // ID (ro): Constant. Identifies the design. Read it before any other register.
   localparam [31:0] ID_OFFSET = 32'h00000000;
@@ -21,7 +22,7 @@ package memprobe_regmap_pkg;
 
   // VERSION (ro): Version of this register map.
   localparam [31:0] VERSION_OFFSET = 32'h00000004;
-  localparam [31:0] VERSION_RESET = 32'h00000001;
+  localparam [31:0] VERSION_RESET = 32'h00000002;
   localparam [31:0] VERSION_MASK = 32'hFFFFFFFF;
 
   // BUILD (ro): The first 32 bits of the git commit of the build. The Vivado script sets it.
@@ -32,16 +33,13 @@ package memprobe_regmap_pkg;
   // CAPS (ro): The features that this bitstream contains.
   localparam [31:0] CAPS_OFFSET = 32'h0000000C;
   localparam [31:0] CAPS_RESET = 32'h00000000;
-  localparam [31:0] CAPS_MASK = 32'h001F1FFF;
+  localparam [31:0] CAPS_MASK = 32'h0F3E1FFF;
   localparam [31:0] CAPS_CLK_MHZ_LSB = 32'd0;
   localparam [31:0] CAPS_CLK_MHZ_WIDTH = 32'd8;
   localparam [31:0] CAPS_CLK_MHZ_MASK = 32'h000000FF;
   localparam [31:0] CAPS_MAX_OUTSTANDING_LSB = 32'd8;
   localparam [31:0] CAPS_MAX_OUTSTANDING_WIDTH = 32'd5;
   localparam [31:0] CAPS_MAX_OUTSTANDING_MASK = 32'h00001F00;
-  localparam [31:0] CAPS_HP1_LSB = 32'd16;
-  localparam [31:0] CAPS_HP1_WIDTH = 32'd1;
-  localparam [31:0] CAPS_HP1_MASK = 32'h00010000;
   localparam [31:0] CAPS_SIZE32_LSB = 32'd17;
   localparam [31:0] CAPS_SIZE32_WIDTH = 32'd1;
   localparam [31:0] CAPS_SIZE32_MASK = 32'h00020000;
@@ -54,6 +52,12 @@ package memprobe_regmap_pkg;
   localparam [31:0] CAPS_PATTERNS_LSB = 32'd20;
   localparam [31:0] CAPS_PATTERNS_WIDTH = 32'd1;
   localparam [31:0] CAPS_PATTERNS_MASK = 32'h00100000;
+  localparam [31:0] CAPS_VERIFY_LSB = 32'd21;
+  localparam [31:0] CAPS_VERIFY_WIDTH = 32'd1;
+  localparam [31:0] CAPS_VERIFY_MASK = 32'h00200000;
+  localparam [31:0] CAPS_PORTS_LSB = 32'd24;
+  localparam [31:0] CAPS_PORTS_WIDTH = 32'd4;
+  localparam [31:0] CAPS_PORTS_MASK = 32'h0F000000;
 
   // CTRL (wo): Commands. A write with more than one bit set does nothing and sets STATUS.CFG_ERR.
   localparam [31:0] CTRL_OFFSET = 32'h00000010;
@@ -106,7 +110,7 @@ package memprobe_regmap_pkg;
   // MODE (rw): Type of the run.
   localparam [31:0] MODE_OFFSET = 32'h00000020;
   localparam [31:0] MODE_RESET = 32'h00003F00;
-  localparam [31:0] MODE_MASK = 32'h00033F37;
+  localparam [31:0] MODE_MASK = 32'h003F3F37;
   localparam [31:0] MODE_OP_LSB = 32'd0;
   localparam [31:0] MODE_OP_WIDTH = 32'd3;
   localparam [31:0] MODE_OP_MASK = 32'h00000007;
@@ -131,15 +135,25 @@ package memprobe_regmap_pkg;
   localparam [1:0] MODE_SIZE_B4 = 2'd2;
   localparam [1:0] MODE_SIZE_B8 = 2'd3;
   localparam [31:0] MODE_RD_PORT_LSB = 32'd16;
-  localparam [31:0] MODE_RD_PORT_WIDTH = 32'd1;
-  localparam [31:0] MODE_RD_PORT_MASK = 32'h00010000;
-  localparam [0:0] MODE_RD_PORT_HP0 = 1'd0;
-  localparam [0:0] MODE_RD_PORT_HP1 = 1'd1;
-  localparam [31:0] MODE_WR_PORT_LSB = 32'd17;
-  localparam [31:0] MODE_WR_PORT_WIDTH = 32'd1;
-  localparam [31:0] MODE_WR_PORT_MASK = 32'h00020000;
-  localparam [0:0] MODE_WR_PORT_HP0 = 1'd0;
-  localparam [0:0] MODE_WR_PORT_HP1 = 1'd1;
+  localparam [31:0] MODE_RD_PORT_WIDTH = 32'd2;
+  localparam [31:0] MODE_RD_PORT_MASK = 32'h00030000;
+  localparam [1:0] MODE_RD_PORT_HP0 = 2'd0;
+  localparam [1:0] MODE_RD_PORT_HP1 = 2'd1;
+  localparam [1:0] MODE_RD_PORT_HP2 = 2'd2;
+  localparam [1:0] MODE_RD_PORT_HP3 = 2'd3;
+  localparam [31:0] MODE_WR_PORT_LSB = 32'd18;
+  localparam [31:0] MODE_WR_PORT_WIDTH = 32'd2;
+  localparam [31:0] MODE_WR_PORT_MASK = 32'h000C0000;
+  localparam [1:0] MODE_WR_PORT_HP0 = 2'd0;
+  localparam [1:0] MODE_WR_PORT_HP1 = 2'd1;
+  localparam [1:0] MODE_WR_PORT_HP2 = 2'd2;
+  localparam [1:0] MODE_WR_PORT_HP3 = 2'd3;
+  localparam [31:0] MODE_VERIFY_LSB = 32'd20;
+  localparam [31:0] MODE_VERIFY_WIDTH = 32'd1;
+  localparam [31:0] MODE_VERIFY_MASK = 32'h00100000;
+  localparam [31:0] MODE_ORDER_REVERSE_LSB = 32'd21;
+  localparam [31:0] MODE_ORDER_REVERSE_WIDTH = 32'd1;
+  localparam [31:0] MODE_ORDER_REVERSE_MASK = 32'h00200000;
 
   // BASE (rw): Start of the span, in bytes from the start of the HP memory of the block. A multiple of the span. The bus address is the base of the HP memory plus this offset.
   localparam [31:0] BASE_OFFSET = 32'h00000024;
@@ -154,12 +168,12 @@ package memprobe_regmap_pkg;
   localparam [31:0] SPAN_LOG2_VALUE_WIDTH = 32'd5;
   localparam [31:0] SPAN_LOG2_VALUE_MASK = 32'h0000001F;
 
-  // COUNT (rw): Transactions in the run. In FILL and CHECK mode, the run covers the span once and ignores COUNT.
+  // COUNT (rw): Bursts of a READ, WRITE or MIXED run; iterations of an ORDER run. FILL and CHECK cover the span once and ignore COUNT.
   localparam [31:0] COUNT_OFFSET = 32'h0000002C;
   localparam [31:0] COUNT_RESET = 32'h00000001;
   localparam [31:0] COUNT_MASK = 32'hFFFFFFFF;
 
-  // GAP (rw): Minimum number of clk_m cycles from one address handshake to the next issue.
+  // GAP (rw): Without ORDER: the minimum number of clk_m cycles from an address handshake (AR or AW) to the next ARVALID or AWVALID. ORDER: the number of cycles from the WLAST handshake of the write to the ARVALID of its read (with ORDER_REVERSE: from the AR handshake of the read to the AWVALID of its write); 0 sets the VALID in the next cycle. All beats of an ORDER write and read carry the value of the iteration.
   localparam [31:0] GAP_OFFSET = 32'h00000030;
   localparam [31:0] GAP_RESET = 32'h00000000;
   localparam [31:0] GAP_MASK = 32'h0000FFFF;
@@ -167,7 +181,7 @@ package memprobe_regmap_pkg;
   localparam [31:0] GAP_CYCLES_WIDTH = 32'd16;
   localparam [31:0] GAP_CYCLES_MASK = 32'h0000FFFF;
 
-  // OUTSTANDING (rw): Maximum number of transactions in progress. From 1 to CAPS.MAX_OUTSTANDING.
+  // OUTSTANDING (rw): Maximum number of transactions in progress (note "Transactions in progress"), reads and writes together. From 1 to CAPS.MAX_OUTSTANDING. ORDER ignores it: one iteration at a time.
   localparam [31:0] OUTSTANDING_OFFSET = 32'h00000034;
   localparam [31:0] OUTSTANDING_RESET = 32'h00000001;
   localparam [31:0] OUTSTANDING_MASK = 32'h0000001F;
@@ -218,7 +232,7 @@ package memprobe_regmap_pkg;
   localparam [31:0] WRITES_HI_RESET = 32'h00000000;
   localparam [31:0] WRITES_HI_MASK = 32'hFFFFFFFF;
 
-  // STALLS_LO (ro): Cycles in which a transaction was ready to issue but the limit of OUTSTANDING or AxREADY stopped it, bits 31:0.
+  // STALLS_LO (ro): Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0.
   localparam [31:0] STALLS_LO_OFFSET = 32'h00000098;
   localparam [31:0] STALLS_LO_RESET = 32'h00000000;
   localparam [31:0] STALLS_LO_MASK = 32'hFFFFFFFF;
@@ -233,7 +247,7 @@ package memprobe_regmap_pkg;
   localparam [31:0] DATA_ERRORS_RESET = 32'h00000000;
   localparam [31:0] DATA_ERRORS_MASK = 32'hFFFFFFFF;
 
-  // FIRST_ERR_ADDR (ro): Byte offset in the HP memory of the first word that is not the expected value.
+  // FIRST_ERR_ADDR (ro): Byte offset in the HP memory of the first word that is not the expected value, in the order of the R handshakes.
   localparam [31:0] FIRST_ERR_ADDR_OFFSET = 32'h000000A4;
   localparam [31:0] FIRST_ERR_ADDR_RESET = 32'h00000000;
   localparam [31:0] FIRST_ERR_ADDR_MASK = 32'hFFFFFFFF;
@@ -248,7 +262,7 @@ package memprobe_regmap_pkg;
   localparam [31:0] FIRST_ERR_DATA_HI_RESET = 32'h00000000;
   localparam [31:0] FIRST_ERR_DATA_HI_MASK = 32'hFFFFFFFF;
 
-  // ORDER_MISMATCHES (ro): In ORDER mode: reads that gave the value from before the write that preceded them.
+  // ORDER_MISMATCHES (ro): ORDER: reads with a beat that is not the value of their iteration (note "Data pattern"). Stops at 0xFFFFFFFF.
   localparam [31:0] ORDER_MISMATCHES_OFFSET = 32'h000000B0;
   localparam [31:0] ORDER_MISMATCHES_RESET = 32'h00000000;
   localparam [31:0] ORDER_MISMATCHES_MASK = 32'hFFFFFFFF;

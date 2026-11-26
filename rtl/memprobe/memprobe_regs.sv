@@ -24,12 +24,13 @@ module memprobe_regs #(
     parameter [31:0] BUILD           = 32'h0,
     parameter        CLK_MHZ         = 100,
     parameter        MAX_OUTSTANDING = 1,
-    parameter        CAP_HP1         = 0,
+    parameter [3:0]  CAP_PORTS       = 4'b0001,
     parameter        CAP_SIZE32      = 0,
     parameter        CAP_MIXED       = 0,
     parameter        CAP_ORDER       = 0,
     parameter        CAP_PATTERNS    = 0,
-    parameter        FETCH           = 3,
+    parameter        CAP_VERIFY      = 0,
+    parameter        FETCH           = 5,
     parameter        OFF_W           = HP_SIZE_LOG2
 ) (
     input  logic        clk,
@@ -79,7 +80,15 @@ module memprobe_regs #(
     output logic        busy,
 
     output logic [2:0]       cfg_op,
+    output logic [1:0]       cfg_pattern,
     output logic [3:0]       cfg_len,
+    output logic [1:0]       cfg_size,
+    output logic [1:0]       cfg_rd_port,
+    output logic [1:0]       cfg_wr_port,
+    output logic             cfg_verify,
+    output logic             cfg_order_reverse,
+    output logic [4:0]       cfg_outstanding,
+    output logic [15:0]      cfg_read_share,
     output logic [OFF_W-1:0] cfg_base,
     output logic [4:0]       cfg_span_log2,
     output logic [31:0]      cfg_count,
@@ -94,7 +103,8 @@ module memprobe_regs #(
 
     localparam [31:0] CAPS = (32'(CLK_MHZ)         << CAPS_CLK_MHZ_LSB)
                            | (32'(MAX_OUTSTANDING) << CAPS_MAX_OUTSTANDING_LSB)
-                           | (32'(CAP_HP1)         << CAPS_HP1_LSB)
+                           | (32'(CAP_PORTS)       << CAPS_PORTS_LSB)
+                           | (32'(CAP_VERIFY)      << CAPS_VERIFY_LSB)
                            | (32'(CAP_SIZE32)      << CAPS_SIZE32_LSB)
                            | (32'(CAP_MIXED)       << CAPS_MIXED_LSB)
                            | (32'(CAP_ORDER)       << CAPS_ORDER_LSB)
@@ -115,31 +125,45 @@ module memprobe_regs #(
     wire [1:0] m_pat  = 2'(mode >> MODE_PATTERN_LSB);
     wire [3:0] m_len  = 4'(mode >> MODE_LEN_LSB);
     wire [1:0] m_size = 2'(mode >> MODE_SIZE_LSB);
-    wire       m_rdp  = mode[MODE_RD_PORT_LSB];
-    wire       m_wrp  = mode[MODE_WR_PORT_LSB];
+    wire [1:0] m_rdp  = 2'(mode >> MODE_RD_PORT_LSB);
+    wire [1:0] m_wrp  = 2'(mode >> MODE_WR_PORT_LSB);
+    wire       m_ver  = mode[MODE_VERIFY_LSB];
+    wire       m_rev  = mode[MODE_ORDER_REVERSE_LSB];
     wire [4:0] m_span = 5'(span_log2);
 
     wire op_ok = (m_op == MODE_OP_READ) || (m_op == MODE_OP_WRITE)
               || (m_op == MODE_OP_FILL) || (m_op == MODE_OP_CHECK)
               || (m_op == MODE_OP_MIXED && CAP_MIXED != 0)
               || (m_op == MODE_OP_ORDER && CAP_ORDER != 0);
+    wire whole_span = (m_op == MODE_OP_FILL) || (m_op == MODE_OP_CHECK);
     wire pat_ok = (m_pat == MODE_PATTERN_SEQ)
-               || ((m_pat == MODE_PATTERN_RANDOM || m_pat == MODE_PATTERN_FIXED) && CAP_PATTERNS != 0);
+               || ((m_pat == MODE_PATTERN_RANDOM || m_pat == MODE_PATTERN_FIXED)
+                   && CAP_PATTERNS != 0 && !whole_span);
     wire len_ok = (m_len == 4'd0) || (m_len == 4'd1) || (m_len == 4'd3)
                || (m_len == 4'd7) || (m_len == 4'd15);
     wire size_ok = (m_size == MODE_SIZE_B8) || (m_size == MODE_SIZE_B4 && CAP_SIZE32 != 0);
-    wire port_ok = (m_rdp == MODE_RD_PORT_HP0 && m_wrp == MODE_WR_PORT_HP0) || CAP_HP1 != 0;
+    wire port_ok = CAP_PORTS[m_rdp] && CAP_PORTS[m_wrp];
+    wire ver_ok  = !m_ver || CAP_VERIFY != 0;
+    wire rev_ok  = !m_rev || m_op == MODE_OP_ORDER;
     wire [5:0] burst_log2 = 6'(m_size) + 6'(m_len[0]) + 6'(m_len[1]) + 6'(m_len[2]) + 6'(m_len[3]);
     wire span_ok = (6'(m_span) >= burst_log2) && (32'(m_span) <= HP_SIZE_LOG2);
     wire [32:0] span_bytes = 33'd1 << m_span;
     wire base_ok = ((33'(base) & (span_bytes - 1'b1)) == 33'd0)
                 && (33'(base) + span_bytes <= 33'(HP_SIZE));
     wire out_ok = (outstanding >= 32'd1) && (outstanding <= 32'(MAX_OUTSTANDING));
-    wire cfg_ok = op_ok && pat_ok && len_ok && size_ok && port_ok && span_ok && base_ok && out_ok
-               && (seed != 32'd0);
+    wire cfg_ok = op_ok && pat_ok && len_ok && size_ok && port_ok && ver_ok && rev_ok && span_ok
+               && base_ok && out_ok && (seed != 32'd0);
 
     assign cfg_op        = m_op;
+    assign cfg_pattern   = m_pat;
     assign cfg_len       = m_len;
+    assign cfg_size      = m_size;
+    assign cfg_rd_port   = m_rdp;
+    assign cfg_wr_port   = m_wrp;
+    assign cfg_verify    = m_ver;
+    assign cfg_order_reverse = m_rev;
+    assign cfg_outstanding = 5'(outstanding);
+    assign cfg_read_share  = read_share[15:0];
     assign cfg_base      = base[OFF_W-1:0];
     assign cfg_span_log2 = m_span;
     assign cfg_count     = count;

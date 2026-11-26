@@ -5,8 +5,11 @@
 //!   memprobe info
 //!   memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
 //!   memprobe consistency [--words N] [--seed N]
-//!   memprobe run read|write|fill|check [--beats N] [--count N] [--gap N]
-//!                [--base N] [--span-log2 N] [--seed N]
+//!   memprobe run read|write|mixed|fill|check [RUN OPTIONS]
+//!   memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]   (B4, B5)
+//!     RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
+//!                  --outstanding N --pattern seq|random|fixed
+//!                  --read-percent P | --read-share N --verify 0|1
 //!   memprobe ps-access [--threads N] [--passes N]
 //!   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]
 //!
@@ -28,13 +31,16 @@ mod pattern;
 mod psaccess;
 mod stats;
 
-use device::{Error, Memprobe, Op, RunConfig};
+use device::{Error, Memprobe, Op, Pattern, RunConfig};
 
 const USAGE: &str = "usage:
   memprobe info
   memprobe latency read|write [--beats N] [--count N] [--gap N] [--load-threads N]
   memprobe consistency [--words N] [--seed N]
-  memprobe run read|write|fill|check [--beats N] [--count N] [--gap N] [--base N] [--span-log2 N] [--seed N]
+  memprobe run read|write|mixed|fill|check [RUN OPTIONS]
+  memprobe rate read|write|mixed [RUN OPTIONS] [--load-threads N]
+    RUN OPTIONS: --beats N --count N --gap N --base N --span-log2 N --seed N
+                 --outstanding N --pattern seq|random|fixed --read-percent P | --read-share N --verify 0|1
   memprobe ps-access [--threads N] [--passes N]
   memprobe pread [--file PATH] [--chunk N] [--bytes N] [--threads N] [--drop-caches 1]";
 
@@ -100,6 +106,69 @@ fn region_parts(threads: u32) -> Result<Vec<plio::mmio::Mapping>, String> {
                 .map_err(|e| e.to_string())
         })
         .collect()
+}
+
+/// Remove "--name value" from `args`; the value is a word.
+fn take_word(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
+    let flag = format!("--{name}");
+    match args.iter().position(|a| *a == flag) {
+        None => Ok(None),
+        Some(i) => {
+            if i + 1 >= args.len() {
+                return Err(format!("{flag} needs a value"));
+            }
+            let v = args.remove(i + 1);
+            args.remove(i);
+            Ok(Some(v))
+        }
+    }
+}
+
+/// The configuration of a run from the options, and the number of threads of
+/// the PS memory load (--load-threads).
+fn run_config(op: Op, args: &[String], beats: u32, count: u32) -> Result<(RunConfig, u32), String> {
+    let mut rest = args.to_vec();
+    let pattern = match take_word(&mut rest, "pattern")? {
+        None => Pattern::Seq,
+        Some(p) => Pattern::parse(&p)
+            .ok_or_else(|| format!("--pattern {p:?}: use seq, random or fixed"))?,
+    };
+    let o = parse_options(
+        &rest,
+        &[
+            "beats",
+            "count",
+            "gap",
+            "base",
+            "span-log2",
+            "seed",
+            "outstanding",
+            "read-share",
+            "read-percent",
+            "verify",
+            "load-threads",
+        ],
+    )?;
+    // READ_SHARE has 16 bits: 100 % gives 65535 of 65536.
+    let read_share = match o.get("read-percent") {
+        Some(&p) if p <= 100 => (p * 65536 / 100).min(65535) as u32,
+        Some(&p) => return Err(format!("--read-percent {p} is more than 100")),
+        None => opt_u32(&o, "read-share", 0x8000)?,
+    };
+    let cfg = RunConfig {
+        op,
+        pattern,
+        outstanding: opt_u32(&o, "outstanding", 1)?,
+        read_share,
+        verify: opt_u32(&o, "verify", 0)? != 0,
+        beats: opt_u32(&o, "beats", beats)?,
+        base: opt_u32(&o, "base", 0)?,
+        span_log2: opt_u32(&o, "span-log2", measure::SPAN_LOG2)?,
+        count: opt_u32(&o, "count", count)?,
+        gap: opt_u32(&o, "gap", 0)?,
+        seed: opt_u32(&o, "seed", 1)?,
+    };
+    Ok((cfg, opt_u32(&o, "load-threads", 0)?))
 }
 
 fn plain_header(what: &str, out: &mut impl Write) -> io::Result<()> {
@@ -210,20 +279,8 @@ fn run_command(args: &[String]) -> Result<(), String> {
             let op = args
                 .get(1)
                 .and_then(|s| Op::parse(s))
-                .ok_or("run needs read, write, fill or check")?;
-            let o = parse_options(
-                &args[2..],
-                &["beats", "count", "gap", "base", "span-log2", "seed"],
-            )?;
-            let cfg = RunConfig {
-                op,
-                beats: opt_u32(&o, "beats", 16)?,
-                base: opt_u32(&o, "base", 0)?,
-                span_log2: opt_u32(&o, "span-log2", measure::SPAN_LOG2)?,
-                count: opt_u32(&o, "count", 1)?,
-                gap: opt_u32(&o, "gap", 0)?,
-                seed: opt_u32(&o, "seed", 1)?,
-            };
+                .ok_or("run needs read, write, mixed, fill or check")?;
+            let (cfg, _) = run_config(op, &args[2..], 16, 1)?;
             let dev = Memprobe::open().map_err(e)?;
             dev.clear().map_err(e)?;
             let st = dev.run(&cfg, Duration::from_secs(60)).map_err(e)?;
@@ -250,6 +307,31 @@ fn run_command(args: &[String]) -> Result<(), String> {
                 r.hist_drops
             )
             .map_err(|e| e.to_string())
+        }
+        "rate" => {
+            let op = match args.get(1).map(String::as_str) {
+                Some("read") => Op::Read,
+                Some("write") => Op::Write,
+                Some("mixed") => Op::Mixed,
+                _ => return Err("rate needs read, write or mixed".into()),
+            };
+            let (cfg, threads) = run_config(op, &args[2..], 1, 100_000)?;
+            let dev = Memprobe::open().map_err(e)?;
+            let mut out = io::stdout().lock();
+            header(&dev, &mut out).map_err(|e| e.to_string())?;
+            writeln!(out, "{}", measure::RATE_HEADER).map_err(|e| e.to_string())?;
+            let load = load::Load::start(threads);
+            std::thread::sleep(Duration::from_millis(if threads > 0 { 200 } else { 0 }));
+            let result = measure::rate(&dev, &cfg, &mut out);
+            let copied = load.stop();
+            if threads > 0 {
+                writeln!(
+                    out,
+                    "# PS memory load: {threads} threads, {copied:.0} MiB/s copied"
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            result.map(|_| ()).map_err(e)
         }
         "ps-access" => {
             let o = parse_options(&args[1..], &["threads", "passes"])?;
@@ -366,7 +448,41 @@ mod tests {
     }
 
     #[test]
+    fn run_options() {
+        let (c, t) = run_config(
+            Op::Mixed,
+            &s(&[
+                "--pattern",
+                "random",
+                "--outstanding",
+                "8",
+                "--read-percent",
+                "80",
+                "--verify",
+                "1",
+            ]),
+            1,
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            (c.pattern, c.outstanding, c.read_share, c.verify, c.count, t),
+            (Pattern::Random, 8, 52428, true, 100, 0)
+        );
+        let (c, _) = run_config(Op::Read, &s(&["--read-percent", "100"]), 1, 1).unwrap();
+        assert_eq!(c.read_share, 65535);
+        assert!(run_config(Op::Read, &s(&["--pattern", "zigzag"]), 1, 1).is_err());
+        assert!(run_config(Op::Read, &s(&["--pattern"]), 1, 1).is_err());
+        assert!(run_config(Op::Read, &s(&["--read-percent", "101"]), 1, 1).is_err());
+    }
+
+    #[test]
     fn commands_without_hardware() {
+        assert!(
+            run_command(&s(&["rate", "fill"]))
+                .unwrap_err()
+                .contains("rate needs")
+        );
         assert!(run_command(&[]).is_err());
         assert!(
             run_command(&s(&["nothing"]))
@@ -379,7 +495,7 @@ mod tests {
                 .contains("read or write")
         );
         assert!(
-            run_command(&s(&["run", "mixed"]))
+            run_command(&s(&["run", "order"]))
                 .unwrap_err()
                 .contains("run needs")
         );

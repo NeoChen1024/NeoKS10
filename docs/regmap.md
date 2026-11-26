@@ -9,18 +9,20 @@ the start of the register window on M_AXI_GP0.
 
 Test design for the memory path between the PL and the PS DDR (docs/mem-path-experiment.md, Part B). A traffic generator on the HP ports, latency timers, histograms and a data checker.
 
-- ID: 0x4D505242. Version: 1.
+- ID: 0x4D505242. Version: 2.
 - Window: 0x100000 bytes.
 - HP memory: 0x1F000000, 0x1000000 bytes. The reserved region of the board interface: docs/pl-interface.md of https://github.com/NeoChen1024/PYNQ-Z2, tag pl-interface-v1.
 
-**Latency.** A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency.
+**Latency.** A latency is the number of rising edges of clk_m from the edge with the address handshake to the edge with the end handshake. If the end handshake is at the next edge, the latency is 1. RD_FIRST ends at the first R handshake of the burst. RD_LAST ends at the R handshake with RLAST. WR_RESP ends at the B handshake. W handshakes do not end a latency. Each transaction has its own start, the address handshake of its ID. The design sends the W beats in the order of the AW, from the cycle in which it sets AWVALID. Thus WR_RESP includes the time in which the W beats of a write wait for the W beats of earlier writes.
 
-**Data pattern.** FILL writes this data and CHECK expects it. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values.
+**Transactions in progress.** A transaction is in progress from the cycle in which the design sets its ARVALID or AWVALID to the cycle of its RLAST or B handshake. Reads and writes count together. Each transaction in progress has an AXI ID that no other transaction in progress has. The R beats of different IDs can come in any order (AXI3).
+
+**Data pattern.** FILL, WRITE and MIXED write this data. CHECK expects it; READ and MIXED expect it if MODE.VERIFY is 1. For the 32-bit word at byte offset a from the start of the HP memory: w = a >> 2, and the value is SEED ^ w ^ (w << 11) ^ (w << 22), modulo 2^32. A 64-bit beat at offset a has the value of a in bits 31:0 and the value of a + 4 in bits 63:32. tests/memprobe-pattern.txt has recorded values. ORDER does not use this pattern: its write number n, from 0, writes SEED ^ n in bits 31:0 and SEED ^ ~n in bits 63:32.
 
 | Offset | Name | Access | Reset | Description |
 |---|---|---|---|---|
 | 0x000 | ID | ro | 0x4D505242 | Constant. Identifies the design. Read it before any other register. |
-| 0x004 | VERSION | ro | 0x00000001 | Version of this register map. |
+| 0x004 | VERSION | ro | 0x00000002 | Version of this register map. |
 | 0x008 | BUILD | ro | 0x00000000 | The first 32 bits of the git commit of the build. The Vivado script sets it. |
 | 0x00C | CAPS | ro | 0x00000000 | The features that this bitstream contains. |
 | 0x010 | CTRL | wo | 0x00000000 | Commands. A write with more than one bit set does nothing and sets STATUS.CFG_ERR. |
@@ -29,9 +31,9 @@ Test design for the memory path between the PL and the PS DDR (docs/mem-path-exp
 | 0x020 | MODE | rw | 0x00003F00 | Type of the run. |
 | 0x024 | BASE | rw | 0x00000000 | Start of the span, in bytes from the start of the HP memory of the block. A multiple of the span. The bus address is the base of the HP memory plus this offset. |
 | 0x028 | SPAN_LOG2 | rw | 0x00000016 | The span is 2^SPAN_LOG2 bytes. BASE plus the span must not be more than the size of the HP memory. |
-| 0x02C | COUNT | rw | 0x00000001 | Transactions in the run. In FILL and CHECK mode, the run covers the span once and ignores COUNT. |
-| 0x030 | GAP | rw | 0x00000000 | Minimum number of clk_m cycles from one address handshake to the next issue. |
-| 0x034 | OUTSTANDING | rw | 0x00000001 | Maximum number of transactions in progress. From 1 to CAPS.MAX_OUTSTANDING. |
+| 0x02C | COUNT | rw | 0x00000001 | Bursts of a READ, WRITE or MIXED run; iterations of an ORDER run. FILL and CHECK cover the span once and ignore COUNT. |
+| 0x030 | GAP | rw | 0x00000000 | Without ORDER: the minimum number of clk_m cycles from an address handshake (AR or AW) to the next ARVALID or AWVALID. ORDER: the number of cycles from the WLAST handshake of the write to the ARVALID of its read (with ORDER_REVERSE: from the AR handshake of the read to the AWVALID of its write); 0 sets the VALID in the next cycle. All beats of an ORDER write and read carry the value of the iteration. |
+| 0x034 | OUTSTANDING | rw | 0x00000001 | Maximum number of transactions in progress (note "Transactions in progress"), reads and writes together. From 1 to CAPS.MAX_OUTSTANDING. ORDER ignores it: one iteration at a time. |
 | 0x038 | READ_SHARE | rw | 0x00008000 | In MIXED mode, a transaction is a read if a 16-bit LFSR value is less than this value. |
 | 0x03C | SEED | rw | 0x00000001 | Seed of the LFSRs and of the data pattern. 0 is not accepted. |
 | 0x080 | RUN_CYCLES_LO | ro | 0x00000000 | clk_m cycles from START to the end of the run, bits 31:0. |
@@ -40,13 +42,13 @@ Test design for the memory path between the PL and the PS DDR (docs/mem-path-exp
 | 0x08C | READS_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
 | 0x090 | WRITES_LO | ro | 0x00000000 | Write transactions with a response, bits 31:0. |
 | 0x094 | WRITES_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
-| 0x098 | STALLS_LO | ro | 0x00000000 | Cycles in which a transaction was ready to issue but the limit of OUTSTANDING or AxREADY stopped it, bits 31:0. |
+| 0x098 | STALLS_LO | ro | 0x00000000 | Cycles in which the next transaction of a READ, WRITE, MIXED, FILL or CHECK run could start (bursts remain, GAP is over, no ABORT) but did not: its AxVALID waited for AxREADY, or the transactions in progress were at the OUTSTANDING limit. Bits 31:0. |
 | 0x09C | STALLS_HI | ro | 0x00000000 | Bits 63:32 of the same counter. |
 | 0x0A0 | DATA_ERRORS | ro | 0x00000000 | Words that are not the expected value. Stops at 0xFFFFFFFF. |
-| 0x0A4 | FIRST_ERR_ADDR | ro | 0x00000000 | Byte offset in the HP memory of the first word that is not the expected value. |
+| 0x0A4 | FIRST_ERR_ADDR | ro | 0x00000000 | Byte offset in the HP memory of the first word that is not the expected value, in the order of the R handshakes. |
 | 0x0A8 | FIRST_ERR_DATA_LO | ro | 0x00000000 | Bits 31:0 of the data of the first word that is not the expected value. |
 | 0x0AC | FIRST_ERR_DATA_HI | ro | 0x00000000 | Bits 63:32 of the same data. 0 for 32-bit transfers. |
-| 0x0B0 | ORDER_MISMATCHES | ro | 0x00000000 | In ORDER mode: reads that gave the value from before the write that preceded them. |
+| 0x0B0 | ORDER_MISMATCHES | ro | 0x00000000 | ORDER: reads with a beat that is not the value of their iteration (note "Data pattern"). Stops at 0xFFFFFFFF. |
 | 0x0B4 | HIST_DROPS | ro | 0x00000000 | Latency samples that are not in the histograms. |
 | 0x0B8 | RESP_ERRORS | ro | 0x00000000 | Read beats and write responses with RRESP or BRESP not OKAY. |
 | 0x0C0 | FCLK_COUNT | ro | 0x00000000 | Free-running counter of FCLK_CLK0 cycles. |
@@ -73,11 +75,12 @@ Test design for the memory path between the PL and the PS DDR (docs/mem-path-exp
 |---|---|---|---|
 | 7:0 | CLK_MHZ | ro | Nominal frequency of clk_m, the clock of the HP side, in MHz. |
 | 12:8 | MAX_OUTSTANDING | ro | The largest value that OUTSTANDING accepts. |
-| 16 | HP1 | ro | 1: the design has a master on S_AXI_HP1. |
 | 17 | SIZE32 | ro | 1: MODE.SIZE accepts 32-bit transfers. |
 | 18 | MIXED | ro | 1: MODE.OP accepts MIXED. |
 | 19 | ORDER | ro | 1: MODE.OP accepts ORDER. |
 | 20 | PATTERNS | ro | 1: MODE.PATTERN accepts RANDOM and FIXED. |
+| 21 | VERIFY | ro | 1: MODE.VERIFY can be 1. |
+| 27:24 | PORTS | ro | Bit n is 1 if the design has a master on S_AXI_HPn. MODE.RD_PORT and MODE.WR_PORT accept these ports. |
 
 ### CTRL
 
@@ -109,12 +112,14 @@ Test design for the memory path between the PL and the PS DDR (docs/mem-path-exp
 
 | Bits | Name | Access | Description |
 |---|---|---|---|
-| 2:0 | OP | rw | Operation. Values: READ = 0, WRITE = 1, MIXED = 2, ORDER = 3, FILL = 4, CHECK = 5. |
-| 5:4 | PATTERN | rw | Address sequence. SEQ increments by one burst and wraps in the span. RANDOM uses an LFSR from SEED. FIXED uses BASE. Values: SEQ = 0, RANDOM = 1, FIXED = 2. |
+| 2:0 | OP | rw | Operation. READ, WRITE: COUNT bursts. MIXED: COUNT bursts; each is a read if a 16-bit LFSR value is less than READ_SHARE, else a write. ORDER: COUNT iterations, one at a time; each writes a value to an address and reads the address again (ORDER_MISMATCHES). FILL, CHECK: write or check the span once, in sequence. Values: READ = 0, WRITE = 1, MIXED = 2, ORDER = 3, FILL = 4, CHECK = 5. |
+| 5:4 | PATTERN | rw | Address sequence. SEQ increments by one burst and wraps in the span. RANDOM takes burst-aligned addresses in the span from an LFSR that starts from SEED. FIXED uses BASE for each burst. FILL and CHECK need SEQ. Values: SEQ = 0, RANDOM = 1, FIXED = 2. |
 | 11:8 | LEN | rw | Beats in each burst minus 1 (AxLEN). The accepted values are 0, 1, 3, 7 and 15. |
 | 13:12 | SIZE | rw | Bytes in each beat (AxSIZE). B8: the 64-bit port. B4: the 32-bit port of the AFI, with the data in bits 31:0. Before a run with B4, the PS sets 32BitEn in AFI_RDCHAN_CTRL and AFI_WRCHAN_CTRL of each port that the run uses (board interface, section HP ports). The design does not make narrow transfers on the 64-bit port. Values: B4 = 2, B8 = 3. |
-| 16 | RD_PORT | rw | HP port of the reads. Values: HP0 = 0, HP1 = 1. |
-| 17 | WR_PORT | rw | HP port of the writes. Values: HP0 = 0, HP1 = 1. |
+| 17:16 | RD_PORT | rw | HP port of the reads. HP0 and HP1 share a port of the DDR controller, and HP2 and HP3 share another (UG585 v1.7, Table 5-11). Values: HP0 = 0, HP1 = 1, HP2 = 2, HP3 = 3. |
+| 19:18 | WR_PORT | rw | HP port of the writes. Values: HP0 = 0, HP1 = 1, HP2 = 2, HP3 = 3. |
+| 20 | VERIFY | rw | 1: READ and MIXED compare the read data with the data pattern of SEED. Fill the span with the same SEED first. |
+| 21 | ORDER_REVERSE | rw | ORDER only. 0: the read comes after the write. 1: the write comes after the read; the read then gives the old value, a check that the comparison works. |
 
 ### SPAN_LOG2
 

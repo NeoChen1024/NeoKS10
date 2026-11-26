@@ -55,6 +55,7 @@ module PS7 (
     output logic        SAXIHP0AWREADY, SAXIHP0WREADY, SAXIHP0BVALID, SAXIHP0ARREADY,
                         SAXIHP0RLAST, SAXIHP0RVALID,
     output logic [1:0]  SAXIHP0BRESP, SAXIHP0RRESP,
+    output logic [5:0]  SAXIHP0BID, SAXIHP0RID,
     output logic [63:0] SAXIHP0RDATA
 );
 endmodule

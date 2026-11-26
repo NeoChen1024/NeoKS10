@@ -75,14 +75,22 @@ register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
 - An MMCM makes `clk_m` from FCLK0 for the HP side. A bitstream has one
   frequency: 50, 100 or 150 MHz (B7). `CAPS.CLK_MHZ` gives it.
 - A traffic generator is an AXI3 master on an HP port. Registers set the
-  operation, the address pattern, the burst length, the span, the gap
-  between transactions, and the number of transactions in progress.
+  operation (read, write, mixed, fill, check), the address pattern
+  (sequential, random, fixed), the burst length, the span, the gap between
+  transactions, the share of reads, and the number of transactions in
+  progress (up to 16, each with its own AXI ID).
+- The R beats of different IDs can come in any order. The design looks up
+  the ID of each R and B in a table: start time, address, next beat.
 - The bus address is the base of the reserved region plus an offset of
   24 bits. Thus no configuration can make an access outside the region.
 - Timers count `clk_m` cycles from the address handshake to the first R
   beat, to RLAST, and to B (note "Latency" of the register map).
-- Three histograms of 1024 bins in block RAM, with minimum, maximum and sum.
-- A data checker with the pattern of the note "Data pattern".
+- Three histograms of 1024 bins, with minimum, maximum and sum. Each
+  histogram has four block RAM banks, so that it takes one sample in each
+  cycle.
+- A data checker with the pattern of the note "Data pattern". The writes
+  write the same pattern, so that with VERIFY the reads of a mixed run are
+  checked too (a check of the design itself with many transactions).
 - Counters: transactions, stall cycles, response errors, data errors.
 
 If the MMCM loses the lock during a run, the domain of `clk_m` goes into
@@ -90,20 +98,37 @@ reset, and the run ends without DONE. The HP port can then keep a
 transaction that the design started. Thus the PS program loads the PL again
 after a loss of the lock.
 
-The first version has one transaction in progress, sequential addresses,
-64-bit beats and HP0 only. `CAPS` shows the features of a bitstream. The PS
-program must not start a measurement that needs a feature that `CAPS` does
-not have.
+The versions of the design:
+
+| Version | Commit milestone | Features |
+|---|---|---|
+| 1 | M1 | One transaction in progress, sequential addresses, 64-bit beats, HP0 |
+| 2 | M2a | Up to 16 in progress, random and fixed addresses, mixed operations, VERIFY, HP0 |
+
+ORDER (B6), the ports HP1 to HP3 and 32-bit beats are in the register map of
+version 2, but not yet in a bitstream. `CAPS` shows the features of a
+bitstream. The PS program does not start a measurement that needs a feature
+that `CAPS` does not have.
 
 Verification of the test design (`tb/memprobe/`):
 
 - `tb_core` simulates the design with an AXI slave model, random latencies,
-  injected errors and two clocks with different periods. The model computes
-  the expected histograms and counters from its own record of the handshakes.
-- `tb_hist` tests one histogram with a full FIFO.
-- `gen.sby` and `regs.sby` prove the AXI rules of the HP master and of the
-  GP0 slave. The proofs include: each access is in the span, and each GP0
-  request gets its answer.
+  injected errors and two clocks with different periods. The model answers
+  in any order across IDs and interleaves R beats. It computes the expected
+  histograms, counters and data errors from its own record of the
+  handshakes, and checks the IDs, the order of the W beats and the limit of
+  transactions in progress.
+- `tb_hist` tests one histogram: with 4 banks at one sample in each cycle,
+  and with 1 bank and a full FIFO.
+- `regs.sby` proves the AXI rules of the GP0 slave: each GP0 request gets
+  its answer.
+- `gen.sby` has the properties of the HP master. With version 2, two of its
+  results are proofs: each address is in the reserved region (with the
+  parameters of the design), and the assumptions allow the transactions
+  (cover). The other properties (stable payload, span, alignment, unique
+  IDs, OUTSTANDING limit, W order) reached the time limit of 600 s with 4
+  IDs, as proofs and as a bounded check; this is not a pass. `tb_core`
+  checks the same properties in simulation.
 
 ### Procedure on the board
 

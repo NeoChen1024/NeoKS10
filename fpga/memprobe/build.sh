@@ -31,7 +31,8 @@ cd "$out"
     -tclargs "$stage" xc7z020clg400-1 "$clk" "$build" "$here/memprobe.xdc" \
     "$root/rtl/gen/regmap_pkg.sv" \
     "$root/rtl/memprobe/memprobe_sync.sv" "$root/rtl/memprobe/memprobe_pattern.sv" \
-    "$root/rtl/memprobe/memprobe_gen.sv" "$root/rtl/memprobe/memprobe_hist.sv" \
+    "$root/rtl/memprobe/memprobe_gen.sv" "$root/rtl/memprobe/memprobe_hist_bank.sv" \
+    "$root/rtl/memprobe/memprobe_hist.sv" \
     "$root/rtl/memprobe/memprobe_regs.sv" "$root/rtl/memprobe/memprobe_core.sv" \
     "$root/rtl/memprobe/memprobe_top.sv" >build.out 2>&1 </dev/null || true
 if grep -q '^ERROR' build.log; then

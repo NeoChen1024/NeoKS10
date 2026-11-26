@@ -8,7 +8,7 @@ use std::time::Duration;
 use plio::board::Region;
 use plio::regmap::memprobe as mp;
 
-use crate::device::{Error, Hist, Memprobe, Op, RunConfig};
+use crate::device::{Error, Hist, Memprobe, Op, Results, RunConfig};
 use crate::pattern;
 use crate::stats::{self, Latency};
 
@@ -84,15 +84,7 @@ pub fn latency(
     if !matches!(op, Op::Read | Op::Write) {
         return Err(Error::Device("latency needs read or write".into()));
     }
-    let cfg = RunConfig {
-        op,
-        beats,
-        base: 0,
-        span_log2: SPAN_LOG2,
-        count,
-        gap,
-        seed: 1,
-    };
+    let cfg = RunConfig::simple(op, beats, SPAN_LOG2, count, gap, 1);
     dev.clear()?;
     let st = dev.run(&cfg, timeout(cfg.transactions()))?;
     let r = dev.results();
@@ -133,6 +125,81 @@ pub fn latency(
     )
     .map_err(io)?;
     Ok(())
+}
+
+/// The CSV header of [`rate`].
+pub const RATE_HEADER: &str = "op,pattern,beats,count,outstanding,read_share,verify,gap,clk_mhz,\
+reads,writes,cycles,transactions_per_s,mib_per_s,stall_share,\
+rd_last_median_cyc,rd_last_p99_cyc,rd_last_max_cyc,wr_resp_median_cyc,wr_resp_p99_cyc,wr_resp_max_cyc,\
+data_errors,samples_dropped";
+
+fn quantiles(h: &Hist, samples: u64) -> (String, String, String) {
+    match stats::summarize(&h.bins, h.min, h.max, h.sum, samples) {
+        Some(s) => (s.median.to_string(), s.p99.to_string(), s.max.to_string()),
+        None => ("".into(), "".into(), "".into()),
+    }
+}
+
+/// One CSV row of [`rate`].
+fn rate_row(cfg: &RunConfig, clk_mhz: u32, r: &Results) -> String {
+    let secs = r.run_cycles as f64 / (f64::from(clk_mhz) * 1e6);
+    let done = r.reads + r.writes;
+    let bytes = done as f64 * f64::from(cfg.beats) * 8.0;
+    let (rm, rp, rx) = quantiles(&r.rd_last, r.reads);
+    let (wm, wp, wx) = quantiles(&r.wr_resp, r.writes);
+    format!(
+        "{},{},{},{},{},{},{},{},{clk_mhz},{},{},{},{:.0},{:.1},{:.3},{rm},{rp},{rx},{wm},{wp},{wx},{},{}",
+        cfg.op.name(),
+        cfg.pattern.name(),
+        cfg.beats,
+        cfg.count,
+        cfg.outstanding,
+        cfg.read_share,
+        u8::from(cfg.verify),
+        cfg.gap,
+        r.reads,
+        r.writes,
+        r.run_cycles,
+        done as f64 / secs,
+        bytes / secs / f64::from(1u32 << 20),
+        r.stalls as f64 / r.run_cycles.max(1) as f64,
+        r.data_errors,
+        r.hist_drops,
+    )
+}
+
+/// B4, B5: a run of many transactions in progress in the first 4 MiB. With
+/// `verify`, the PL first fills the span with the pattern of the seed, and the
+/// reads compare their data with it (the writes write the same pattern).
+/// Writes one CSV row.
+pub fn rate(dev: &Memprobe, cfg: &RunConfig, out: &mut impl Write) -> Result<Results, Error> {
+    dev.supports(cfg)?;
+    if cfg.verify {
+        let fill = RunConfig {
+            base: cfg.base,
+            ..RunConfig::simple(Op::Fill, 16, cfg.span_log2, 0, 0, cfg.seed)
+        };
+        dev.clear()?;
+        dev.run(&fill, timeout(fill.transactions()))?;
+    }
+    dev.clear()?;
+    let st = dev.run(cfg, timeout(cfg.transactions()))?;
+    let r = dev.results();
+    if st.resp_err || r.resp_errors != 0 {
+        return Err(Error::Device(format!(
+            "{} responses were not OKAY",
+            r.resp_errors
+        )));
+    }
+    if r.reads + r.writes != cfg.transactions() {
+        return Err(Error::Device(format!(
+            "{} transactions, expected {}",
+            r.reads + r.writes,
+            cfg.transactions()
+        )));
+    }
+    writeln!(out, "{}", rate_row(cfg, dev.caps.clk_mhz, &r)).map_err(io)?;
+    Ok(r)
 }
 
 /// The result of [`consistency`].
@@ -178,15 +245,7 @@ pub fn consistency(
         }
         plio::mmio::barrier();
         dev.clear()?;
-        let cfg = RunConfig {
-            op: Op::Check,
-            beats: 16,
-            base: 0,
-            span_log2: SPAN_LOG2,
-            count: 0,
-            gap: 0,
-            seed: sa,
-        };
+        let cfg = RunConfig::simple(Op::Check, 16, SPAN_LOG2, 0, 0, sa);
         dev.run(&cfg, timeout(cfg.transactions()))?;
         let r = dev.results();
         if r.resp_errors != 0 {
@@ -226,15 +285,7 @@ mod tests {
 
     #[test]
     fn rows() {
-        let cfg = RunConfig {
-            op: Op::Read,
-            beats: 1,
-            base: 0,
-            span_log2: 22,
-            count: 4,
-            gap: 0,
-            seed: 1,
-        };
+        let cfg = RunConfig::simple(Op::Read, 1, 22, 4, 0, 1);
         let h = Hist {
             bins: vec![0, 2, 1, 1],
             min: 1,
@@ -260,6 +311,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn rate_rows() {
+        let cfg = RunConfig {
+            outstanding: 8,
+            ..RunConfig::simple(Op::Mixed, 2, 22, 100, 0, 1)
+        };
+        let mut r = Results {
+            run_cycles: 1000,
+            reads: 60,
+            writes: 40,
+            stalls: 250,
+            ..Results::default()
+        };
+        r.rd_last = Hist {
+            bins: vec![0, 0, 60, 0],
+            min: 2,
+            max: 2,
+            sum: 120,
+        };
+        r.wr_resp = Hist {
+            bins: vec![0, 40, 0, 0],
+            min: 1,
+            max: 1,
+            sum: 40,
+        };
+        // 100 transactions in 10 us at 100 MHz: 10 M/s; 100 * 16 bytes in 10 us.
+        let row = rate_row(&cfg, 100, &r);
+        assert_eq!(
+            row,
+            "mixed,seq,2,100,8,32768,0,0,100,60,40,1000,10000000,152.6,0.250,2,2,2,1,1,1,0,0"
+        );
+        assert_eq!(RATE_HEADER.split(',').count(), row.split(',').count());
     }
 
     #[test]
