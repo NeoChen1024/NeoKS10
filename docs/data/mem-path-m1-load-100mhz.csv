@@ -1,0 +1,16 @@
+# Memory path, Part B, milestone M1 (docs/mem-path-experiment.md): B1 and B2 with loads on the PS.
+# [measured] 2026-11-26 on the PYNQ-Z2: design rtl/memprobe at commit 6fd9cc11 (BUILD register),
+# clk_m 100 MHz, HP0, 64-bit beats, one transaction in progress, sequential addresses in the
+# first 4 MiB of the reserved region, GAP 0, loads in the column "condition"; Linux 6.18.64-pynq-z2.
+# Method: emu/memprobe "latency read|write --count 100000" with these loads: ps_memory_load = "--load-threads 2" (2 threads copy between 16 MiB buffers; 322 MiB/s copied during the read run, 245 MiB/s during the write run); sd_read_and_network = "dd if=/dev/mmcblk0 of=/dev/null bs=1M" on the board (22.6 MB/s) and "iperf3 --bidir" from a host on the LAN (260 Mbit/s to the board, 341 Mbit/s from the board). Latency definition:
+# spec/regmap.toml, note "Latency" (clk_m edges from the address handshake).
+condition,measure,op,beats,count,gap,clk_mhz,samples,min_cyc,median_cyc,p99_cyc,max_cyc,mean_cyc,min_ns,median_ns,p99_ns,max_ns,mean_ns
+idle,rd_first,read,1,100000,0,100,100000,19,19,37,89,19.58,190.0,190.0,370.0,890.0,195.8
+idle,rd_last,read,1,100000,0,100,100000,19,19,37,89,19.58,190.0,190.0,370.0,890.0,195.8
+idle,wr_resp,write,1,100000,0,100,100000,12,12,12,12,12.00,120.0,120.0,120.0,120.0,120.0
+ps_memory_load,rd_first,read,1,100000,0,100,100000,19,24,64,100,26.68,190.0,240.0,640.0,1000.0,266.8
+ps_memory_load,rd_last,read,1,100000,0,100,100000,19,24,64,100,26.68,190.0,240.0,640.0,1000.0,266.8
+ps_memory_load,wr_resp,write,1,100000,0,100,100000,12,12,12,13,12.00,120.0,120.0,120.0,130.0,120.0
+sd_read_and_network,rd_first,read,1,100000,0,100,100000,19,19,56,102,23.00,190.0,190.0,560.0,1020.0,230.0
+sd_read_and_network,rd_last,read,1,100000,0,100,100000,19,19,56,102,23.00,190.0,190.0,560.0,1020.0,230.0
+sd_read_and_network,wr_resp,write,1,100000,0,100,100000,12,12,12,32,12.00,120.0,120.0,120.0,320.0,120.0

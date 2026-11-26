@@ -226,5 +226,60 @@ map); at 100 MHz, one cycle is 10 ns. All data is in
   for the one in progress. With one transaction in progress, this is
   nearly all cycles of a run.
 
-Not done yet: B1 and B2 with a load on the PS, B4 to B8, the full B9, and
-B7 at 50 MHz and 150 MHz.
+### M1: full B9, loads on the PS, and B7
+
+**[measured]** 2026-11-26, Linux 6.18.64-pynq-z2, the same conditions as
+above except where a paragraph gives other conditions.
+
+**B9, full run.** Design commit 6fd9cc11, 100 MHz. Method: `memprobe
+consistency --words 1000000000`. The PS wrote 1000341504 words and the PL
+checked them: 0 mismatches. The PL wrote 1000341504 words and the PS
+checked them: 0 mismatches. This supports the decision to map the region
+without the CPU cache (B9 in the table of measurements).
+
+**B1 and B2 with loads on the PS.** Design commit 6fd9cc11, 100 MHz, 1-beat
+transactions. Method: `memprobe latency read|write --count 100000`, with
+the loads below. Data: `docs/data/mem-path-m1-load-100mhz.csv`.
+
+- PS memory load: `--load-threads 2`. Two threads copied between buffers of
+  16 MiB: 322 MiB/s during the read run, 245 MiB/s during the write run.
+- SD card and network load: `dd` read the card at 22.6 MB/s. `iperf3
+  --bidir` from a host on the LAN gave 260 Mbit/s to the board and
+  341 Mbit/s from the board.
+
+| Condition | Read median | Read p99 | Read maximum | Write median | Write p99 | Write maximum |
+|---|---|---|---|---|---|---|
+| PS idle | 19 | 37 | 89 | 12 | 12 | 12 |
+| PS memory load | 24 | 64 | 100 | 12 | 12 | 13 |
+| SD card and network | 19 | 56 | 102 | 12 | 12 | 32 |
+
+The values are in cycles of 10 ns. The read latency increases with a load
+on the PS; the maximum stays near 1 us. The write response does not change
+at the median and p99. This agrees with the estimate above that the write
+response does not wait for the DDR memory.
+
+**B7, clock of the HP side.** Design commit 09728152 for 50 MHz and
+150 MHz (the same `rtl/` as 6fd9cc11), 6fd9cc11 for 100 MHz. PS idle,
+10000 transactions for each burst length. The short B9 (10485760 words in
+each direction) gave 0 mismatches at each clock. Data:
+`docs/data/mem-path-m1-latency-<clock>mhz.csv` and
+`docs/data/mem-path-m1-rate-<clock>mhz.csv`.
+
+| `clk_m` | Read, first beat, median | Read p99 (1 beat) | Write response, 1 beat | 16-beat reads | 16-beat writes |
+|---|---|---|---|---|---|
+| 50 MHz | 13 cycles, 260 ns | 25 cycles, 500 ns | 9 cycles, 180 ns | 199.4 MiB/s | 218.0 MiB/s |
+| 100 MHz | 19 cycles, 190 ns | 38 cycles, 380 ns | 12 cycles, 120 ns | 328.2 MiB/s | 369.9 MiB/s |
+| 150 MHz | 25 cycles, 167 ns | 53 cycles, 353 ns | 16 cycles, 107 ns | 417.8 MiB/s | 469.5 MiB/s |
+
+- A higher clock gives a shorter latency in ns, but more cycles. The
+  rates with one burst at a time increase with the clock.
+- **[estimate]** A part of the latency is a number of `clk_m` cycles, and a
+  part is a time in the PS. Basis: the read latency in ns changes less than
+  the clock period does.
+- The 150 MHz build met timing with a setup slack of 0.359 ns only. A
+  change of the design can make it fail.
+- The 32-bit width of B7 needs the next version of the design.
+
+Not done yet: B4 to B6 (they need more than one transaction in progress,
+mixed operations, HP1 and the order test: the next version of the design),
+and B8 (the PS program does not have it yet).
