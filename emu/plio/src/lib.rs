@@ -1,10 +1,17 @@
 //! Access to the PL of the board.
 //!
-//! The register map comes from `spec/regmap.toml` through `make gen` (module
-//! [`regmap`]). This file has the types that the generated code uses.
+//! - [`regmap`]: the register map, from `spec/regmap.toml` through `make gen`.
+//!   This file has the types that the generated code uses.
+//! - [`mmio`]: the memory mappings. It is the only module with `unsafe` code.
+//! - [`board`]: the board interface on Linux (UIO device, reserved region,
+//!   checks before the first register read).
 
 #[rustfmt::skip]
 pub mod regmap;
+
+pub mod board;
+#[allow(unsafe_code)]
+pub mod mmio;
 
 /// A 32-bit register in the register window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

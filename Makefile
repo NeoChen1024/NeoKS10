@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth
+.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -89,3 +89,10 @@ synth:
 	    echo "memprobe $$c MHz:"; \
 	    CLK_MHZ=$$c OUT=$(CURDIR)/$(BUILD_DIR)/fpga/memprobe-$$c sh fpga/memprobe/build.sh || exit 1; \
 	done
+
+# The programs of emu/ for the board: a static armv7 musl binary in
+# emu/target/armv7-unknown-linux-musleabihf/release/. The linker is in
+# emu/.cargo/config.toml.
+CROSS_TARGET = armv7-unknown-linux-musleabihf
+cross:
+	cd emu && $(NICE) $(CARGO) build --locked --release --target $(CROSS_TARGET)

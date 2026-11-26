@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["plio"]
+members = ["plio", "memprobe"]
 
 [workspace.package]
 edition = "2024"

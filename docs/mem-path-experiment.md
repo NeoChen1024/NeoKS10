@@ -104,7 +104,24 @@ Verification of the test design (`tb/memprobe/`):
   GP0 slave. The proofs include: each access is in the span, and each GP0
   request gets its answer.
 
-### Measurements
+### Procedure on the board
+
+Each step on the board needs the permission of the owner in that session.
+
+1. Build the bitstream from a commit with no changes: `make synth`. The
+   `BUILD` register then identifies the design.
+2. Build the program: `make cross`. The program is `emu/memprobe`.
+3. Load the bitstream with `jtag/load.sh` of the board repository, and copy
+   the program to the board.
+4. As root, run `memprobe info`. It checks that the PL is configured and
+   that FCLK0 runs before it reads a register. Then it checks the ID, the
+   clocks and the reserved region.
+5. Run `memprobe consistency --words 10000000` (a short B9). Continue only
+   if it gives 0 mismatches.
+6. Run `memprobe latency read` and `memprobe latency write` (B1, B2), and
+   with `--beats 2`, 4, 8 and 16 (B3).
+7. Put the output into `docs/data/` and the results section of this file.
+
 
 | Number | Measurement | Variations |
 |---|---|---|

@@ -58,7 +58,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `plio` is the access to the PL |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `plio` is the access to the PL. `memprobe` is the program of the memory path test |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -91,6 +91,8 @@ fails.
 
 - `make check` is: format, lint, unit tests, a check that the generated
   files are current, and a short random differential run.
+- `make cross` builds the programs of `emu/` for the board (armv7, musl,
+  static).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example
   `gen` or `regs`. `make mutate MODULE=<file>` mutates
   `rtl/memprobe/<file>.sv`, for example `memprobe_gen`.
