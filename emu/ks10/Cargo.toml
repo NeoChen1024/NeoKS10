@@ -1,0 +1,14 @@
+[package]
+name = "ks10"
+version = "0.1.0"
+description = "The KS10 machine with the ITS microcode behaviour: processor, memory, console, devices"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdp10 = { path = "../pdp10" }
