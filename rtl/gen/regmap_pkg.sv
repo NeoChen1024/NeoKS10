@@ -17,18 +17,22 @@ package memprobe_regmap_pkg;
   // ID (ro): Constant. Identifies the design. Read it before any other register.
   localparam [31:0] ID_OFFSET = 32'h00000000;
   localparam [31:0] ID_RESET = 32'h4D505242;
+  localparam [31:0] ID_MASK = 32'hFFFFFFFF;
 
   // VERSION (ro): Version of this register map.
   localparam [31:0] VERSION_OFFSET = 32'h00000004;
   localparam [31:0] VERSION_RESET = 32'h00000001;
+  localparam [31:0] VERSION_MASK = 32'hFFFFFFFF;
 
   // BUILD (ro): The first 32 bits of the git commit of the build. The Vivado script sets it.
   localparam [31:0] BUILD_OFFSET = 32'h00000008;
   localparam [31:0] BUILD_RESET = 32'h00000000;
+  localparam [31:0] BUILD_MASK = 32'hFFFFFFFF;
 
   // CAPS (ro): The features that this bitstream contains.
   localparam [31:0] CAPS_OFFSET = 32'h0000000C;
   localparam [31:0] CAPS_RESET = 32'h00000000;
+  localparam [31:0] CAPS_MASK = 32'h001F1FFF;
   localparam [31:0] CAPS_CLK_MHZ_LSB = 32'd0;
   localparam [31:0] CAPS_CLK_MHZ_WIDTH = 32'd8;
   localparam [31:0] CAPS_CLK_MHZ_MASK = 32'h000000FF;
@@ -54,6 +58,7 @@ package memprobe_regmap_pkg;
   // CTRL (wo): Commands. A write with more than one bit set does nothing and sets STATUS.CFG_ERR.
   localparam [31:0] CTRL_OFFSET = 32'h00000010;
   localparam [31:0] CTRL_RESET = 32'h00000000;
+  localparam [31:0] CTRL_MASK = 32'h00000007;
   localparam [31:0] CTRL_START_LSB = 32'd0;
   localparam [31:0] CTRL_START_WIDTH = 32'd1;
   localparam [31:0] CTRL_START_MASK = 32'h00000001;
@@ -67,6 +72,7 @@ package memprobe_regmap_pkg;
   // STATUS (w1c): State of the design. The w1c bits stay 1 until the PS writes 1 to them.
   localparam [31:0] STATUS_OFFSET = 32'h00000014;
   localparam [31:0] STATUS_RESET = 32'h00000000;
+  localparam [31:0] STATUS_MASK = 32'h0000013F;
   localparam [31:0] STATUS_BUSY_LSB = 32'd0;
   localparam [31:0] STATUS_BUSY_WIDTH = 32'd1;
   localparam [31:0] STATUS_BUSY_MASK = 32'h00000001;
@@ -92,6 +98,7 @@ package memprobe_regmap_pkg;
   // IRQ_EN (rw): Interrupt enable. The interrupt is IRQF2P[0], high while an enabled cause is 1.
   localparam [31:0] IRQ_EN_OFFSET = 32'h00000018;
   localparam [31:0] IRQ_EN_RESET = 32'h00000000;
+  localparam [31:0] IRQ_EN_MASK = 32'h00000001;
   localparam [31:0] IRQ_EN_DONE_LSB = 32'd0;
   localparam [31:0] IRQ_EN_DONE_WIDTH = 32'd1;
   localparam [31:0] IRQ_EN_DONE_MASK = 32'h00000001;
@@ -99,6 +106,7 @@ package memprobe_regmap_pkg;
   // MODE (rw): Type of the run.
   localparam [31:0] MODE_OFFSET = 32'h00000020;
   localparam [31:0] MODE_RESET = 32'h00003F00;
+  localparam [31:0] MODE_MASK = 32'h00033F37;
   localparam [31:0] MODE_OP_LSB = 32'd0;
   localparam [31:0] MODE_OP_WIDTH = 32'd3;
   localparam [31:0] MODE_OP_MASK = 32'h00000007;
@@ -136,10 +144,12 @@ package memprobe_regmap_pkg;
   // BASE (rw): Start of the span, in bytes from the start of the HP memory of the block. A multiple of the span. The bus address is the base of the HP memory plus this offset.
   localparam [31:0] BASE_OFFSET = 32'h00000024;
   localparam [31:0] BASE_RESET = 32'h00000000;
+  localparam [31:0] BASE_MASK = 32'hFFFFFFFF;
 
   // SPAN_LOG2 (rw): The span is 2^SPAN_LOG2 bytes. BASE plus the span must not be more than the size of the HP memory.
   localparam [31:0] SPAN_LOG2_OFFSET = 32'h00000028;
   localparam [31:0] SPAN_LOG2_RESET = 32'h00000016;
+  localparam [31:0] SPAN_LOG2_MASK = 32'h0000001F;
   localparam [31:0] SPAN_LOG2_VALUE_LSB = 32'd0;
   localparam [31:0] SPAN_LOG2_VALUE_WIDTH = 32'd5;
   localparam [31:0] SPAN_LOG2_VALUE_MASK = 32'h0000001F;
@@ -147,10 +157,12 @@ package memprobe_regmap_pkg;
   // COUNT (rw): Transactions in the run. In FILL and CHECK mode, the run covers the span once and ignores COUNT.
   localparam [31:0] COUNT_OFFSET = 32'h0000002C;
   localparam [31:0] COUNT_RESET = 32'h00000001;
+  localparam [31:0] COUNT_MASK = 32'hFFFFFFFF;
 
   // GAP (rw): Minimum number of clk_m cycles from one address handshake to the next issue.
   localparam [31:0] GAP_OFFSET = 32'h00000030;
   localparam [31:0] GAP_RESET = 32'h00000000;
+  localparam [31:0] GAP_MASK = 32'h0000FFFF;
   localparam [31:0] GAP_CYCLES_LSB = 32'd0;
   localparam [31:0] GAP_CYCLES_WIDTH = 32'd16;
   localparam [31:0] GAP_CYCLES_MASK = 32'h0000FFFF;
@@ -158,6 +170,7 @@ package memprobe_regmap_pkg;
   // OUTSTANDING (rw): Maximum number of transactions in progress. From 1 to CAPS.MAX_OUTSTANDING.
   localparam [31:0] OUTSTANDING_OFFSET = 32'h00000034;
   localparam [31:0] OUTSTANDING_RESET = 32'h00000001;
+  localparam [31:0] OUTSTANDING_MASK = 32'h0000001F;
   localparam [31:0] OUTSTANDING_VALUE_LSB = 32'd0;
   localparam [31:0] OUTSTANDING_VALUE_WIDTH = 32'd5;
   localparam [31:0] OUTSTANDING_VALUE_MASK = 32'h0000001F;
@@ -165,6 +178,7 @@ package memprobe_regmap_pkg;
   // READ_SHARE (rw): In MIXED mode, a transaction is a read if a 16-bit LFSR value is less than this value.
   localparam [31:0] READ_SHARE_OFFSET = 32'h00000038;
   localparam [31:0] READ_SHARE_RESET = 32'h00008000;
+  localparam [31:0] READ_SHARE_MASK = 32'h0000FFFF;
   localparam [31:0] READ_SHARE_VALUE_LSB = 32'd0;
   localparam [31:0] READ_SHARE_VALUE_WIDTH = 32'd16;
   localparam [31:0] READ_SHARE_VALUE_MASK = 32'h0000FFFF;
@@ -172,122 +186,152 @@ package memprobe_regmap_pkg;
   // SEED (rw): Seed of the LFSRs and of the data pattern. 0 is not accepted.
   localparam [31:0] SEED_OFFSET = 32'h0000003C;
   localparam [31:0] SEED_RESET = 32'h00000001;
+  localparam [31:0] SEED_MASK = 32'hFFFFFFFF;
 
   // RUN_CYCLES_LO (ro): clk_m cycles from START to the end of the run, bits 31:0.
   localparam [31:0] RUN_CYCLES_LO_OFFSET = 32'h00000080;
   localparam [31:0] RUN_CYCLES_LO_RESET = 32'h00000000;
+  localparam [31:0] RUN_CYCLES_LO_MASK = 32'hFFFFFFFF;
 
   // RUN_CYCLES_HI (ro): Bits 63:32 of the same counter.
   localparam [31:0] RUN_CYCLES_HI_OFFSET = 32'h00000084;
   localparam [31:0] RUN_CYCLES_HI_RESET = 32'h00000000;
+  localparam [31:0] RUN_CYCLES_HI_MASK = 32'hFFFFFFFF;
 
   // READS_LO (ro): Read transactions with RLAST, bits 31:0.
   localparam [31:0] READS_LO_OFFSET = 32'h00000088;
   localparam [31:0] READS_LO_RESET = 32'h00000000;
+  localparam [31:0] READS_LO_MASK = 32'hFFFFFFFF;
 
   // READS_HI (ro): Bits 63:32 of the same counter.
   localparam [31:0] READS_HI_OFFSET = 32'h0000008C;
   localparam [31:0] READS_HI_RESET = 32'h00000000;
+  localparam [31:0] READS_HI_MASK = 32'hFFFFFFFF;
 
   // WRITES_LO (ro): Write transactions with a response, bits 31:0.
   localparam [31:0] WRITES_LO_OFFSET = 32'h00000090;
   localparam [31:0] WRITES_LO_RESET = 32'h00000000;
+  localparam [31:0] WRITES_LO_MASK = 32'hFFFFFFFF;
 
   // WRITES_HI (ro): Bits 63:32 of the same counter.
   localparam [31:0] WRITES_HI_OFFSET = 32'h00000094;
   localparam [31:0] WRITES_HI_RESET = 32'h00000000;
+  localparam [31:0] WRITES_HI_MASK = 32'hFFFFFFFF;
 
   // STALLS_LO (ro): Cycles in which a transaction was ready to issue but the limit of OUTSTANDING or AxREADY stopped it, bits 31:0.
   localparam [31:0] STALLS_LO_OFFSET = 32'h00000098;
   localparam [31:0] STALLS_LO_RESET = 32'h00000000;
+  localparam [31:0] STALLS_LO_MASK = 32'hFFFFFFFF;
 
   // STALLS_HI (ro): Bits 63:32 of the same counter.
   localparam [31:0] STALLS_HI_OFFSET = 32'h0000009C;
   localparam [31:0] STALLS_HI_RESET = 32'h00000000;
+  localparam [31:0] STALLS_HI_MASK = 32'hFFFFFFFF;
 
   // DATA_ERRORS (ro): Words that are not the expected value. Stops at 0xFFFFFFFF.
   localparam [31:0] DATA_ERRORS_OFFSET = 32'h000000A0;
   localparam [31:0] DATA_ERRORS_RESET = 32'h00000000;
+  localparam [31:0] DATA_ERRORS_MASK = 32'hFFFFFFFF;
 
   // FIRST_ERR_ADDR (ro): Byte offset in the HP memory of the first word that is not the expected value.
   localparam [31:0] FIRST_ERR_ADDR_OFFSET = 32'h000000A4;
   localparam [31:0] FIRST_ERR_ADDR_RESET = 32'h00000000;
+  localparam [31:0] FIRST_ERR_ADDR_MASK = 32'hFFFFFFFF;
 
   // FIRST_ERR_DATA_LO (ro): Bits 31:0 of the data of the first word that is not the expected value.
   localparam [31:0] FIRST_ERR_DATA_LO_OFFSET = 32'h000000A8;
   localparam [31:0] FIRST_ERR_DATA_LO_RESET = 32'h00000000;
+  localparam [31:0] FIRST_ERR_DATA_LO_MASK = 32'hFFFFFFFF;
 
   // FIRST_ERR_DATA_HI (ro): Bits 63:32 of the same data. 0 for 32-bit transfers.
   localparam [31:0] FIRST_ERR_DATA_HI_OFFSET = 32'h000000AC;
   localparam [31:0] FIRST_ERR_DATA_HI_RESET = 32'h00000000;
+  localparam [31:0] FIRST_ERR_DATA_HI_MASK = 32'hFFFFFFFF;
 
   // ORDER_MISMATCHES (ro): In ORDER mode: reads that gave the value from before the write that preceded them.
   localparam [31:0] ORDER_MISMATCHES_OFFSET = 32'h000000B0;
   localparam [31:0] ORDER_MISMATCHES_RESET = 32'h00000000;
+  localparam [31:0] ORDER_MISMATCHES_MASK = 32'hFFFFFFFF;
 
   // HIST_DROPS (ro): Latency samples that are not in the histograms.
   localparam [31:0] HIST_DROPS_OFFSET = 32'h000000B4;
   localparam [31:0] HIST_DROPS_RESET = 32'h00000000;
+  localparam [31:0] HIST_DROPS_MASK = 32'hFFFFFFFF;
 
   // RESP_ERRORS (ro): Read beats and write responses with RRESP or BRESP not OKAY.
   localparam [31:0] RESP_ERRORS_OFFSET = 32'h000000B8;
   localparam [31:0] RESP_ERRORS_RESET = 32'h00000000;
+  localparam [31:0] RESP_ERRORS_MASK = 32'hFFFFFFFF;
 
   // FCLK_COUNT (ro): Free-running counter of FCLK_CLK0 cycles.
   localparam [31:0] FCLK_COUNT_OFFSET = 32'h000000C0;
   localparam [31:0] FCLK_COUNT_RESET = 32'h00000000;
+  localparam [31:0] FCLK_COUNT_MASK = 32'hFFFFFFFF;
 
   // CLKM_COUNT (ro): Free-running counter of clk_m cycles. Read it with FCLK_COUNT to measure the frequency of clk_m.
   localparam [31:0] CLKM_COUNT_OFFSET = 32'h000000C4;
   localparam [31:0] CLKM_COUNT_RESET = 32'h00000000;
+  localparam [31:0] CLKM_COUNT_MASK = 32'hFFFFFFFF;
 
   // RD_FIRST_MIN (ro): Minimum of RD_FIRST.
   localparam [31:0] RD_FIRST_MIN_OFFSET = 32'h00000100;
   localparam [31:0] RD_FIRST_MIN_RESET = 32'hFFFFFFFF;
+  localparam [31:0] RD_FIRST_MIN_MASK = 32'hFFFFFFFF;
 
   // RD_FIRST_MAX (ro): Maximum of RD_FIRST.
   localparam [31:0] RD_FIRST_MAX_OFFSET = 32'h00000104;
   localparam [31:0] RD_FIRST_MAX_RESET = 32'h00000000;
+  localparam [31:0] RD_FIRST_MAX_MASK = 32'hFFFFFFFF;
 
   // RD_FIRST_SUM_LO (ro): Sum of RD_FIRST, bits 31:0.
   localparam [31:0] RD_FIRST_SUM_LO_OFFSET = 32'h00000108;
   localparam [31:0] RD_FIRST_SUM_LO_RESET = 32'h00000000;
+  localparam [31:0] RD_FIRST_SUM_LO_MASK = 32'hFFFFFFFF;
 
   // RD_FIRST_SUM_HI (ro): Bits 63:32 of the same sum.
   localparam [31:0] RD_FIRST_SUM_HI_OFFSET = 32'h0000010C;
   localparam [31:0] RD_FIRST_SUM_HI_RESET = 32'h00000000;
+  localparam [31:0] RD_FIRST_SUM_HI_MASK = 32'hFFFFFFFF;
 
   // RD_LAST_MIN (ro): Minimum of RD_LAST.
   localparam [31:0] RD_LAST_MIN_OFFSET = 32'h00000110;
   localparam [31:0] RD_LAST_MIN_RESET = 32'hFFFFFFFF;
+  localparam [31:0] RD_LAST_MIN_MASK = 32'hFFFFFFFF;
 
   // RD_LAST_MAX (ro): Maximum of RD_LAST.
   localparam [31:0] RD_LAST_MAX_OFFSET = 32'h00000114;
   localparam [31:0] RD_LAST_MAX_RESET = 32'h00000000;
+  localparam [31:0] RD_LAST_MAX_MASK = 32'hFFFFFFFF;
 
   // RD_LAST_SUM_LO (ro): Sum of RD_LAST, bits 31:0.
   localparam [31:0] RD_LAST_SUM_LO_OFFSET = 32'h00000118;
   localparam [31:0] RD_LAST_SUM_LO_RESET = 32'h00000000;
+  localparam [31:0] RD_LAST_SUM_LO_MASK = 32'hFFFFFFFF;
 
   // RD_LAST_SUM_HI (ro): Bits 63:32 of the same sum.
   localparam [31:0] RD_LAST_SUM_HI_OFFSET = 32'h0000011C;
   localparam [31:0] RD_LAST_SUM_HI_RESET = 32'h00000000;
+  localparam [31:0] RD_LAST_SUM_HI_MASK = 32'hFFFFFFFF;
 
   // WR_RESP_MIN (ro): Minimum of WR_RESP.
   localparam [31:0] WR_RESP_MIN_OFFSET = 32'h00000120;
   localparam [31:0] WR_RESP_MIN_RESET = 32'hFFFFFFFF;
+  localparam [31:0] WR_RESP_MIN_MASK = 32'hFFFFFFFF;
 
   // WR_RESP_MAX (ro): Maximum of WR_RESP.
   localparam [31:0] WR_RESP_MAX_OFFSET = 32'h00000124;
   localparam [31:0] WR_RESP_MAX_RESET = 32'h00000000;
+  localparam [31:0] WR_RESP_MAX_MASK = 32'hFFFFFFFF;
 
   // WR_RESP_SUM_LO (ro): Sum of WR_RESP, bits 31:0.
   localparam [31:0] WR_RESP_SUM_LO_OFFSET = 32'h00000128;
   localparam [31:0] WR_RESP_SUM_LO_RESET = 32'h00000000;
+  localparam [31:0] WR_RESP_SUM_LO_MASK = 32'hFFFFFFFF;
 
   // WR_RESP_SUM_HI (ro): Bits 63:32 of the same sum.
   localparam [31:0] WR_RESP_SUM_HI_OFFSET = 32'h0000012C;
   localparam [31:0] WR_RESP_SUM_HI_RESET = 32'h00000000;
+  localparam [31:0] WR_RESP_SUM_HI_MASK = 32'hFFFFFFFF;
 
   // HIST_RD_FIRST (ro): Histogram of RD_FIRST.
   localparam [31:0] HIST_RD_FIRST_OFFSET = 32'h00001000;

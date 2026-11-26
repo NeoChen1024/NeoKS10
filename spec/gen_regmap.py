@@ -4,6 +4,7 @@
 Outputs (paths relative to the repository root):
   rtl/gen/regmap_pkg.sv      one SystemVerilog package for each block
   emu/plio/src/regmap.rs     one Rust module for each block
+  tb/gen/regmap.h            C macros for the testbenches
   docs/regmap.md             the tables for people
 
 Usage: gen_regmap.py [--check] [--root DIR]
@@ -23,6 +24,7 @@ SOURCE = "spec/regmap.toml"
 OUT_SV = "rtl/gen/regmap_pkg.sv"
 OUT_RS = "emu/plio/src/regmap.rs"
 OUT_MD = "docs/regmap.md"
+OUT_H = "tb/gen/regmap.h"
 
 ACCESS = ("ro", "rw", "wo", "w1c")
 REG_BYTES = 4
@@ -296,6 +298,7 @@ def _check_symbols(block, where):
     for r in block["registers"]:
         add(f"{r['name']}_OFFSET", r["name"])
         add(f"{r['name']}_RESET", r["name"])
+        add(f"{r['name']}_MASK", r["name"])
         for f in r["fields"]:
             origin = f"{r['name']}.{f['name']}"
             for suffix in ("LSB", "WIDTH", "MASK"):
@@ -353,6 +356,7 @@ def render_sv(blocks):
             out.append(f"  // {r['name']} ({r['access']}): {r['description']}")
             out.append(f"  localparam [31:0] {r['name']}_OFFSET = {_h32(r['offset'])};")
             out.append(f"  localparam [31:0] {r['name']}_RESET = {_h32(r['reset'])};")
+            out.append(f"  localparam [31:0] {r['name']}_MASK = {_h32(_reg_mask(r))};")
             for f in r["fields"]:
                 p = f"{r['name']}_{f['name']}"
                 mask = ((1 << f["width"]) - 1) << f["lsb"]
@@ -369,6 +373,51 @@ def render_sv(blocks):
             out.append(f"  localparam [31:0] {m['name']}_DEPTH = 32'd{m['depth']};")
             out.append(f"  localparam [31:0] {m['name']}_WIDTH = 32'd{m['width']};")
         out.append(f"endpackage : {b['name']}_regmap_pkg")
+    return "\n".join(out) + "\n"
+
+
+def _reg_mask(r):
+    """The bits that the fields use; all bits if the register has no field."""
+    if not r["fields"]:
+        return (1 << 32) - 1
+    m = 0
+    for f in r["fields"]:
+        m |= ((1 << f["width"]) - 1) << f["lsb"]
+    return m
+
+
+def render_c(blocks):
+    out = [f"/* {HEADER} */", "#ifndef NEOKS10_REGMAP_H", "#define NEOKS10_REGMAP_H"]
+    for b in blocks:
+        p = b["name"].upper()
+        out.append("")
+        out.append(f"/* {b['description']} */")
+        out.append(f"#define {p}_WINDOW_BYTES 0x{b['window_bytes']:08X}u")
+        out.append(f"#define {p}_ID_VALUE 0x{b['id']:08X}u")
+        out.append(f"#define {p}_VERSION_VALUE {b['version']}u")
+        if b["hp"]:
+            out.append(f"#define {p}_HP_BASE 0x{b['hp']['base']:08X}u")
+            out.append(f"#define {p}_HP_SIZE 0x{b['hp']['size']:08X}u")
+        for r in b["registers"]:
+            q = f"{p}_{r['name']}"
+            out.append(f"#define {q}_OFFSET 0x{r['offset']:03X}u")
+            out.append(f"#define {q}_RESET 0x{r['reset']:08X}u")
+            out.append(f"#define {q}_MASK 0x{_reg_mask(r):08X}u")
+            for f in r["fields"]:
+                fq = f"{q}_{f['name']}"
+                mask = ((1 << f["width"]) - 1) << f["lsb"]
+                out.append(f"#define {fq}_LSB {f['lsb']}u")
+                out.append(f"#define {fq}_WIDTH {f['width']}u")
+                out.append(f"#define {fq}_MASK 0x{mask:08X}u")
+                for vname, vnum in f["values"]:
+                    out.append(f"#define {fq}_{vname} {vnum}u")
+        for m in b["memories"]:
+            q = f"{p}_{m['name']}"
+            out.append(f"#define {q}_OFFSET 0x{m['offset']:04X}u")
+            out.append(f"#define {q}_DEPTH {m['depth']}u")
+            out.append(f"#define {q}_WIDTH {m['width']}u")
+    out.append("")
+    out.append("#endif")
     return "\n".join(out) + "\n"
 
 
@@ -508,7 +557,8 @@ def render_md(blocks):
 
 
 def outputs(blocks):
-    return {OUT_SV: render_sv(blocks), OUT_RS: render_rust(blocks), OUT_MD: render_md(blocks)}
+    return {OUT_SV: render_sv(blocks), OUT_RS: render_rust(blocks), OUT_MD: render_md(blocks),
+            OUT_H: render_c(blocks)}
 
 
 def main(argv=None):

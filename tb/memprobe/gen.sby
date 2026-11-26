@@ -1,0 +1,26 @@
+# Proof of the AXI master properties of memprobe_gen (gen_formal.sv), and a
+# check that the assumptions do not exclude the transactions (task cover).
+# make formal runs both tasks with a time limit.
+[tasks]
+prove
+cover
+
+[options]
+timeout 600
+prove: mode prove
+cover: mode cover
+cover: depth 30
+
+[engines]
+prove: abc pdr
+cover: smtbmc
+
+[script]
+read_verilog -sv -formal regmap_pkg.sv memprobe_pattern.sv memprobe_gen.sv gen_formal.sv
+prep -top gen_formal
+
+[files]
+../../rtl/gen/regmap_pkg.sv
+../../rtl/memprobe/memprobe_pattern.sv
+../../rtl/memprobe/memprobe_gen.sv
+gen_formal.sv

@@ -156,6 +156,19 @@ class Rejected(unittest.TestCase):
         text = change("values = { A = 0, B = 1 }", "values = { A = 0, LSB = 1 }")
         self.rejects(text, "generated name MODE_OP_LSB")
 
+    def test_register_mask_collision(self):
+        # Field MASK of register MODE gives MODE_MASK_LSB, not MODE_MASK; a
+        # register named MODE_OP gives MODE_OP_MASK like the field OP of MODE.
+        text = BASE + '''
+[[block.register]]
+name = "MODE_OP"
+offset = 0x8
+access = "rw"
+reset = 0
+description = "Collides."
+'''
+        self.rejects(text, "generated name MODE_OP_")
+
     def test_rust_keyword_register(self):
         self.rejects(change('name = "MODE"', 'name = "TYPE"'), "type is a Rust keyword")
 
@@ -185,6 +198,8 @@ class Output(unittest.TestCase):
             "  localparam [31:0] HP_SIZE_LOG2 = 32'd20;",
             "  localparam [31:0] MODE_OFFSET = 32'h00000004;",
             "  localparam [31:0] MODE_RESET = 32'h00000021;",
+            "  localparam [31:0] MODE_MASK = 32'h00000037;",
+            "  localparam [31:0] ID_MASK = 32'hFFFFFFFF;",
             "  localparam [31:0] MODE_X_LSB = 32'd4;",
             "  localparam [31:0] MODE_X_MASK = 32'h00000030;",
             "  localparam [2:0] MODE_OP_B = 3'd1;",
@@ -204,6 +219,21 @@ class Output(unittest.TestCase):
             "    pub const M: Mem = Mem {\n        offset: 0x0800,\n        depth: 512,\n    };\n",
         ):
             self.assertIn(text, rs)
+
+    def test_c(self):
+        h = g.render_c(self.blocks)
+        for line in (
+            "#define T_ID_VALUE 0x00001234u",
+            "#define T_HP_BASE 0x10000000u",
+            "#define T_MODE_OFFSET 0x004u",
+            "#define T_MODE_MASK 0x00000037u",
+            "#define T_MODE_X_LSB 4u",
+            "#define T_MODE_X_MASK 0x00000030u",
+            "#define T_MODE_OP_B 1u",
+            "#define T_M_OFFSET 0x0800u",
+            "#define T_M_DEPTH 512u",
+        ):
+            self.assertIn(line + "\n", h)
 
     def test_md(self):
         md = g.render_md(self.blocks)

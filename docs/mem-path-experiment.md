@@ -66,15 +66,38 @@ The cache model is a small program. Keep it in `tb/` with a test of its own.
 
 ### Test design
 
-A PL design with these parts, and a program on the PS that controls it:
+The PL design is `rtl/memprobe/`, and a program on the PS controls it. The
+register map is the block `memprobe` of `spec/regmap.toml` (`docs/regmap.md`).
 
-- A traffic generator: an AXI master on one HP port. Registers set the
-  address pattern (sequential, random, fixed), the burst length, the gap
+- The registers on M_AXI_GP0 use FCLK0 (100 MHz). They answer also when the
+  MMCM is not locked.
+- An MMCM makes `clk_m` from FCLK0 for the HP side. A bitstream has one
+  frequency: 50, 100 or 150 MHz (B7). `CAPS.CLK_MHZ` gives it.
+- A traffic generator is an AXI3 master on an HP port. Registers set the
+  operation, the address pattern, the burst length, the span, the gap
   between transactions, and the number of transactions in progress.
-- Timers that count PL clock cycles from the address handshake to the last
-  data beat (read) and to the response (write).
-- A histogram of these times in block RAM, and the minimum and the maximum.
-- A data checker with a known pattern.
+- The bus address is the base of the reserved region plus an offset of
+  24 bits. Thus no configuration can make an access outside the region.
+- Timers count `clk_m` cycles from the address handshake to the first R
+  beat, to RLAST, and to B (note "Latency" of the register map).
+- Three histograms of 1024 bins in block RAM, with minimum, maximum and sum.
+- A data checker with the pattern of the note "Data pattern".
+- Counters: transactions, stall cycles, response errors, data errors.
+
+The first version has one transaction in progress, sequential addresses,
+64-bit beats and HP0 only. `CAPS` shows the features of a bitstream. The PS
+program must not start a measurement that needs a feature that `CAPS` does
+not have.
+
+Verification of the test design (`tb/memprobe/`):
+
+- `tb_core` simulates the design with an AXI slave model, random latencies,
+  injected errors and two clocks with different periods. The model computes
+  the expected histograms and counters from its own record of the handshakes.
+- `tb_hist` tests one histogram with a full FIFO.
+- `gen.sby` and `regs.sby` prove the AXI rules of the HP master and of the
+  GP0 slave. The proofs include: each access is in the span, and each GP0
+  request gets its answer.
 
 ### Measurements
 
