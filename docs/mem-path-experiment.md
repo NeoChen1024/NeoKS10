@@ -340,5 +340,58 @@ for all threads together.
 - The data of a `pread` into the region was checked at four offsets of the
   partition table of the card, with `devmem2`: equal.
 
-Not done yet: B4 to B6. They need more than one transaction in progress,
-mixed operations, HP1 and the order test: the next version of the design.
+### M2a: many transactions in progress (B4, B5)
+
+**[measured]** 2026-11-26. Design `rtl/memprobe` version 2 at commit
+e58e1f62 (`BUILD` register), 100 MHz, HP0, 64-bit beats, the first 4 MiB,
+GAP 0, PS idle, Linux 6.18.64-pynq-z2. Method: `memprobe rate`; all rows
+are in `docs/data/mem-path-m2a-rate-100mhz.csv`.
+
+**Regression against M1.** With one transaction in progress, version 2
+gave the same results as version 1: read 19 cycles at the median (16
+beats: last beat 34), write response 12 cycles (16 beats: 31), 16-beat
+writes 369.9 MiB/s, 16-beat reads 327.4 MiB/s (M1: 328.2). The short B9
+gave 0 mismatches.
+
+**B4, random addresses.** Transactions in each second, in millions:
+
+| In progress | 1-beat writes | 1-beat reads | 16-beat writes (MiB/s) | 16-beat reads (MiB/s) |
+|---|---|---|---|---|
+| 1 | 7.14 | 4.13 | 369.9 | 313.9 |
+| 2 | 14.29 | 8.11 | 739.7 | 608.2 |
+| 4 | 28.57 | 15.94 | 762.9 | 755.9 |
+| 8 | 48.00 | 30.26 | 762.9 | 762.9 |
+| 16 | 48.51 | 43.50 | not measured | not measured |
+
+- 762.9 MiB/s is one 8-byte beat in each cycle at 100 MHz: the data
+  width of the port at this clock is the limit of 16-beat bursts.
+- With 8 or more 1-beat writes in progress, the rate is near 50 million in
+  each second. This is a limit of the test design: it sets at most one
+  ARVALID or AWVALID in two cycles. The port can accept more; a later
+  version of the design must measure it.
+- The median read latency is 22 cycles with random addresses, and 19 with
+  sequential addresses (M1). It grows to 26 cycles with 16 reads in
+  progress; the 99th percentile grows from 43 to 68 cycles.
+- With 8 or 16 writes in progress, the write response median stays at 12
+  cycles, and the 99th percentile grows to 31 and 53 cycles.
+
+**B5, mixed reads and writes, random 1-beat, VERIFY.**
+
+| Reads | In progress | Transactions in each second (millions) | Read median, p99 (cycles) | Write median, p99 (cycles) |
+|---|---|---|---|---|
+| 50 % | 1 | 5.21 | 22, 49 | 12, 12 |
+| 50 % | 4 | 19.40 | 22, 58 | 12, 12 |
+| 50 % | 8 | 33.64 | 26, 68 | 12, 12 |
+| 80 % | 1 | 4.50 | 22, 48 | 12, 12 |
+| 80 % | 4 | 17.22 | 22, 53 | 12, 12 |
+| 80 % | 8 | 31.11 | 22, 58 | 12, 12 |
+| 95 % | 1 | 4.21 | 22, 46 | 12, 12 |
+| 95 % | 4 | 16.34 | 22, 52 | 12, 12 |
+| 95 % | 8 | 30.78 | 22, 56 | 12, 12 |
+
+- The actual shares of reads were 50.07 %, 80.07 % and 95.09 %.
+- Each read of these runs was compared with the pattern: 0 data errors.
+  Also 200000 random reads with 16 in progress gave 0 data errors.
+
+Not done yet: B6 (order of a write and a read, HP1 to HP3), the 32-bit
+width of B7, and B4 and B5 at 50 MHz and 150 MHz.
