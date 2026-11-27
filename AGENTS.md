@@ -177,7 +177,8 @@ fails.
 ## Rules for the logic (SystemVerilog)
 
 - The first core runs the assembled ITS microcode on the KS10 data path,
-  with the real 8080 console program. It is multi-cycle. Do not add a
+  with the real 8080 console program. The 8080 program runs in a model of
+  the 8080 on the PS, not in the PL. The core is multi-cycle. Do not add a
   pipeline before the first core runs ITS.
 - The core gives a record at each completed instruction. The co-simulation
   compares this record with the microcode-level model.

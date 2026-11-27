@@ -928,7 +928,9 @@ Decided on 2026-11-27:
    2026-11-27): a model of the data path runs the microcode that the ITS
    build assembles (`KSHACK; MCR 262`, copied to `RAM RAM`), and the
    real 8080 console program. The first core in the PL has the same
-   goal.
+   goal. The 8080 program runs in a software model of the 8080 on the PS
+   (ARM); the PL does not need an 8080. It reaches the PL processor
+   through the console registers of the PS/PL interface.
 18. KLH10 is a second reference emulator, next to SIMH.
 
 Open:

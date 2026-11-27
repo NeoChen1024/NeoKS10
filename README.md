@@ -53,7 +53,7 @@ TOPS-10 and of TOPS-20 is not a goal.
 | Instruction table | Data file | One definition of each instruction. Decoders, documents and coverage lists are generated from it |
 | Register map | Data file | One definition of the PS/PL interface. A SystemVerilog package and Rust constants are generated from it |
 | Emulator | Rust | Console, devices, image formats, and the software processor |
-| Processor core | SystemVerilog | First the KS10 data path that runs the assembled ITS microcode, with the real 8080 console program. A pipeline is a later step |
+| Processor core | SystemVerilog | First the KS10 data path that runs the assembled ITS microcode. The real 8080 console program runs in a model of the 8080 on the PS. A pipeline is a later step |
 | Memory bridge | SystemVerilog | Cache, write queue, AXI master to the PS memory |
 | Panel | SystemVerilog | Lamp brightness and the HDMI signal |
 | Test tools | Rust, Verilator, SymbiYosys | Differential tests, co-simulation, mutation, formal proofs |

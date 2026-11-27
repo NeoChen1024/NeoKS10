@@ -71,8 +71,6 @@ disagree:
 
 ## The microcode-level model
 
-- Where the 8080 console program runs: a model of the 8080 on the PS, or
-  an 8080 in the PL.
 - The data path details that the microcode sources do not give: the
   width of the 2901 slices and their extra bits, the meaning of `DP0` and
   of the special functions (MUL, DIV, ASHC, NORM DISP), and their timing.
