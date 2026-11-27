@@ -137,6 +137,9 @@ fails.
   guest error is a guest trap or a console message.
 - The emulator is deterministic. All input that changes with time (clock,
   terminal, network) goes through one layer that can record and replay it.
+  One exception: in `neoks10 run --pace normal`, the timer ticks come from
+  the wall clock, for daily use. That mode has no record and no replay.
+  Tests do not use it.
 - One `Machine` structure owns all state. Do not use `Rc<RefCell<_>>`.
 - A 36-bit word is its own type. Do not pass guest words as a bare `u64`.
 - `unsafe` is permitted in one module only: the module for `mmap` and for

@@ -118,6 +118,11 @@ pub struct Machine {
     pub oneproc: OneProc,
     /// The I/O bus: adapters and devices.
     pub io: Io,
+    /// The timer ticks come from [`Machine::tick`], which the host calls
+    /// from the wall clock, and not from the instruction count. The run
+    /// then depends on the host and cannot be repeated (`neoks10 run
+    /// --pace normal`).
+    pub wall_clock: bool,
 }
 
 impl Default for Machine {
@@ -203,6 +208,7 @@ impl Machine {
             pxct: 0,
             oneproc: OneProc::Off,
             io: Io::default(),
+            wall_clock: false,
         }
     }
 
@@ -775,6 +781,17 @@ impl Machine {
             .then(|| (i.ac, self.ac[i.ac]))
     }
 
+    /// The processor is in the idle loop ([`Machine::idle_loop`]).
+    pub fn idle(&self) -> bool {
+        self.idle_loop().is_some()
+    }
+
+    /// One tick of the 1 ms clock, if [`Machine::wall_clock`] is set.
+    pub fn tick(&mut self) {
+        self.timer.last_tick = self.count;
+        timer::tock(self);
+    }
+
     /// One [`Machine::step`]. If the step was a pass of the idle loop
     /// ([`Machine::idle_loop`]), also do the next passes up to the first
     /// instruction count at which the timer, the 8080 or a device can do
@@ -809,8 +826,13 @@ impl Machine {
         if self.count != start + 1 || self.idle_loop() != Some((a, x)) {
             return Ok(0);
         }
+        let tick = if self.wall_clock {
+            u64::MAX
+        } else {
+            self.timer.last_tick + timer::INSTRUCTIONS_PER_MS
+        };
         let deadline = limit
-            .min(self.timer.last_tick + timer::INSTRUCTIONS_PER_MS)
+            .min(tick)
             .min(
                 self.console
                     .deadline(self.mem[crate::console::CTYIN as usize]),

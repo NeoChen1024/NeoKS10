@@ -179,6 +179,10 @@ pub enum Pace {
     /// Wait so that the virtual time does not run ahead of the wall
     /// clock.
     Realtime,
+    /// The timer ticks come from the wall clock, as in SIMH: full speed
+    /// while the guest works, a sleep to the next tick while it is idle.
+    /// The run cannot be repeated, so it has no record.
+    Normal,
 }
 
 pub struct Options {
@@ -206,6 +210,8 @@ pub struct Engine {
     /// The wall clock and instruction count of the last start, for
     /// `--pace realtime`.
     base: (Instant, u64),
+    /// `--pace normal`: the ticks done since `base`.
+    ticks: u64,
     script: Option<ScriptRun>,
     /// The passes of the idle loop done at once.
     skipped: u64,
@@ -223,6 +229,14 @@ fn kind_index(k: Kind) -> usize {
 
 impl Engine {
     pub fn new(opts: Options) -> Result<Engine, String> {
+        if opts.pace == Pace::Normal && (opts.record.is_some() || opts.replay.is_some()) {
+            return Err(
+                "--pace normal cannot be repeated: use --pace fast, idle or realtime with --record or --replay"
+                    .into(),
+            );
+        }
+        let mut m = Machine::new();
+        m.wall_clock = opts.pace == Pace::Normal;
         let record = match &opts.record {
             Some(p) => Some(BufWriter::new(
                 File::create(p).map_err(|e| format!("{}: {e}", p.display()))?,
@@ -245,7 +259,7 @@ impl Engine {
             }
         }
         Ok(Engine {
-            m: Machine::new(),
+            m,
             running: false,
             stopped: None,
             opts,
@@ -256,6 +270,7 @@ impl Engine {
             expects: Vec::new(),
             images: Default::default(),
             base: (Instant::now(), 0),
+            ticks: 0,
             script: None,
             skipped: 0,
             quit: false,
@@ -414,6 +429,7 @@ impl Engine {
         self.running = true;
         self.stopped = None;
         self.base = (Instant::now(), self.m.count);
+        self.ticks = 0;
     }
 
     fn physical(&self, space: Space, a: u32) -> Option<u32> {
@@ -619,8 +635,11 @@ impl Engine {
             .enumerate()
             .map(|(k, c)| format!("\nAC {:02o}: {}", 4 * k, c.join("  ")))
             .collect();
+        // The time base in milliseconds (2^12 units for each).
+        let (hi, lo) = m.timer.read(m.count);
+        let clock = ((hi.get() << 35) | lo.get()) >> 12;
         let text = format!(
-            "PC {}  flags {:06o}  {state}\ninstructions {} ({} idle passes at once)  paging {}  PI {}\nEBR {}  UBR {}{ac_text}",
+            "PC {}  flags {:06o}  {state}\ninstructions {} ({} idle passes at once)  clock {clock} ms  paging {}  PI {}\nEBR {}  UBR {}{ac_text}",
             m.pc,
             m.flags.0,
             m.count,
@@ -639,6 +658,7 @@ impl Engine {
                 "stopped": self.stopped,
                 "instructions": m.count,
                 "idle_skipped": self.skipped,
+                "clock_ms": clock,
                 "ac": acs,
                 "paging": m.paging,
             }),
@@ -892,6 +912,22 @@ impl Engine {
         end
     }
 
+    /// `--pace normal`: the ticks of the wall clock since the last call.
+    /// After a stop of the host of more than 1 s, the time is lost, as on
+    /// a stopped KS10.
+    fn wall_ticks(&mut self) {
+        let ms = self.base.0.elapsed().as_millis() as u64;
+        let due = ms.saturating_sub(self.ticks);
+        for _ in 0..due.min(1000) {
+            self.m.tick();
+        }
+        self.ticks = if due > 1000 { ms } else { self.ticks + due };
+    }
+
+    fn next_tick(&self) -> Instant {
+        self.base.0 + Duration::from_millis(self.ticks + 1)
+    }
+
     /// The main loop: requests, recorded inputs, instructions. Returns when
     /// a `quit` comes, when all senders are gone, or at the end of a replay
     /// with the processor stopped.
@@ -964,7 +1000,16 @@ impl Engine {
                 self.check_expects();
                 continue;
             }
-            let end = self.batch_end();
+            let mut end = self.batch_end();
+            if self.opts.pace == Pace::Normal {
+                // The batch ends at the next tick, so that a tick comes
+                // within one batch, and the idle passes count at the
+                // rate of time_per_instruction_ns.
+                self.wall_ticks();
+                let left = self.next_tick().saturating_duration_since(Instant::now());
+                let n = left.as_nanos() as u64 / self.opts.ns_per_instruction.max(1);
+                end = end.min(self.m.count + n.max(1));
+            }
             let skipped = self.skipped;
             let watch = self.script.as_ref().is_some_and(|r| r.wait.is_some());
             while self.m.count < end {
@@ -989,6 +1034,12 @@ impl Engine {
                 Pace::Fast => continue,
                 Pace::Idle => Instant::now() + ns(self.skipped - skipped),
                 Pace::Realtime => self.base.0 + ns(self.m.count - self.base.1),
+                Pace::Normal => {
+                    if self.skipped == skipped || !self.m.idle() {
+                        continue;
+                    }
+                    (Instant::now() + ns(self.skipped - skipped)).min(self.next_tick())
+                }
             };
             // Wait for the wall clock. Requests come in during the wait.
             while self.running {
@@ -1235,5 +1286,16 @@ mod tests {
         std::fs::write(&tape, [4, 0, 0, 0, 1, 2, 3, 5, 4, 0, 0, 0]).unwrap();
         assert_eq!(replay(), (1, false));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A run with the wall clock cannot be repeated: no record, no replay.
+    #[test]
+    fn normal_has_no_record() {
+        let mut o = options(Some(std::env::temp_dir().join("neoks10-never.rec")), None);
+        o.pace = Pace::Normal;
+        assert!(Engine::new(o).is_err());
+        let mut o = options(None, None);
+        o.pace = Pace::Normal;
+        assert!(Engine::new(o).unwrap().m.wall_clock);
     }
 }

@@ -16,16 +16,19 @@ use engine::{Engine, Input, Kind, Options, Out, Pace, Request};
 
 const USAGE: &str = "\
 usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-                   [--replay FILE] [--script FILE] [--pace fast|idle|realtime]
+                   [--replay FILE] [--script FILE] [--pace normal|fast|idle|realtime]
                    [--no-idle]
        neoks10 console [--control PATH]
        neoks10 ctl [--control PATH] [--json] COMMAND...
        neoks10 help [--markdown]
 
 In `run`, Ctrl-\\ opens the operator prompt; `help` there lists the commands.
-`run` on a terminal without --script keeps the virtual time to the wall
-clock (--pace realtime); other runs do not wait (--pace fast). With
---pace idle, the host sleeps for the idle time of ITS only.
+Pace: `normal` takes the clock of the KS10 from the wall clock (as SIMH
+does) and cannot be recorded; `fast` does not wait; `idle` sleeps for the
+idle time of ITS; `realtime` keeps the virtual time to the wall clock.
+`run` with a terminal or a control socket uses `normal`, and `idle` with
+--record. A run with --script or --replay, or with neither a terminal
+nor a socket, uses `fast`.
 `run` listens on the control socket neoks10.sock in the directory of CONFIG
 (or the current directory). `console` and `ctl` use NEOKS10_CONTROL, or
 neoks10.sock in the current directory, if --control is not given.";
@@ -93,10 +96,11 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
             "--replay" => r.replay = Some(value("--replay")?),
             "--pace" => {
                 r.pace = Some(match it.next().map(String::as_str) {
+                    Some("normal") => Pace::Normal,
                     Some("fast") => Pace::Fast,
                     Some("idle") => Pace::Idle,
                     Some("realtime") => Pace::Realtime,
-                    _ => return Err("--pace needs fast, idle or realtime".into()),
+                    _ => return Err("--pace needs normal, fast, idle or realtime".into()),
                 })
             }
             "--no-idle" => r.idle = false,
@@ -127,16 +131,23 @@ fn run(args: &[String]) -> Result<i32, String> {
         Some(p) => Config::load(p)?,
         None => Config::default(),
     };
-    // A person at the terminal needs the guest clock to follow the wall
-    // clock; a script, a replay or a program does not.
+    // A run that people or programs use through the terminal or the
+    // socket takes the clock from the wall clock; a script or a replay
+    // does not wait.
     let interactive = std::io::stdin().is_terminal() && a.replay.is_none();
     let mut e = Engine::new(Options {
         ns_per_instruction: cfg.machine.time_per_instruction_ns,
-        pace: a.pace.unwrap_or(if interactive && a.script.is_none() {
-            Pace::Realtime
-        } else {
-            Pace::Fast
-        }),
+        pace: a.pace.unwrap_or(
+            if a.script.is_none() && a.replay.is_none() && (interactive || !a.no_control) {
+                if a.record.is_some() {
+                    Pace::Idle
+                } else {
+                    Pace::Normal
+                }
+            } else {
+                Pace::Fast
+            },
+        ),
         idle: a.idle,
         record: a.record,
         replay: a.replay,

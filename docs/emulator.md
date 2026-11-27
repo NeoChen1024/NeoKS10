@@ -284,18 +284,32 @@ that record on `soft` then repeats the run in software.
 - Device delays (seek, tape motion, line speed of the DZ11) are in virtual
   time. They do not change the results of the guest program, only its
   timing.
-- `--pace` selects how the run waits for the wall clock. A wait does not
-  change the result of a run, only its speed. While the machine thread
-  waits, a command from the terminal or the socket comes in at once.
+- `--pace` selects how the run follows the wall clock. In `fast`, `idle`
+  and `realtime`, the wait does not change the result of a run, only its
+  speed. While the machine thread waits, a command from the terminal or
+  the socket comes in at once.
+- `normal` is the mode for daily use. The ticks of the 1 ms clock
+  (`Machine::tick`) come from the wall clock, as in SIMH. The guest works
+  at full speed; while ITS is idle, the host sleeps to the next tick, and
+  the idle passes count at 1 for each `time_per_instruction_ns`. The run
+  depends on the host and cannot be repeated, so `normal` refuses
+  `--record` and `--replay`.
 
-| `--pace` | Wait | Guest clock | Host CPU |
-|---|---|---|---|
-| `fast` | None | Far ahead of the wall clock, most of all while ITS is idle | One core |
-| `idle` | The time of the idle passes | Ahead while ITS works, at wall speed while it is idle | Low while ITS is idle |
-| `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each `time_per_instruction_ns` | Low |
+| `--pace` | Wait | Guest clock | Host CPU | Repeatable |
+|---|---|---|---|---|
+| `normal` | To the next tick, while ITS is idle | The wall clock | Low while ITS is idle | No |
+| `fast` | None | Far ahead of the wall clock, most of all while ITS is idle | One core | Yes |
+| `idle` | The time of the idle passes | Ahead while ITS works, at wall speed while it is idle | Low while ITS is idle | Yes |
+| `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each `time_per_instruction_ns` | Low | Yes |
 
-- `run` on a terminal without `--script` uses `realtime`. Other runs (a
-  script, a replay, no terminal) use `fast`.
+- `run` with a terminal or a control socket uses `normal`, if it has no
+  `--script` and no `--replay`; with `--record` it uses `idle`. Other
+  runs use `fast`.
+- SIMH sleeps while the guest is idle and runs at full speed while it
+  works **[emulator]**. Its clock comes from the wall clock (`kx10_cpu.c`:
+  `sim_activate_after`, `sim_rtcn_calb`). `normal` does the same. `idle`
+  is the repeatable form: its guest clock is virtual and runs ahead while
+  ITS works.
 - The wall clock (for the date of ITS) is a host input of the host layer.
 
 **The idle loop.** If no job can run, ITS runs the null job **[its]**
@@ -349,10 +363,16 @@ emulator waits. Both take the wall clock into the virtual time;
   2.57 s wall time and 2.52 s CPU time for 1137.5 s of virtual time.
   The 1000 s of idle time took about 1.6 s: the guest clock ran about
   600 times faster than the wall clock, on one full core.
+- `--pace normal` through the control socket (`ctl expect`, `ctl send`):
+  `IN OPERATION` after 1.9 s, the `DELRNM` prompt after 123.7 s. Then 20.03
+  s of wall time with an idle ITS: the time base advanced 20036 ms, the
+  instruction count 19.45 million, and the CPU time in user mode was
+  0.16 s (0.8 % of one core). Method: `cpu show` (`clock_ms`) and
+  `/proc/PID/stat`.
 - Most of the boot time of ITS is a wait: the system job tries to get
   the time from the network (`NETIME`), and no host answers. The wait is
-  idle time. With `--pace idle` or `realtime`, the boot thus takes about
-  2 minutes of wall time.
+  idle time. With `--pace normal`, `idle` or `realtime`, the boot thus
+  takes about 2 minutes of wall time.
 
 ### Command line
 
@@ -360,7 +380,8 @@ The program `neoks10` has subcommands.
 
 ```
 neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-            [--replay FILE] [--script FILE] [--pace fast|idle|realtime]
+            [--replay FILE] [--script FILE]
+            [--pace normal|fast|idle|realtime]
             [--no-idle] [--trace FILE] [--cpu soft|pl]
 neoks10 console [--control PATH]
 neoks10 ctl [--control PATH] [--json] COMMAND...
@@ -748,10 +769,14 @@ Decided on 2026-11-27:
    `crypto-common`, `hybrid-array`, `typenum` and `cpufeatures`.
 13. The emulator detects the idle loop of ITS (the owner proposed an
    idle detection as in SIMH). See [Time](#time).
+14. `--pace normal` is the mode for daily use and the default of a run
+   with a terminal or a control socket. Its clock comes from the wall
+   clock, as in SIMH, and it does not need to be repeatable. The rule
+   "The emulator is deterministic" of AGENTS.md has this exception.
 
 Open:
 
-14. The IMP interface for step 6. The choices include the emulator-only
+15. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.

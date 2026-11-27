@@ -64,15 +64,19 @@ impl Timer {
     }
 }
 
-/// Do the ticks that are due before the next instruction.
+/// Do the ticks that are due before the next instruction. With the wall
+/// clock, the host does the ticks ([`Machine::tick`]).
 pub fn run(m: &mut Machine) {
+    if m.wall_clock {
+        return;
+    }
     while m.count >= m.timer.last_tick + INSTRUCTIONS_PER_MS {
         m.timer.last_tick += INSTRUCTIONS_PER_MS;
         tock(m);
     }
 }
 
-fn tock(m: &mut Machine) {
+pub(crate) fn tock(m: &mut Machine) {
     let t = &mut m.timer;
     let low = t.time1.get() + UNITS_PER_MS;
     if low & (1 << 35) != 0 {
@@ -112,6 +116,28 @@ fn sample(m: &mut Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // With the wall clock, steps do no ticks; each Machine::tick is one
+    // TOCK, and the idle loop skips to the limit, not to a tick.
+    #[test]
+    fn wall_clock_ticks() {
+        let mut m = Machine::new();
+        m.wall_clock = true;
+        m.ac[0o17] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o17));
+        m.pc = Half::wrap(0o17);
+        let mut skipped = 0;
+        while m.count < 50_000 {
+            skipped += m.step_idle(50_000).unwrap();
+        }
+        // The DZ11 polls every CHAR_TIME: one step for each.
+        assert_eq!(m.count, 50_000);
+        assert!(skipped > 49_900, "{skipped}");
+        assert_eq!(m.timer.time1.get(), 0);
+        m.tick();
+        m.tick();
+        assert_eq!(m.timer.time1.get(), 2 * UNITS_PER_MS);
+        assert_eq!(m.timer.last_tick, 50_000);
+    }
 
     // inout.50, TOCK: 2^12 per ms; the interval sets the flag when the
     // time to go reaches 0, and the period is added back.
