@@ -146,12 +146,17 @@ fn run(args: &[String]) -> Result<i32, String> {
         if e.replaying() {
             return Err("--script and --replay together are not possible".into());
         }
-        e.set_script(script::Script::load(p)?);
+        e.set_script(script::Script::load(p)?, true);
     }
     let interactive = std::io::stdin().is_terminal() && !e.replaying();
     let (tx, rx) = channel::<Request>();
+    // Set when the machine thread ends (a quit from the socket or a
+    // script), so that the terminal leaves raw mode and returns.
+    let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = ended.clone();
     let machine = std::thread::spawn(move || {
         e.serve(&rx);
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
         e.exit
     });
     // The control socket. While it listens, `run` ends only with `quit`.
@@ -166,7 +171,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         Some(p)
     };
     if interactive {
-        term::run(tx.clone());
+        term::run(tx.clone(), &ended);
         let (rtx, _rrx) = channel();
         let _ = tx.send(Request::Command {
             cmd: cmd::Command::Quit,

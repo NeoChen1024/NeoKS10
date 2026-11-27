@@ -150,6 +150,25 @@ fn quote(a: &str) -> String {
     format!("\"{}\"", a.replace('"', "\\\""))
 }
 
+/// The line with its file argument made absolute: the server has another
+/// current directory than the client.
+fn absolutize(line: &str) -> String {
+    let path = match cmd::parse(line) {
+        Ok(Some(Command::DiskAttach { path, .. }))
+        | Ok(Some(Command::TapeMount { path, .. }))
+        | Ok(Some(Command::ScriptRun(path))) => path,
+        _ => return line.to_string(),
+    };
+    let Ok(mut w) = cmd::words(line) else {
+        return line.to_string();
+    };
+    let abs = std::path::absolute(&path).unwrap_or_else(|_| PathBuf::from(&path));
+    if let Some(x) = w.iter_mut().skip(2).find(|x| **x == path) {
+        *x = abs.to_string_lossy().into_owned();
+    }
+    w.iter().map(|x| quote(x)).collect::<Vec<_>>().join(" ")
+}
+
 /// `neoks10 ctl [--control PATH] [--json] COMMAND...`.
 pub fn ctl(args: &[String]) -> Result<i32, String> {
     let mut path = None;
@@ -167,7 +186,7 @@ pub fn ctl(args: &[String]) -> Result<i32, String> {
         return Err("usage: neoks10 ctl [--control PATH] [--json] COMMAND...".into());
     }
     let mut c = Client::connect(&client_path(path))?;
-    let v = c.send(&words.join(" "))?;
+    let v = c.send(&absolutize(&words.join(" ")))?;
     if raw {
         println!("{v}");
     } else {
@@ -254,7 +273,7 @@ pub fn console(args: &[String]) -> Result<i32, String> {
                 continue;
             }
             Ok(Some(cmd)) => {
-                let v = c.send(&line)?;
+                let v = c.send(&absolutize(&line))?;
                 let r = reply_of(&v);
                 let t = r.text.trim_end();
                 if r.ok {
@@ -278,6 +297,21 @@ pub fn console(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_files() {
+        let cwd = std::env::current_dir().unwrap();
+        let want = format!(
+            "tape 0 mount {} --ro",
+            quote(&cwd.join("x.tape").to_string_lossy())
+        );
+        assert_eq!(absolutize("tape 0 mount x.tape --ro"), want);
+        assert_eq!(
+            absolutize("tape 0 mount /a/x.tape"),
+            "tape 0 mount /a/x.tape"
+        );
+        assert_eq!(absolutize("cpu show"), "cpu show");
+    }
 
     #[test]
     fn quoting() {

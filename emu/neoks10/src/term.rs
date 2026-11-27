@@ -196,7 +196,13 @@ fn say(t: &str) {
 /// The terminal loop. Returns when the operator quits or the machine
 /// thread ends. One reader: crossterm reads the keys in both modes, so
 /// that no key waits in a buffer of the other mode.
-pub fn run(tx: Sender<Request>) {
+pub fn run(tx: Sender<Request>, ended: &AtomicBool) {
+    // Raw mode before the first CTY output, so that the terminal does not
+    // change its line ends.
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        eprintln!("neoks10: the terminal has no raw mode");
+        return;
+    }
     let held = Arc::new(AtomicBool::new(false));
     let (otx, orx) = channel();
     let _ = tx.send(Request::Subscribe(otx.clone()));
@@ -205,11 +211,18 @@ pub fn run(tx: Sender<Request>) {
     let shared = Arc::new(Mutex::new(units(&tx)));
     let mut ed = editor(shared.clone());
     let prompt = prompt();
-    if crossterm::terminal::enable_raw_mode().is_err() {
-        eprintln!("neoks10: the terminal has no raw mode");
-        return;
-    }
-    while let Ok(ev) = crossterm::event::read() {
+    loop {
+        if ended.load(Ordering::SeqCst) {
+            break;
+        }
+        match crossterm::event::poll(std::time::Duration::from_millis(100)) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(_) => break,
+        }
+        let Ok(ev) = crossterm::event::read() else {
+            break;
+        };
         let Event::Key(k) = ev else { continue };
         if k.kind == KeyEventKind::Release {
             continue;

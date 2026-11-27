@@ -152,6 +152,9 @@ struct ScriptRun {
     at: u64,
     /// An expect that waits: text, limit, line.
     wait: Option<(Vec<u8>, u64, usize)>,
+    /// The script of `run --script`: its failure ends the run. A script
+    /// of `script run` only stops, so that the other users go on.
+    startup: bool,
 }
 
 struct Expect {
@@ -339,6 +342,7 @@ impl Engine {
             Input::Halt => {
                 self.running = false;
                 self.stopped = Some("halted by the operator".into());
+                self.fail_expects("expect: the processor was halted");
                 Ok(format!("halted at PC {}", self.m.pc))
             }
             Input::Continue => {
@@ -411,11 +415,14 @@ impl Engine {
         };
         self.notice(format!("neoks10: processor stopped: {t}"));
         self.stopped = Some(t);
-        // An expect cannot succeed now.
+        self.fail_expects("expect: the processor stopped");
+    }
+
+    /// The expects of the clients cannot succeed while the processor
+    /// stops: the instruction count does not move.
+    fn fail_expects(&mut self, why: &str) {
         for e in std::mem::take(&mut self.expects) {
-            let _ = e
-                .reply
-                .send((Reply::err("expect: the processor stopped"), e.from));
+            let _ = e.reply.send((Reply::err(why), e.from));
         }
     }
 
@@ -692,7 +699,14 @@ impl Engine {
                     let _ = self.input(Input::Cty(k));
                 }
             }
-            Request::Subscribe(s) => self.subscribers.push(s),
+            Request::Subscribe(s) => {
+                // The output so far first: a subscriber that comes late
+                // (the terminal) loses nothing.
+                let old = &self.m.console.output[..self.sent];
+                if old.is_empty() || s.send(Out::Cty(old.to_vec())).is_ok() {
+                    self.subscribers.push(s);
+                }
+            }
             Request::Units(s) => {
                 let _ = s.send(self.units());
             }
@@ -702,12 +716,13 @@ impl Engine {
     /// The count of the next event that must stop a batch.
     /// Start a script. Its first `expect` looks at the CTY output that
     /// comes after this moment.
-    pub fn set_script(&mut self, s: Script) {
+    pub fn set_script(&mut self, s: Script, startup: bool) {
         self.script = Some(ScriptRun {
             s,
             from: self.m.console.output.len(),
             at: self.m.count,
             wait: None,
+            startup,
         });
     }
 
@@ -724,15 +739,22 @@ impl Engine {
             return Err(format!("{path}: a script cannot start a script"));
         }
         let t = format!("{}: {} steps", s.name, s.steps.len());
-        self.set_script(s);
+        self.set_script(s, false);
         Ok(t)
     }
 
     fn script_fail(&mut self, line: usize, e: &str) {
-        let name = self.script.take().map(|r| r.s.name).unwrap_or_default();
-        self.notice(format!("neoks10: {name}:{line}: {e}"));
-        self.exit = 1;
-        self.quit = true;
+        let Some(r) = self.script.take() else { return };
+        if r.startup {
+            self.notice(format!("neoks10: {}:{line}: {e}", r.s.name));
+            self.exit = 1;
+            self.quit = true;
+        } else {
+            self.notice(format!(
+                "neoks10: {}:{line}: {e}; the script stops",
+                r.s.name
+            ));
+        }
     }
 
     /// Do the steps of the script that are due.
@@ -979,6 +1001,21 @@ fn find(hay: &[u8], pat: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A subscriber that comes after the first CTY output gets it too
+    // (the terminal subscribes after the control socket starts).
+    #[test]
+    fn late_subscriber_gets_old_output() {
+        let mut e = Engine::new(options(None, None)).unwrap();
+        e.m.console.output.extend_from_slice(b"\r\n DSKDMP");
+        e.distribute();
+        let (tx, rx) = std::sync::mpsc::channel();
+        e.request(Request::Subscribe(tx));
+        assert_eq!(rx.try_recv(), Ok(Out::Cty(b"\r\n DSKDMP".to_vec())));
+        e.m.console.output.extend_from_slice(b"\r\n");
+        e.distribute();
+        assert_eq!(rx.try_recv(), Ok(Out::Cty(b"\r\n".to_vec())));
+    }
 
     #[test]
     fn relative_paths() {

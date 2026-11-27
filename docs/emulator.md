@@ -454,8 +454,12 @@ guest:
   after the previous step of the script. The DEC diagnostic monitor
   loses characters that come while it prints (`console.rs`).
 - Other commands run at once, at the count of the previous step.
-- If a step fails, `run` ends with exit status 1 and names the file and
-  the line.
+- If a step of a `run --script` script fails, `run` ends with exit
+  status 1 and names the file and the line. If a step of a `script run`
+  script fails, only the script stops, with a message: the other users
+  of the system go on.
+- `cpu halt` ends the `expect` commands that wait: the instruction count
+  does not move while the processor is stopped.
 
 The ITS build of `its/` and `make its-boot` use scripts. The waits count
 instructions, so a script gives the same result on a slow host.
