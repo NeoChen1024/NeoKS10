@@ -79,7 +79,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 
 | Path | Contents |
 |---|---|
-| `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
+| `spec/` | Instruction table, register map (`regmap.toml`), and their generators. `micro.py` is the microcode assembler |
 | `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
@@ -99,7 +99,8 @@ directory that `.gitignore` excludes.
 `emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
 `emu/ks10-machine/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
 `docs/devices.md`. It also writes `emu/ks10-core-uop/src/fields.rs` from the
-field definitions of the ITS microcode. It also writes `docs/console.md` from the command table
+field definitions of the ITS microcode, and `emu/ks10-core-uop/src/ucode.rs`
+from the microcode that `spec/micro.py` assembles. It also writes `docs/console.md` from the command table
 of `emu/neoks10`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
 fails.
@@ -126,7 +127,8 @@ fails.
   SKIPPED for it: a skip is not a pass.
 - `make microcode KS10_ITS_DISK=<rp0.dsk>` extracts the listing of the
   microcode from the dump tape of the ITS build (`output.tape`, next to
-  `rp0.dsk`), compares it with the RAM file on the disk, and runs the
+  `rp0.dsk`), compares it with the assembly of `spec/micro.py` and with
+  the RAM file on the disk, and runs the
   tests of `emu/ks10-core-uop` that need it (the power-up sequence and the
   single instructions). Run it when `emu/ks10-core-uop` or the microcode
   changes. It extracts the listing again only if `output.tape` is newer.

@@ -181,7 +181,8 @@ its-boot-neoks10:
 # The microcode of the ITS build (emu/ks10-core-uop). KS10_ITS_DISK names rp0.dsk
 # of the ITS build; output.tape, the dump tape of the build, is in the same
 # directory. itstar (the submodule tools/itstar of 3rdparty/its, pinned
-# there) extracts the listing KSHACK; MCR 262 into the build output. The
+# there) extracts the listing KSHACK; MCR 262 into the build output.
+# spec/micro.py compares its assembly with the listing, line by line. The
 # test emu/ks10-core-uop/tests/ram_file.rs reads the RAM file from the disk as
 # the 8080 does and compares it with the listing. The listing is extracted
 # again only if output.tape is newer.
@@ -203,6 +204,7 @@ $(MICROCODE_LISTING): $(wildcard $(ITS_TAPE))
 
 microcode-test: $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
 	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
+	$(PYTHON) spec/micro.py --its $(ITS_TREE) --compare $(MICROCODE_LISTING)
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
 	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --tests -- --nocapture
 

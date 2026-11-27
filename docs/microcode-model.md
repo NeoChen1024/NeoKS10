@@ -27,6 +27,50 @@ files:
 - The RAM file `KSHACK; MCR RAM`. The build copies it to `.; RAM RAM`, and
   `KSFEDR` puts it into the file system of the 8080 on the disk.
 
+### The assembler
+
+`spec/micro.py` assembles the eight files as MICRO does **[microcode]**
+(`micro.117` of the ITS tree). It follows the rules of MICRO for the
+constructs that these files use:
+
+- The tokens and the state table: `TOKEN`, `ITEM`, `STDISP`.
+- The macros with their arguments: `BEGMAC`, `GETCHM`.
+- The fields, the symbols and their order: `SRCFLD`, `SRCSY1`. A name
+  has at most 19 characters (`TOK3`). The list order is a signed compare
+  of the packed 7-bit text, so names that start with a letter come before
+  `#`.
+- The defaults `D`, `F` and `+` of a field, in the order of the field
+  list: `DEFALT`.
+- A field can overlap fields that are set if the common bits agree:
+  `BITS1`. `SHSTYLE` in `SPEC` needs this.
+- The addresses: three rounds over the location table for the absolute
+  addresses, the blocks `=pattern` and the other words: `ASGPCS`,
+  `FREWRD`.
+- The conditionals and the switches: `.IF`, `.IFNOT`, `.ENDIF`,
+  `.DEFAULT`, `.SET`.
+
+A construct that the files do not use is an error. The generator
+`spec/gen_microcode.py` writes the words and the symbols of the fields
+into `emu/ks10-core-uop/src/ucode.rs`.
+
+**Check of the assembler [measured]** 2026-11-28:
+
+- With the listing of the ITS build of 2026-11-26 (`make microcode`),
+  everything agrees. These are the 1980 (decimal) U words and the 512 D
+  words, with their addresses and lines. They are also the fields and the
+  symbols of the cross reference, in their order and with the line of
+  each definition.
+- With the listing of 1987 in KS10FPGA (`microcode/ITS/mcr.262`, commit
+  5090e7a1), the words and the cross reference agree. The line numbers
+  differ: `simple` now has two more comment lines before `BLTX`.
+  `spec/test_micro.py` makes this comparison.
+- The RAM file made from `ucode.rs` with the layout of `.RAMFILE` has the
+  SHA-256 of the RAM file on the disk
+  (`emu/ks10-core-uop/tests/ram_file.rs`).
+
+Before the `BITS1` rule was correct, three words differed from the
+listing. A changed word in the listing gives one difference.
+
 ### The control RAM
 
 The control RAM has 4000 words of 96 bits **[manual]** (EK-OKS10-TM-002,
@@ -80,8 +124,8 @@ The dispatch ROM has 512 words, one for each opcode. It is three
 512 × 8-bit ROM chips on the DPEA board **[manual]** (EK-OKS10-TM-002,
 section 5.4.4.1, page 5-41). The console loads only the control RAM: an
 address and eight 12-bit segments for each word **[manual]** (section
-5.4.6) **[its]** (`cmds.m80`, DMEM2CR). The only source of the dispatch
-ROM contents is the listing.
+5.4.6) **[its]** (`cmds.m80`, DMEM2CR). The contents of the dispatch ROM
+are the D words of the assembly (`ucode.rs`).
 
 **Check of the dispatch ROM [measured]** 2026-11-27 (the same test). The
 fields `A`, `B`, `ACDISP`, `I`, `READ`, `TEST`, `COND FUNC`, `VMA` and

@@ -49,6 +49,19 @@ fn sha256(words: &[W36]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The RAM file of the generated control RAM (`ucode::CRAM`), made with the
+/// layout of `.RAMFILE`, is the RAM file of the disk of the ITS build. An
+/// address without a word is three zero words, as on the disk.
+#[test]
+fn the_generated_microcode_gives_the_ram_file_of_the_disk() {
+    let mut words = vec![W36::ZERO; 3 * CRAM_WORDS];
+    for &(addr, bits) in ks10_core_uop::ucode::CRAM {
+        let at = 3 * usize::from(addr);
+        words[at..at + 3].copy_from_slice(&cram::to_ram_entry(Microword::from_bits(bits)));
+    }
+    assert_eq!(sha256(&words), RAM_FILE_SHA256);
+}
+
 #[test]
 fn the_ram_file_agrees_with_the_listing() {
     let Some((disk, list)) = inputs() else {
