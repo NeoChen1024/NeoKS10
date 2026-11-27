@@ -125,6 +125,13 @@ schematics (MP00540):
   Overflow, Carry 1 and Trap 1. `emu/ks10-core-soft` sets only Overflow
   and Trap 1 for the square of -2^70: it does not compute the partial
   products. Open item.
+- Bits 14–17 of the page fail word. PFMAP keeps them from VMA (itspag,
+  `ADDRESS HIGH/MEMORY`), and VMA loads them only with `EXT ADR`, at a
+  physical reference (DPM4; ks10, `VMA PHYSICAL`). After 13 370 188
+  instructions of the lockstep boot, a page fail word of the model has
+  bit 17 set, and the one of `emu/ks10-core-soft`, which keeps no VMA
+  14–17, has 0 **[measured]** 2026-11-27. The load that set it is not
+  traced.
 - The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
   both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
   clocks the data path at each repeat, as the manual describes

@@ -300,10 +300,10 @@ the control RAM.
   of the next section in `emu/ks10-core-soft`, 96 of the 144 runs
   differ. ASH 1,2 with AC 1 = 200000,,000001 gives AC 1 = 4,
   OV 1 and TRAP 1 0: the first step overflows, the second does not.
-  Random left shifts with ASH and ASHC agree with the rule. The model
-  does not run the floating point instructions, the byte instructions
-  and DMUL yet, so the rule for them has only the reading of the
-  microcode.
+  Random left shifts with ASH and ASHC agree with the rule. The byte
+  instructions and DMUL also agree with flags set. The model does not
+  run the floating point instructions yet, so the rule for them has only
+  the reading of the microcode.
 - **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at each PC flags word,
   Trap 1 is 0 unless the word sets it. At ASH TEST, both OV and TRAP 1
   take the overflow of the step, with no hold. Its OV does not agree with

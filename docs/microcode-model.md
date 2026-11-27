@@ -714,27 +714,30 @@ of the last step ([`discrepancies.md`](discrepancies.md), "Trap 1 and
 Trap 2: each flag word loads them"). Without that rule in
 `emu/ks10-core-soft`, 15 of the 90 cases differ, from both fills.
 
-36 more cases run twice with flags set: once with the two trap flags,
+48 more cases run twice with flags set: once with the two trap flags,
 once with all flags of executive mode except FPD. They test the words with
 `SPEC/FLAGS`, which load both trap flags (`AD FLAGS`, `JFCL FLAGS`, `SET
-AROV`, `SET PDL OV`, `NO DIVIDE`), and the carry flags of DMOVN
+AROV`, `SET PDL OV`, `NO DIVIDE`, `CLR FPD`), and the carry flags of DMOVN
 ([`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag
-word loads them" and "DMOVN: the carry flags of the complement"). All
-324 runs agree.
+word loads them" and "DMOVN: the carry flags of the complement"). They
+also run PUSHJ, JSR, JSP (DBus input 0), DMUL, the byte instructions and
+JFFO (the byte loop). A DPB of a 7-bit byte 5 into a word with bit 35
+set keeps bit 35; with bit 35 of DBM input 1 as 0, its four runs differ.
+All 372 runs agree.
 
 The run executes these codes (both fills, with the halt path):
 
 | Field | Codes (octal) |
 |---|---|
-| `AD` | 1 5 11 21 22 24 25 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 74 |
+| `AD` | 1 5 11 21 22 24 25 31 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 72 74 |
 | `DEST` | 0–7 |
-| `SHSTYLE` | NORM, ROT and ASHC left and right; DIV left |
-| `SKIP` | 31 32 33 36 42 52 53 55 56 62 63 64 66 70 |
-| `DISP` | 1 12 13 34 37 41 62 64 66 70 |
-| `DBUS`, `DBM` | 1 2 3; 4 5 6 7 |
+| `SHSTYLE` | NORM, ROT, ASHC and LSHC left and right; ONES and DIV left |
+| `SKIP` | 31 32 33 35 36 42 52 53 55 56 62 63 64 66 70 |
+| `DISP` | 1 12 13 34 37 41 62 64 65 66 67 70 |
+| `DBUS`, `DBM` | 0 1 2 3; 3 4 5 6 7 |
 | `RAMADR` | 0 1 2 4 6 7 |
-| `SCAD`/`SCADA`/`SCADB` | 3/1/0 4/1/0 4/1/2 6/0/0 7/1/0 |
-| `SPEC` | 0 3 4 6 10 15 21 25 27 36 40 43 44 46 47 61 |
+| `SCAD`/`SCADA`/`SCADB` | 3/1/0 3/1/3 3/3/3 4/1/0 4/1/2 5/1/0 6/0/0 7/1/0 7/3/0 7/7/0 |
+| `SPEC` | 0 1 2 3 4 5 6 10 15 21 25 27 36 40 43 44 46 47 61 |
 
 Modelled, but no case exercises it: PXCT ON and PREVIOUS EN 1, so XR
 PREV 1 and the previous block of `RAMADR` 4; `SPEC/PREV`, `SPEC/LDPXCT`,
@@ -1056,11 +1059,9 @@ often:
   sampled word (WORK[PCST] adds 1,,1).
 - The quantum counter of ITS: `TOCK` adds a tick only if no PI level is
   in progress (inout, `TOCK`). After each `TOCK` of the model (WORK[TIME1]
-  changes), the counter of the model.
-- Bits 14–17 of a page fail word are the old VMA 14–17. VMA loads them
-  only with `EXT ADR` at a physical reference (DPM4; ks10, `VMA
-  PHYSICAL`), so they depend on the page table of the hardware. A page
-  fail word that differs only there comes from the model.
+  changes), the counter of the model. In the boot this happens once: at
+  that `TOCK` of the model, level 7 is in progress **[measured]**
+  2026-11-27.
 
 The model runs the devices at `SPEC/NICOND`. `emu/ks10-core-soft` runs
 them at the start of its next step (`run_devices`). At an interrupt of
@@ -1131,9 +1132,9 @@ Stage 3. All come from the schematics **[manual]** (MP00540).
 millisecond in a table (itspag, `PF-INT`, `.IF/PCST`). It takes the
 sample in the 1 ms page fail, and backs up the PC if that cycle is not
 an instruction fetch. `emu/ks10-core-soft` samples at the instruction
-boundary. The PC word thus depends on the microcycle of the tick
-("Stage 4", "The lockstep run and time"). The lockstep run does not
-compare the words of the table; it prints how many differ.
+boundary. The PC word thus depends on the microcycle of the tick, and
+the lockstep run takes it from the model ("Stage 4", "The lockstep run
+and time").
 
 ### Results
 
@@ -1144,9 +1145,13 @@ compare the words of the table; it prints how many differ.
   CTY after 11 012 654 instructions, about 95.9 million microcycles. The
   model and `emu/ks10-core-soft` agree after each instruction and in main
   memory at the end. The run has 510 interrupts; the model takes each 1
-  or 2 instructions after `emu/ks10-core-soft` could. An earlier run to
-  40 000 000 instructions, with 3 842 interrupts, ITS logged in its
-  system job, also agreed.
+  or 2 instructions after `emu/ks10-core-soft` could. The cache answers
+  6 185 535 reads, and `emu/ks10-core-soft` has no cache: the cache data
+  stays coherent. A longer run, in which ITS logs in its system job,
+  first differs at 13 370 188 instructions, in bits 14–17 of a page fail
+  word ([`unknowns.md`](unknowns.md)). With these bits of 7 page fail
+  words taken from the model, it agreed to 40 000 000 instructions, with
+  3 842 interrupts.
 - On the way, the lockstep run found three errors of
   `emu/ks10-core-soft` against the schematics and the microcode: GOEXEC
   in executive mode takes PCU from bit 6 of the new flags word (DPE9

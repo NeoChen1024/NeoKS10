@@ -127,7 +127,6 @@ fn boot_from_disk_in_step_with_the_software_processor() {
     let (time1_work, quan_work) = (symbol(&text, "TIME1"), symbol(&text, "QUAN"));
     let mut model_time1 = m.ram_file[time1_work];
     let mut quan_copies = 0;
-    let mut pfw_copies = 0;
     let mut model_pcst = m.ram_file[pcst_work];
     let mut stop = None;
     let mut difference = None;
@@ -209,19 +208,6 @@ fn boot_from_disk_in_step_with_the_software_processor() {
                 synced += 1;
             }
             model_pcst = p;
-        }
-        // Bits 14-17 of a page fail word are the old VMA 14-17: VMA loads
-        // them only with EXT ADR, at a physical reference (DPM4; ks10,
-        // `VMA PHYSICAL`). The last such reference depends on the page
-        // table of the hardware, which ks10-core-soft does not have. A
-        // page fail word that differs only there comes from the model.
-        for n in 0..8 {
-            let a = s.ept_addr(0o440 + 3 * n) as usize;
-            let diff = m.memory[a].get() ^ s.mem[a].get();
-            if diff != 0 && diff & !(0o17 << 18) == 0 {
-                s.mem[a] = m.memory[a];
-                pfw_copies += 1;
-            }
         }
         // The quantum counter of ITS: TOCK adds a tick only if no PI level
         // is in progress (inout, TOCK), and the microcode does TOCK at the
@@ -305,8 +291,9 @@ fn boot_from_disk_in_step_with_the_software_processor() {
     );
     println!("{interrupts} interrupts, longest wait {longest_wait} instructions");
     println!(
-        "{} PC samples, {synced} copied from the model; {quan_copies} quantum counts, {pfw_copies} page fail words copied",
-        samples.len()
+        "{} PC samples, {synced} copied from the model; {quan_copies} quantum counts copied; {} cache hits",
+        samples.len(),
+        m.cache_hits
     );
     println!("CTY: {}", String::from_utf8_lossy(&s.console.output));
     assert_eq!(difference, None);

@@ -371,6 +371,9 @@ pub struct Machine {
     pub trap_cycle: bool,
     pub flags: PcFlags,
     pub cycles: u64,
+    /// Memory reads that the cache answered (CACHE HIT in the word that
+    /// completes a read).
+    pub cache_hits: u64,
     pub ticks: u64,
     pub coverage: Coverage,
 }
@@ -482,6 +485,7 @@ impl Machine {
             trap_cycle: p,
             flags,
             cycles: 0,
+            cache_hits: 0,
             ticks: 0,
             coverage: Coverage::default(),
         }
@@ -873,6 +877,9 @@ impl Machine {
         }
         // DPM5 E14: FORCE RAMFILE for an AC reference or a cache hit.
         let force_ramfile = (ac_ref || cache_hit) && memory_delay && self.cycle.read;
+        if cache_hit && memory_delay && self.cycle.read {
+            self.cache_hits += 1;
+        }
         // DPMA E22, E54: the RAM file takes the DBus at the end of a
         // cycle: an AC write, or a memory cycle (the cache data).
         let ramfile_write = self.memory_cycle
@@ -2231,8 +2238,9 @@ mod tests {
         }
     }
 
-    // DBM BYTES: SCAD 01-07 in each of the five 7-bit bytes, from bit 00;
-    // bit 35 is 0 (M8621-0-DPM1 and DPM2 rev B, input 1).
+    // DBM BYTES: SCAD 01-07 in each of the five 7-bit bytes, from bit 00
+    // (M8621-0-DPM1 and DPM2 rev B, input 1). Bit 35 is DP 35, which the
+    // callers add; `bytes` gives 0 there.
     #[test]
     fn bytes_repeats_scad_01_to_07() {
         // SCAD 00 1, SCAD 01-07 = 1000001, SCAD 08-09 = 11.

@@ -120,6 +120,17 @@ fn sample(m: &mut Machine) {
 mod tests {
     use super::*;
 
+    // DBM bits 34 and 35 of input 2 are 0 (DPM2 E165, E188): 13
+    // instructions are 53 units, of which RDTIME gives 52.
+    #[test]
+    fn rdtime_has_the_low_two_bits_zero() {
+        let t = Timer {
+            last_tick: 100,
+            ..Timer::default()
+        };
+        assert_eq!(t.read(113).1.get(), 52);
+    }
+
     // With the wall clock, steps do no ticks; each Machine::tick is one
     // TOCK, and the idle loop skips to the limit, not to a tick.
     #[test]
