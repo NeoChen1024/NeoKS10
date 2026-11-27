@@ -86,6 +86,10 @@ schematics (MP00540):
   FAIL`. The model takes EA1, EF1 and EK1 as inactive.
 - The byte dispatch inputs BYTE DISP 09–11 (DPE3).
 - The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1).
+- The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
+  both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
+  clocks the data path at each repeat, as the manual describes
+  (EK-OKS10-TM-002 5.4.1, bit 79).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

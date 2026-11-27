@@ -249,20 +249,24 @@ impl Alu {
 
     /// The output Y for a D input, before the registers change.
     pub fn y(&self, c: &Controls, d: W40) -> W40 {
+        W40::wrap(self.select_y(c, self.function(c, d).0))
+    }
+
+    /// The 2901 output mixer: A for the destination code 0 (RAMA), else F.
+    fn select_y(&self, c: &Controls, f: u64) -> u64 {
         if c.dest & 7 == 0 {
-            self.reg[usize::from(c.a & 15)]
+            self.reg[usize::from(c.a & 15)].get()
         } else {
-            W40::wrap(self.function(c, d).0)
+            f
         }
     }
 
     /// Run one microinstruction: compute F and Y, and clock the registers.
     pub fn step(&mut self, c: &Controls, d: W40) -> Outputs {
         let (f, carry_out, carry_02) = self.function(c, d);
-        let a = self.reg[usize::from(c.a & 15)].get();
         let q = self.q.get();
         let dest = c.dest & 7;
-        let y = if dest == 0 { a } else { f };
+        let y = self.select_y(c, f);
         // DEST bit 2 (the 2 weight of the field) selects the direction of
         // the shift mixers: 0 left, 1 right (DPE5 E403, E384). The 2901
         // destination is the field with that bit inverted.

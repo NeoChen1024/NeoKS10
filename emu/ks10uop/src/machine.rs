@@ -496,10 +496,13 @@ impl Machine {
 
     /// Run one microinstruction.
     ///
-    /// `MULTI SHIFT` (CSL5 E52, E33): while FE SIGN is 1, the CRA clock
-    /// stops and the data path runs the word again; when FE SIGN is 0, the
-    /// CRA clock runs and the word does nothing in the data path
-    /// **[manual]** (EK-OKS10-TM-002 5.4.1, bit 79; M8616-0-CSL5 rev D).
+    /// `MULTI SHIFT`: while FE SIGN is 1, the CRA clock stops (CSL5 E52,
+    /// E33), and the word runs again. When FE SIGN is 0, the CRA clock runs
+    /// and the DPE/M clock is off (CSL5 E52, E45, E54): the word does
+    /// nothing in the data path **[manual]** (M8616-0-CSL5 rev D;
+    /// EK-OKS10-TM-002 5.4.1, bit 79). While FE SIGN is 1, the DPE/M clock
+    /// also needs CSL5 FS (1) (E53), which this model takes as 1
+    /// (docs/unknowns.md).
     pub fn step(&mut self) -> Result<(), Stop> {
         let mw = self.cram[usize::from(self.upc & 0o3777)];
         if get(mw, u::MULTI_SHIFT) == 0 {
@@ -514,9 +517,18 @@ impl Machine {
             self.step_word(mw)?;
             (self.upc, self.sp, self.stack) = (upc, sp, stack);
         } else {
-            let (alu, e603, sc, fe) = (self.alu.clone(), self.e603, self.sc, self.fe);
+            // The DPE/M clock is off (CSL5 E52, E45, E54). The check above
+            // leaves these registers as the only data path state that the
+            // word can change.
+            let (alu, e603, sc, fe, int) = (
+                self.alu.clone(),
+                self.e603,
+                self.sc,
+                self.fe,
+                self.interrupt_req,
+            );
             self.step_word(mw)?;
-            (self.alu, self.e603, self.sc, self.fe) = (alu, e603, sc, fe);
+            (self.alu, self.e603, self.sc, self.fe, self.interrupt_req) = (alu, e603, sc, fe, int);
         }
         Ok(())
     }

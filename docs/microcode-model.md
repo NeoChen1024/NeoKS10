@@ -133,9 +133,12 @@ inside a cycle.
   0. If FE bit 0 is already 0, the microinstruction is a no-op
   **[manual]** (5.4.1, bit 79). The CRA clock stops while `MULTI SHIFT`
   and FE SIGN are both 1 (M8616-0-CSL5 rev D, E52, E33). Thus the word
-  repeats with the same address and stack, and the data path runs at
-  each repeat. The model stops if such a word also has a memory
-  function, `FMWRITE` or a special function of group 10, 20 or 40.
+  repeats with the same address and stack. If FE SIGN is 0, the DPE/M
+  clock is off (E52, E45, E54). If FE SIGN is 1, the DPE/M clock also
+  needs FS (1) (E53), which is not traced
+  ([`unknowns.md`](unknowns.md)). The model stops if such a word also has
+  a memory function, `FMWRITE` or a special function of group 10, 20 or
+  40.
 - A memory function needs two microinstructions: the first sets up and
   starts it, the second waits and takes or gives the word **[manual]**
   (5.6). A flat memory completes each function at once.
@@ -691,12 +694,13 @@ halt code there.
 
 **Result [measured]** 2026-11-27 (`emu/ks10uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
-and the words at 2000 and 2001 with `emu/ks10`. 33 cases of 34 agree,
+and the words at 2000 and 2001 with `emu/ks10`. 41 cases of 42 agree,
 from both fills: moves to and from memory and ACs, ADD and SUB with
 overflow and carries, ADDB, AND, IOR, SETZM, AOS (memory, AC
 destination, AC operand), HRRZ, HLL, CAIE, SKIPL, an indexed and an
-indirect MOVE, IMUL, MUL, IDIV, DIV, ASH left and right, ASHC, LSH and
-ROT.
+indirect MOVE, IMUL, MUL, IDIV, DIV, and the shifts: ASH left and right,
+by 0 and with overflow in the last step; ASHC both ways; LSH both ways
+and by 40 places; ROT both ways.
 
 In the case "ASH overflow", TRAP 1 differs, and all other state agrees.
 The microcode tests each step of the left shift, and a step without
@@ -710,7 +714,7 @@ The run executes these codes (both fills, with the halt path):
 |---|---|
 | `AD` | 1 5 11 21 22 24 25 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 74 |
 | `DEST` | 0–7 |
-| `SHSTYLE` | NORM left and right, ROT left, ASHC left and right, DIV left |
+| `SHSTYLE` | NORM, ROT and ASHC left and right; DIV left |
 | `SKIP` | 32 33 36 42 52 53 56 62 63 64 66 70 |
 | `DISP` | 1 12 13 34 37 41 62 64 66 70 |
 | `DBUS`, `DBM` | 1 2 3; 4 5 6 7 |
