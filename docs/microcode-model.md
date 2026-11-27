@@ -935,8 +935,8 @@ register (8080 registers 102 to 112) and the data cycle bit of register
   runs MOVEI and HALT; the halt code is 1 and the PC is the address of
   the HALT. A program of IOWRI, IORDI, IOWRQ, IORDQ, IOWRBQ and IORDBQ
   on the status register of adapter 3 and the WC register of the disk
-  RH11 gives the ACs of `emu/ks10-core-soft` and the values that the
-  test computes. Both fills.
+  RH11 gives the ACs that the register formats give
+  (`spec/devices.toml`). Both fills.
 - `emu/ks10-core-uop/tests/its_boot.rs`: BT loads the boot loader from
   the disk image of the ITS build and starts it at 1000. The test gives
   "its" and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`).
@@ -1137,8 +1137,8 @@ co-simulation of the model with the logic in `rtl/`.
 **[measured]** 2026-11-27, the ITS listing 262:
 
 - `emu/ks10-core-uop/tests/console.rs`: an APR interrupt on level 1 with
-  a return by `JRST 12,@`. The ACs, the RDAPR and RDPI words and the
-  halt PC agree with `emu/ks10-core-soft`. The model takes the
+  a return by `JRST 12,@`. The ACs, the halt PC and the RDAPR and RDPI
+  words have the values of the KSDEFS formats. The model takes the
   interrupt one instruction later than `emu/ks10-core-soft`, as the two
   latches of DPEB E167 give. Both fills. The mutants "no bus request
   latch", "APR FLAGS not loaded", "enables ignored" and "PI NEW wrong"

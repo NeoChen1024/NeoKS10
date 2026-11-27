@@ -7,8 +7,9 @@
 //! halt code 1 (ks10, `HALT/HALT=1`) and the PC of E (DECsystem-10/20
 //! Processor Reference Manual, JRST 4,).
 //!
-//! A second test runs the ITS I/O instructions on the Unibus adapters and
-//! compares the ACs with `ks10-core-soft`.
+//! Two more tests run the ITS I/O instructions on the Unibus adapters and
+//! an APR interrupt. Their expected values come from the register formats
+//! of `spec/devices.toml` and of KSDEFS (`ksdefs.194`, RDAPR, RDPI).
 
 mod common;
 
@@ -16,7 +17,7 @@ use common::{FILLS, label, machine};
 use ks10_core_uop::machine::{Machine, Stop};
 use ks10_machine::boot::Processor;
 use ks10_machine::devregs;
-use pdp10::{Half, W36};
+use pdp10::W36;
 
 /// After ST the microcode is still in the halt loop: it leaves the loop
 /// when it sees CONTINUE. Run until it leaves and comes back.
@@ -70,20 +71,28 @@ fn io_program() -> Vec<u64> {
     ]
 }
 
+/// The ACs of the program: AC 1 to AC 10.
+/// - UBASTA reads back PIH and PIL. The write clears PWR, and no device
+///   requests an interrupt, so the other bits are 0 (spec/devices.toml,
+///   `STA`).
+/// - WC is a 16-bit register: the word reads back. A byte write changes
+///   only its byte, and a byte read gives one byte (IOWRBQ, IORDBQ:
+///   ksdefs, "ITS IO INSTRUCTIONS").
+const IO_ACS: [u64; 8] = [
+    0o13,
+    0o13,
+    0o123456,
+    0o123456,
+    0o201,
+    0o201 << 8 | 0o056,
+    0o201,
+    0o056,
+];
+
 #[test]
-fn io_instructions_agree_with_the_software_processor() {
+fn io_instructions() {
     let haltlp = label("HALTLP");
     let program = io_program();
-    let mut s = ks10_core_soft::Machine::new();
-    for (k, w) in program.iter().enumerate() {
-        s.mem[0o1000 + k] = W36::wrap(*w);
-    }
-    s.pc = Half::wrap(0o1000);
-    let r = (0..100).find_map(|_| s.step().err());
-    assert!(
-        matches!(r, Some(ks10_core_soft::Stop::Halt { code: 1, .. })),
-        "{r:?}"
-    );
     for fill in FILLS {
         let mut m = machine(fill);
         m.master_reset();
@@ -94,20 +103,15 @@ fn io_instructions_agree_with_the_software_processor() {
         let r = run_to_halt(&mut m, haltlp);
         assert_eq!(r, Ok(true), "fill {:o}", fill.get());
         let block = usize::from(m.cur_block & 7) << 4;
-        for k in 1..=8 {
+        for (k, want) in (1..=8).zip(IO_ACS) {
             assert_eq!(
-                m.ram_file[block + k],
-                s.ac[k],
+                m.ram_file[block + k].get(),
+                want,
                 "AC {k:o}, fill {:o}",
                 fill.get()
             );
         }
     }
-    // The fields of the status register that a program can write
-    // (spec/devices.toml), and the word and byte values of WC.
-    assert_eq!(s.ac[2].get() & 0o77, 0o13);
-    let got: Vec<u64> = [4, 6, 7, 8].iter().map(|&k| s.ac[k].get()).collect();
-    assert_eq!(got, [0o123456, 0o201 << 8 | 0o056, 0o201, 0o056]);
 }
 
 /// WRUBR ends with SWEEP, which invalidates the whole page table and the
@@ -149,19 +153,23 @@ fn wrubr_invalidates_the_page_table_and_the_cache_directory() {
 /// takes the instruction at 40 + 2 n (inout, `PI10`: no adapter answers
 /// the WRU cycle), a JSR. The interrupt program reads the APR and PI
 /// words, clears the flag and returns with `JRST 12,@`. The formats are
-/// those of KSDEFS (ksdefs, WRAPR, RDAPR, WRPI). The test compares the
-/// ACs, the APR and PI words and the halt PC with `ks10-core-soft`.
+/// those of KSDEFS (ksdefs, WRAPR, RDAPR, WRPI, RDPI):
 ///
-/// The PC word that the JSR stores differs by design
-/// (docs/microcode-model.md, "Interrupt timing"). `ks10-core-soft` takes
-/// the interrupt before 1003. The model takes it before 1004
+/// - RDAPR: flag 30 enabled (3.6), flags 24 and 30 set (2.3 and 1.6),
+///   the request (1.4) and level 1: 000040,,004051.
+/// - RDPI: level 1 in progress (2.6), the system on (1.8) and all levels
+///   on (1.7 to 1.1): 0,,040377.
+///
+/// The PC word that the JSR stores is the one of the microcode
+/// (docs/microcode-model.md, "Interrupt timing"). The PRM allows the
+/// interrupt before 1003; the model takes it before 1004
 /// **[manual]**: WRAPR loads the APR enables two words before `DONE`,
 /// DPEB E167 latches the bus request at the next clock, and INTERRUPT REQ
 /// at the clock after it (M8620-0-DPEB rev B). `DONE` starts the fetch of
 /// 1003 and latches INT in DPM6 E16 one clock too early (ks10, `DONE`;
 /// inout, `WRAPR1`). The fetch of 1004 then page-fails.
 #[test]
-fn an_apr_interrupt_agrees_with_the_software_processor() {
+fn an_apr_interrupt() {
     let haltlp = label("HALTLP");
     let i = |op: u64, ac: u64, e: u64| op << 27 | ac << 23 | e;
     let program: Vec<(usize, u64)> = vec![
@@ -177,18 +185,7 @@ fn an_apr_interrupt_agrees_with_the_software_processor() {
         (0o1103, i(0o700, 0o15, 0o1201)),  // RDPI 1201
         (0o1104, i(0o254, 0o12, 0o1100) | 1 << 22), // JRST 12,@1100
     ];
-    let mut s = ks10_core_soft::Machine::new();
-    for &(a, w) in &program {
-        s.mem[a] = W36::wrap(w);
-    }
-    s.pc = Half::wrap(0o1000);
-    let r = (0..100).find_map(|_| s.step().err());
-    assert!(
-        matches!(r, Some(ks10_core_soft::Stop::Halt { code: 1, .. })),
-        "{r:?}"
-    );
-    assert_eq!(s.mem[0o1100].get() & 0o777777, 0o1003, "ks10-core-soft");
-    let want = [0o1200, 0o1201].map(|a| s.mem[a].get());
+    let want = [0o000040_004051, 0o040377];
     for fill in FILLS {
         let mut m = machine(fill);
         m.master_reset();
@@ -215,7 +212,7 @@ fn an_apr_interrupt_agrees_with_the_software_processor() {
         // The program writes AC 2 and AC 3 only.
         let block = usize::from(m.cur_block & 7) << 4;
         for k in [2, 3] {
-            assert_eq!(m.ram_file[block + k], s.ac[k], "AC {k}");
+            assert_eq!(m.ram_file[block + k].get(), 1, "AC {k}");
         }
     }
 }

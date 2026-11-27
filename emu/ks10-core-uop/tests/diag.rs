@@ -1,8 +1,8 @@
 //! The DEC KS10 diagnostics on the microcode-level model: recorded data
 //! of the machine (AGENTS.md, "Sources of truth", rank 2). The programs,
 //! the run file and the pass criteria are those of
-//! `emu/ks10-core-soft/tests/diag.rs` (SMCPU.CMD; docs/emulator.md,
-//! "Diagnostics"):
+//! `emu/ks10-core-soft/tests/diag.rs` (SMCPU.CMD, `ks10_machine::diag`;
+//! docs/emulator.md, "Diagnostics"):
 //!
 //! - DSKAA to DSKAH run alone and pass if they do not halt and their pass
 //!   count (location 30047, PASCNT) reaches the iterations.
