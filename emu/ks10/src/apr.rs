@@ -173,14 +173,23 @@ impl Pi {
 
 /// Opcode 700 by AC (spec/instructions.toml, acdisp 700).
 pub fn op700(m: &mut Machine, i: Inst, e: Half) -> R {
-    if m.flags.is_user() && !m.flags.has(crate::flags::Flags::USERIO) {
+    if !m.flags.io_legal() {
         // IOT: I/O in user mode needs User In-out (ks10.47, "SKIP IO
         // LEGAL"; A/IOT in the DRAM entry); else a monitor UUO.
         return Err(Fault::Uuo);
     }
     match i.ac {
         0 => m.write(e, APRID)?,
-        4 => m.apr.write(e),
+        4 => {
+            m.apr.write(e);
+            // WRAPR2: the microcode loads the new flags, then clears "KS
+            // interrupting the 8080" again: the flag is a pulse to the
+            // 8080.
+            if m.apr.flags & flag::KS_TO_8080 != 0 {
+                m.apr.flags &= !flag::KS_TO_8080;
+                m.console.doorbell(m.count);
+            }
+        }
         5 => m.write(e, m.apr.word())?,
         // CONSZ, CONSO APR: [microcode] inout.50, APRSZ and APRSO test the
         // right half of the APR word with the mask 7770.

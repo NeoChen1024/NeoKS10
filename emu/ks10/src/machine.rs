@@ -1,13 +1,14 @@
 //! The machine state and the instruction cycle of the software processor.
 //!
-//! This first version has no paging, no interrupts and no devices: the
-//! processor runs in executive mode on physical memory, as a stand-alone
-//! program does before it enables the pager.
+//! This version has no pager and no devices: the processor runs on
+//! physical memory, as a stand-alone program does before it enables the
+//! pager.
 
 use pdp10::instructions::{self as ins, Class};
 use pdp10::{Half, W36};
 
-use crate::apr::{Apr, Pi};
+use crate::apr::{Apr, Pi, flag};
+use crate::console::Console;
 use crate::flags::Flags;
 use crate::ops;
 
@@ -25,6 +26,9 @@ pub enum Stop {
     Unimplemented { pc: Half, word: W36 },
     /// A reference to memory above the installed memory.
     Nxm { pc: Half, address: u32 },
+    /// The program enabled the pager (WREBR bit 22), which this version
+    /// does not have.
+    Pager { pc: Half },
     /// The step limit of [`Machine::run`] was reached.
     Limit,
 }
@@ -40,12 +44,24 @@ pub struct Machine {
     pub pi: Pi,
     /// Completed instructions (the virtual time, docs/emulator.md).
     pub count: u64,
-    /// Physical address of the executive process table (EPT). WREBR sets
-    /// it; 0 until then.
-    pub ept: u32,
-    /// Physical address of the user process table (UPT), from WRUBR; 0
-    /// until then.
-    pub ubr: u32,
+    /// The EBR register as the microcode keeps it (inout.50, WREBR): the
+    /// WREBR operand shifted left 9 places, bit 0 set for "Tops-20 style".
+    pub ebr: W36,
+    /// The UBR register (inout.50, WRUBR, the ITS version): bits 0 and 2
+    /// as last written, the AC blocks in bits 6 to 11, the physical address
+    /// of the UPT in bits 16 to 35.
+    pub ubr: W36,
+    /// The pager and the traps are enabled (ks10.47, WORK[APR] bits 2.5
+    /// and 2.4; set by WREBR).
+    pub paging: bool,
+    /// The 8 AC blocks. The current block is in `ac`; its slot here is
+    /// out of date until the block changes.
+    pub blocks: [[W36; 16]; 8],
+    /// The current AC block, the number of the block in `ac`.
+    pub cur_block: u8,
+    /// The PC sample table pointer (inout.50, WORK[PCST]).
+    pub pcst: W36,
+    pub console: Console,
 }
 
 impl Default for Machine {
@@ -104,8 +120,35 @@ impl Machine {
             apr: Apr::default(),
             pi: Pi::default(),
             count: 0,
-            ept: 0,
-            ubr: 0,
+            ebr: W36::ZERO,
+            ubr: W36::ZERO,
+            paging: false,
+            blocks: [[W36::ZERO; 16]; 8],
+            cur_block: 0,
+            pcst: W36::ZERO,
+            console: Console::default(),
+        }
+    }
+
+    /// The physical address of a word of the EPT: the EBR plus the
+    /// offset, 20 bits (inout.50, "[AR]_[AR]+[EBR]").
+    pub fn ept_addr(&self, offset: u32) -> u32 {
+        phys(self.ebr, offset)
+    }
+
+    /// The physical address of a word of the UPT (simple.42, UUOGO,
+    /// "[ARX]_[ARX]+[UBR]").
+    pub fn upt_addr(&self, offset: u32) -> u32 {
+        phys(self.ubr, offset)
+    }
+
+    /// LOAD AC BLOCKS: make the block in UBR bits 6 to 8 current.
+    pub fn load_ac_blocks(&mut self) {
+        let new = self.ubr.field(6, 8) as u8;
+        if new != self.cur_block {
+            self.blocks[usize::from(self.cur_block)] = self.ac;
+            self.ac = self.blocks[usize::from(new)];
+            self.cur_block = new;
         }
     }
 
@@ -179,7 +222,7 @@ impl Machine {
     fn interrupt(&mut self, n: u8) -> Result<(), Stop> {
         let pc = self.pc;
         self.pi.in_progress |= Pi::level_bit(n);
-        let loc = self.ept + 0o40 + 2 * u32::from(n);
+        let loc = self.ept_addr(0o40 + 2 * u32::from(n));
         let word = *self
             .mem
             .get(loc as usize)
@@ -209,9 +252,31 @@ impl Machine {
         }
     }
 
+    /// The 8080 console works between two instructions.
+    fn console(&mut self) {
+        let mem = &self.mem;
+        let word = |a: u32| mem[a as usize];
+        let Some(e) = self.console.poll(self.count, word) else {
+            return;
+        };
+        if let Some(a) = e.clear {
+            self.mem[a as usize] = W36::ZERO;
+        }
+        if let Some(w) = e.input {
+            self.mem[crate::console::CTYIN as usize] = w;
+        }
+        if e.interrupt {
+            self.apr.flags |= flag::FROM_8080;
+        }
+    }
+
     /// Do one instruction, or take an interrupt. `Ok(())` if the processor
     /// can continue.
     pub fn step(&mut self) -> Result<(), Stop> {
+        if self.paging {
+            return Err(Stop::Pager { pc: self.pc });
+        }
+        self.console();
         if let Some(n) = self.pi.accept(self.requests()) {
             return self.interrupt(n);
         }
@@ -290,11 +355,16 @@ pub enum Fault {
     Nxm(u32),
 }
 
-/// The process context word, as RDUBR gives it (ksdefs.194, WRUBR and
-/// RDUBR): bits 0 and 2 set, the current and previous AC blocks (one block
-/// in this version), the UBR address in bits 16 to 35.
+/// A 20-bit physical address: a base register plus an offset, added as
+/// full words (the microcode adds with the 2901s).
+fn phys(base: W36, offset: u32) -> u32 {
+    (base.get().wrapping_add(u64::from(offset)) & 0o3777777) as u32
+}
+
+/// The process context word as RDUBR gives it **[microcode]** (inout.50,
+/// RDUBR and GETPCW of the ITS version): UBR AND 507703,,777777.
 pub fn context_word(m: &Machine) -> W36 {
-    W36::wrap((0o500000u64 << 18) | u64::from(m.ubr))
+    W36::wrap(m.ubr.get() & 0o507703_777777)
 }
 
 impl From<u32> for Fault {

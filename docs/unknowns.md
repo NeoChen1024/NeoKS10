@@ -11,8 +11,6 @@ tapes"). Not known yet:
 - Which of them apply to the ITS microcode behaviour. They are for the DEC
   microcode. `DSKEA` and `DSKEC` test DEC paging, which the ITS microcode
   does not have.
-- How a pass of a program with `SUBSM` ends, and what it prints then. A
-  60 s run of `DSKCA` in sims showed no end of a pass.
 
 ## KS10 processor and devices
 
@@ -23,6 +21,9 @@ tapes"). Not known yet:
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
 - The instruction times of the KS10, for the virtual time of the emulator.
   docs/emulator.md.
+- The line speed of the CTY, and the time of the 8080 for one character.
+  `emu/ks10/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
+  at 1 µs for each instruction).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

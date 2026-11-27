@@ -28,3 +28,15 @@ The project uses the microcode: `APRID` gives 020406,,003301.
 
 The project uses the microcode: a program request counts on an active
 level only (`emu/ks10/src/apr.rs`, `Pi::accept`).
+
+## Bits 0 and 2 of the RDUBR word
+
+- **[its]** `src/system/ksdefs.194`, RDUBR: "RDUBR always returns a word
+  with 4.9 and 4.7 set".
+- **[microcode]** `src/kshack/inout.50`, WRUBR and RDUBR of the ITS
+  version: WRUBR puts bit 0 into UBR with the AC blocks and bit 2 with the
+  base address. RDUBR returns UBR AND 507703,,777777. So the bits are 0
+  until a WRUBR sets them. ITS always sets both bits, so both sources
+  agree for ITS.
+
+The project uses the microcode (`emu/ks10/src/pag.rs`, `wrubr`).

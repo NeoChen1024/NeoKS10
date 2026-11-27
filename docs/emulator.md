@@ -129,7 +129,13 @@ The console terminal works this way **[its]**:
 
 - Output: ITS writes the character with bit 400 set into `8CTYOT`, then
   sets the APR flag that interrupts the 8080 (`ts3tty.402`, `TTKSDO`).
-  The 8080 takes the character and clears the word.
+  The 8080 takes the character and clears the word. Then it sets the APR
+  flag "8080 interrupting the KS" (`hcore.m80`, CHRRDY, TTOCOM, POKE10).
+- The flag "KS interrupting the 8080" is a pulse: the microcode clears it
+  just after it sets it (`inout.50`, WRAPR2).
+- At its interrupt, the 8080 looks at `8KLKOT` first. Without a KLINIK
+  line, the console is in mode 0, and the 8080 discards a KLINIK character
+  (`hcore.m80`, NULKL; `subrtn.m80`, SETM0).
 - Input: the 8080 puts the character into `8CTYIN` and sets the APR flag
   "8080 interrupting the KS" (bit 1.5). ITS takes the character, clears the
   word, and clears the flag (`its.1652`, `CLKBKS`).
@@ -341,15 +347,25 @@ and `DSXLA.INP` on the tapes). This project has neither medium. The
 programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
 3.2; `DSKCA.TXT`, section 3.1):
 
-- The programs of the `DSKAA` to `DSKAM` group need only the console. They
-  start at 30000. An error is a `HALT`, and word 30047 (`PASCNT`) counts the
-  passes. The program runs until it is stopped.
-- The other programs need the subroutine program `SUBSM` in memory. It
-  prints the messages on the console terminal through the 8080 words.
-  `SUBSM.SAV` ends with `JRST 2000`; the program is loaded after it.
+- `DSKAA` to `DSKAH` need only the console. They start at 30000. An
+  error is a `HALT`, and word 30047 (`PASCNT`) counts the passes. The
+  program runs until it is stopped.
+- The other programs, `DSKAI` and later, need the subroutine program
+  `SUBSM` in memory. It prints the messages on the console terminal
+  through the 8080 words. `SUBSM.SAV` ends with `JRST 2000`; the program
+  is loaded after it and starts at 30000.
 - At the start, `SUBSM` asks `TTY SWITCH CONTROL ? - 0,S OR Y <CR> -`.
   The answer `0` selects all switches 0, which is the full test
-  (`DSKCA.TXT`, sections 3.2 and 3.3).
+  (`DSKCA.TXT`, sections 3.2 and 3.3). The answer `Y` asks for the left
+  and right half of the switches in octal (`DSKAM.TXT`, section 3.2).
+- With all switches 0, `SUBSM` enables the pager with `WREBR`
+  **[measured]** (2026-11-27, `emu/ks10` diag example: `WREBR` at 3753
+  with E bit 22 set). It expects the KI style paging of the DEC
+  microcode, which the ITS microcode does not have. The switch `INHPAG`,
+  left half 000100, inhibits paging and traps (`DSKAM.TXT`, section 4.0).
+  So the answers are `Y`, `000100` and `0`.
+- After each pass, `SUBSM` prints `END PASS n.` (decimal) **[measured]**
+  (2026-11-27, `DSKAI` to `DSKAM` in `emu/ks10`).
 - `SMCPU.CMD` lists the processor diagnostics in the order in which the
   monitor runs them.
 
@@ -360,7 +376,11 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
    `JRST start`.
 2. For each program of `SMCPU.CMD`: load `SUBSM.SAV` (if the program needs
    it), then the program, with `neoks10` and a console script.
-3. Start at 30000. Answer the switch question with `0`.
+3. Start at 30000. Answer the switch questions with `Y`, `000100` and
+   `0` (`INHPAG`). Type each answer 100 ms of virtual time after its
+   prompt: a character that comes while `SUBSM` prints is read as a
+   control character and lost **[measured]** (2026-11-27, trace of the
+   CTY output loop of `SUBSM`).
 4. Stop after a fixed number of instructions. The result is a pass if the
    processor did not halt, `PASCNT` did not decrease, and the console
    output has no error report. A halt gives the PC, which the listing
@@ -376,6 +396,13 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
   in that time.
 - The title of `DSKCA` gave `CPU#=4097`, `MCV=416` and `MCO=570`. These
   values of `APRID` differ from the ITS microcode (`docs/discrepancies.md`).
+
+**Runs in `emu/ks10` [measured]** (2026-11-27, `cargo test --release -p
+ks10 --test diag` with `KS10_DIAG_DIR`): `DSKAA` to `DSKAH` run 5 million
+instructions without a halt. `DSKAI` to `DSKAM` run 3 million
+instructions under `SUBSM` and print `END PASS 10.` with no error
+message. A run of 60 million instructions gave more than 2600 passes of
+each of `DSKAI` to `DSKAM`.
 
 **Which programs apply.** The programs are for the DEC microcode. `DSKEA`
 and `DSKEC` test the paging of the DEC microcode, which the ITS microcode

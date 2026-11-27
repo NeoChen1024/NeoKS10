@@ -54,6 +54,12 @@ impl Flags {
         self.has(Self::USER)
     }
 
+    /// I/O instructions are legal: executive mode, or User In-out
+    /// (ks10.47, "SKIP IO LEGAL").
+    pub fn io_legal(self) -> bool {
+        !self.is_user() || self.has(Self::USERIO)
+    }
+
     /// The PC word: the flags in bits 0 to 12, 0 in bits 13 to 17, the PC
     /// in the right half (PRM 2-65).
     pub fn pc_word(self, pc: Half) -> W36 {

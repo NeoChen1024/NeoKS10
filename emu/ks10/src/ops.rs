@@ -10,7 +10,7 @@ use pdp10::{Half, W36};
 
 use crate::flags::Flags;
 use crate::machine::{Fault, Inst, Machine, Next};
-use crate::{apr, shift};
+use crate::{apr, byte, muldiv, pag, shift};
 
 type R = Result<Next, Fault>;
 
@@ -39,10 +39,13 @@ fn cond(c: u16, a: W36, b: W36) -> bool {
 
 pub fn execute(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
     match i.op {
+        0o133..=0o137 => byte::execute(m, i, e),
         0o200..=0o217 => moves(m, i, e),
+        0o220..=0o237 => muldiv::execute(m, i, e),
         0o240..=0o247 => shift::execute(m, i, e),
         0o251 => shift::blt(m, i, e),
         0o700 => apr::op700(m, i, e),
+        0o701 => pag::op701(m, i, e),
         0o250 => {
             // EXCH (PRM 2.1)
             let x = m.read(e)?;
@@ -388,7 +391,7 @@ fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
 /// dispatch of the ITS microcode (spec/instructions.toml, acdisp 254).
 fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
     let user = m.flags.is_user();
-    let io_legal = !user || m.flags.has(Flags::USERIO);
+    let io_legal = m.flags.io_legal();
     match i.ac {
         0 | 1 => Ok(Next::Jump(e)),
         2 => {
@@ -531,23 +534,28 @@ pub fn luuo(m: &mut Machine, i: Inst, e: Half) -> R {
 /// context word (as RDUBR gives it) in 426. Then load flags and PC from
 /// 430, plus 1 if a trap flag is set, plus 4 in user mode.
 pub fn muuo(m: &mut Machine, i: Inst, e: Half) -> Result<(), Fault> {
-    let upt = m.ubr;
+    if m.ebr.bit(0) {
+        // UUOGO with EBR bit 0: the KL style of MUUO. ITS does not use it
+        // (ksdefs.194, WREBR 2.6).
+        return Err(Fault::Unimplemented);
+    }
     let nxm = Fault::Nxm;
     let inst = W36::from_halves(Half::wrap(i.word.lh().get() & 0o777740), e);
     let ret = Half::wrap(m.pc.get() + 1);
     let traps = Flags::TRAP1 | Flags::TRAP2;
     let pcw = Flags(m.flags.0 & !traps).pc_word(ret);
-    m.deposit(upt + 0o424, inst).map_err(nxm)?;
-    m.deposit(upt + 0o425, pcw).map_err(nxm)?;
-    m.deposit(upt + 0o426, crate::machine::context_word(m))
+    m.deposit(m.upt_addr(0o424), inst).map_err(nxm)?;
+    m.deposit(m.upt_addr(0o425), pcw).map_err(nxm)?;
+    m.deposit(m.upt_addr(0o426), crate::machine::context_word(m))
         .map_err(nxm)?;
-    let mut loc = upt + 0o430;
+    let mut off = 0o430;
     if m.flags.0 & traps != 0 {
-        loc += 1;
+        off += 1;
     }
     if m.flags.is_user() {
-        loc += 4;
+        off += 4;
     }
+    let loc = m.upt_addr(off);
     let new = *m.mem.get(loc as usize).ok_or(Fault::Nxm(loc))?;
     // GOEXEC: LOAD FLAGS with LEAVE USER: the new word may clear User.
     m.flags = Flags((new.lh().get() as u32) & Flags::ALL);
