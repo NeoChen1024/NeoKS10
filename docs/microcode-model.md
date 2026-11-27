@@ -778,8 +778,17 @@ time in microcycles.
   SYNC (E31). So `SKIP/-IO BUSY` sees the latch of the previous
   microcycle. `CLR IO BUSY` sends CLR BUSY on the bus, and the
   controller ends I/O BUSY **[manual]** (EK-0KS10-TM-001, Figure 5-28).
-- **Device time.** Each `SPEC/NICOND` word counts one instruction. The
-  devices run at this count, as in `emu/ks10-core-soft`.
+- **Device time.** Each `SPEC/NICOND` word counts one instruction. At
+  that word the 1 ms clock, the CTY service of the 8080 and the devices
+  first run to the count, and then the count increases. This is the
+  order of `emu/ks10-core-soft`, so a device event comes before the same
+  instruction in both. One millisecond is `INSTRUCTIONS_PER_MS`
+  instructions (`emu/ks10-machine`). An instruction that an interrupt
+  stops and that starts again later (BLT: `CLEANUP AND TRAP`, itspag
+  `PF-INT`) passes `SPEC/NICOND` again and counts twice. The 1 ms page
+  fail does not: `PF-INT` updates the time and continues the instruction
+  (`PAGE-CONTINUE`) **[microcode]**. A request of the 8080 for an APR
+  interrupt stops the model, because the APR flags are not modelled.
 
 The controllers:
 
@@ -816,8 +825,12 @@ register (8080 registers 102 to 112) and the data cycle bit of register
 - **Start** (`start_at`) is the command ST: the console instruction
   register gets JRST to the address, register 114 selects I/O DATA
   CYCLE, and the 8080 sets EXECUTE and CONTINUE. The microcode reads the
-  register (inout, `CONT`) and clears CONTINUE. The 8080 then sets
-  CONTINUE and RUN **[its]** (`cmds.m80` STINT, EXINT, DNF, COCMD).
+  register (inout, `CONT`) and clears CONTINUE. RUN is 0, so the
+  microcode halts at the end of the JRST: halt code 2 in location 0, PC
+  in location 1, and the halt status block (inout, `HALTED`). After
+  LONG.DELAY the 8080 sets CONTINUE and RUN **[its]** (`cmds.m80` STINT,
+  EXINT, DNF, COCMD). The microcode then starts at PC without a
+  `SPEC/NICOND` (inout, `CONT`: `J/XCTGO`).
 
 ### Results
 
@@ -831,12 +844,15 @@ register (8080 registers 102 to 112) and the data cycle bit of register
   test computes. Both fills.
 - `emu/ks10-core-uop/tests/its_boot.rs`: BT loads the boot loader from
   the disk image of the ITS build and starts it at 1000. The model runs
-  in step with `emu/ks10-core-soft`, and compares PC and the ACs after
-  each instruction. Both start with the ACs that the power-up sequence
-  leaves. The model agrees for 5 instructions, about 1.05 million
-  microcycles: most are a BLT that clears memory. It then stops at
-  `SWEEP` (word 2277, `SPEC` group 20 code 4) in `WRUBR`: the page
-  table and the cache are the next stage.
+  in step with `emu/ks10-core-soft`, and compares PC, the program flags
+  and the ACs after each instruction, and main memory at the stop. Both
+  start with the ACs that the power-up sequence leaves. Locations 0 and 1
+  and the halt status block are known differences: the console halt of
+  ST writes them in the model only. The model agrees for 5 instructions,
+  about 1.05 million microcycles: most are a BLT that clears memory. It
+  then stops at `SWEEP` (word 2277, `SPEC` group 20 code 4) in `WRUBR`:
+  the page table and the cache are the next stage. The test fails if the
+  model stops earlier.
 
 Mutants of the I/O model: no I/O BUSY on a read or a write, and an I/O
 LATCH without the BUSY term, each give differences in the ACs; a byte

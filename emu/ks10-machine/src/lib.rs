@@ -24,3 +24,9 @@ pub mod unibus;
 
 /// Words of memory: 512 Ki (docs/emulator.md, configuration DB, `TSYSM`).
 pub const MEMORY_WORDS: usize = 512 * 1024;
+
+/// Virtual time: completed instructions in one millisecond of the 1 ms
+/// clock, for both processors **[estimate]**: 1 µs for each instruction,
+/// the default of docs/emulator.md ("Time"). The KS10 instruction times
+/// are not known yet (docs/unknowns.md).
+pub const INSTRUCTIONS_PER_MS: u64 = 1000;

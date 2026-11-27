@@ -7,7 +7,9 @@
 
 use std::collections::BTreeSet;
 
+use ks10_machine::INSTRUCTIONS_PER_MS;
 use ks10_machine::boot;
+use ks10_machine::console::{self as cty, Console as Cty};
 use ks10_machine::unibus::{Io, Reply};
 use pdp10::W36;
 
@@ -279,8 +281,13 @@ pub struct Machine {
     /// The Unibus adapters and their devices.
     pub io: Io,
     /// The completed instructions: the `SPEC/NICOND` words. This is the
-    /// time of the devices, as in `ks10-core-soft`.
+    /// time of the devices, as in `ks10-core-soft` (docs/microcode-model.md,
+    /// "Device time").
     pub instructions: u64,
+    /// The instruction count of the last 1 ms tick.
+    pub last_tick: u64,
+    /// The CTY service of the 8080 (the communication words 32 and 33).
+    pub cty: Cty,
     /// A stop of `master_reset` or `start_at`, which the next `step`
     /// returns.
     pub pending_stop: Option<Stop>,
@@ -384,6 +391,8 @@ impl Machine {
             bus: Bus::default(),
             io: Io::default(),
             instructions: 0,
+            last_tick: 0,
+            cty: Cty::default(),
             pending_stop: None,
             trap_cycle: p,
             flags,
@@ -1110,11 +1119,7 @@ impl Machine {
                 // word ends an instruction; the devices run to its time.
                 5 => {
                     self.trap_cycle = self.nicond() < 4;
-                    self.instructions += 1;
-                    self.io.poll(self.instructions);
-                    if !self.io.events.is_empty() {
-                        self.io.run_events(&mut self.memory, self.instructions);
-                    }
+                    self.instruction_boundary();
                 }
                 // PXCT EN, with PXCT OFF from group 20 (DPMA E71).
                 6 => {
@@ -1132,6 +1137,35 @@ impl Machine {
         if en & 1 != 0 && low == 1 {
             self.one_ms = false;
         }
+    }
+
+    /// The end of an instruction. The 1 ms clock, the 8080 and the devices
+    /// run to the instruction count before it counts this instruction, in
+    /// the order of `ks10-core-soft` (`Machine::step`).
+    fn instruction_boundary(&mut self) {
+        let now = self.instructions;
+        while now >= self.last_tick + INSTRUCTIONS_PER_MS {
+            self.last_tick += INSTRUCTIONS_PER_MS;
+            self.millisecond();
+        }
+        let mem = &self.memory;
+        if let Some(e) = self.cty.poll(now, |a| mem[a as usize]) {
+            if let Some(a) = e.clear {
+                self.memory[a as usize] = W36::ZERO;
+            }
+            if let Some(w) = e.input {
+                self.memory[cty::CTYIN as usize] = w;
+            }
+            if e.interrupt && self.pending_stop.is_none() {
+                self.pending_stop =
+                    Some(self.unmodelled("APR flag: the 8080 interrupts the processor"));
+            }
+        }
+        self.io.poll(now);
+        if !self.io.events.is_empty() {
+            self.io.run_events(&mut self.memory, now);
+        }
+        self.instructions += 1;
     }
 
     /// A 1 ms tick of the timer (DPMC E1): E1 takes 1 MSEC EN.
@@ -1295,6 +1329,7 @@ impl Machine {
         self.bus = Bus::default();
         self.memory[0] = W36::ONES;
         self.upc = 0;
+        self.last_tick = self.instructions;
         if !self.run_until(CONSOLE_WAIT_CYCLES, |m| m.csl.halt_loop)? {
             return Err(self.unmodelled("the microcode does not reach the halt loop"));
         }
@@ -1306,7 +1341,10 @@ impl Machine {
 
     /// The console command ST (cmds.m80, STINT, EXINT, COCMD): EXECUTE of
     /// JRST `addr`, then CONTINUE and RUN. The 8080 checks that the
-    /// microcode clears CONTINUE (DNF).
+    /// microcode clears CONTINUE (DNF). With RUN 0, the microcode halts at
+    /// the end of the JRST (inout, `HALTED`: halt code 2 in location 0, PC
+    /// in location 1, the halt status block). LONG.DELAY gives it the time
+    /// to reach the halt loop before CONTINUE and RUN.
     fn console_start(&mut self, addr: u32) -> Result<(), Stop> {
         let c = &mut self.csl;
         c.data = W36::wrap(0o254000 << 18 | u64::from(addr & 0o777777));
@@ -1315,6 +1353,10 @@ impl Machine {
         if !self.run_until(CONSOLE_WAIT_CYCLES, |m| !m.csl.cont)? {
             return Err(self.unmodelled("the microcode does not clear CONTINUE after EXECUTE"));
         }
+        if !self.run_until(CONSOLE_WAIT_CYCLES, |m| m.csl.halt_loop)? {
+            return Err(self.unmodelled("the microcode does not halt after EXECUTE"));
+        }
+        // 212/5: CONTINUE and RUN, EXECUTE 0.
         let c = &mut self.csl;
         (c.execute, c.cont, c.run) = (false, true, true);
         Ok(())
@@ -1588,6 +1630,28 @@ mod tests {
         m.step().unwrap();
         assert!(!m.memory_cycle);
         assert!(m.cycle.write && !m.cycle.read);
+    }
+
+    #[test]
+    fn devices_and_the_clock_run_before_the_instruction_count_increases() {
+        // ks10-core-soft polls the devices with the count of the steps
+        // before it counts the next one (`Machine::step`).
+        use ks10_machine::unibus::Event;
+        let mut m = Machine::new(
+            vec![Microword::from_bits(0); CRAM_WORDS],
+            vec![0; DROM_WORDS],
+            W40::ZERO,
+        );
+        m.instructions = INSTRUCTIONS_PER_MS;
+        m.io.events = vec![
+            (INSTRUCTIONS_PER_MS, Event::Dz),
+            (INSTRUCTIONS_PER_MS + 1, Event::Dz),
+        ];
+        m.csl.one_ms_en = true;
+        m.instruction_boundary();
+        assert_eq!(m.io.events, [(INSTRUCTIONS_PER_MS + 1, Event::Dz)]);
+        assert!(m.one_ms);
+        assert_eq!(m.instructions, INSTRUCTIONS_PER_MS + 1);
     }
 
     #[test]

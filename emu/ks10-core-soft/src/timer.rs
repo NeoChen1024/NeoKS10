@@ -18,10 +18,7 @@ use pdp10::{Half, W36};
 use crate::apr::flag;
 use crate::machine::Machine;
 
-/// **[estimate]**: 1 µs for each instruction, the default of
-/// docs/emulator.md ("Time"). The KS10 instruction times are not known
-/// yet (docs/unknowns.md).
-pub const INSTRUCTIONS_PER_MS: u64 = 1000;
+pub use ks10_machine::INSTRUCTIONS_PER_MS;
 
 /// Units of the time base in one millisecond (TOCK: "2^12 UNITS PER MS").
 const UNITS_PER_MS: u64 = 1 << 12;

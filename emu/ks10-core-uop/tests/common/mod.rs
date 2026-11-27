@@ -5,7 +5,7 @@
 use ks10_core_uop::alu::W40;
 use ks10_core_uop::cram::{CRAM_WORDS, Microword};
 use ks10_core_uop::listing::{self, DROM_WORDS};
-use ks10_core_uop::machine::{Machine, Stop};
+use ks10_core_uop::machine::{Machine, PcFlags, Stop};
 
 /// The text of the listing (`KS10_MCR_LISTING`), or None after a SKIPPED
 /// line.
@@ -62,4 +62,25 @@ pub fn run_until(
             .map_err(|Stop::Unmodelled { addr, what }| format!("stop at {addr:04o}: {what}"))?;
     }
     Ok(())
+}
+
+/// The program flags of the model in the form of `ks10-core-soft`.
+pub fn ks10_flags(f: PcFlags) -> u32 {
+    use ks10_core_soft::flags::Flags as F;
+    [
+        (f.ov, F::AROV),
+        (f.cry0, F::CRY0),
+        (f.cry1, F::CRY1),
+        (f.fov, F::FOV),
+        (f.fpd, F::FPD),
+        (f.user, F::USER),
+        (f.pcu, F::USERIO),
+        (f.trap2, F::TRAP2),
+        (f.trap1, F::TRAP1),
+        (f.fxu, F::FXU),
+        (f.nodiv, F::NODIV),
+    ]
+    .iter()
+    .filter(|(v, _)| *v)
+    .fold(0, |a, (_, b)| a | b)
 }

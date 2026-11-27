@@ -16,9 +16,17 @@
 mod common;
 
 use common::{FILLS, label, machine};
+use ks10_core_uop::machine::{Machine, Stop};
 use ks10_machine::boot::Processor;
 use ks10_machine::devregs;
 use pdp10::{Half, W36};
+
+/// After ST the microcode is still in the halt loop: it leaves the loop
+/// when it sees CONTINUE. Run until it leaves and comes back.
+fn run_to_halt(m: &mut Machine, haltlp: u16) -> Result<bool, Stop> {
+    Ok(m.run_until(100, |m| !m.csl.halt_loop)?
+        && m.run_until(100_000, |m| m.upc == haltlp && m.csl.halt_loop)?)
+}
 
 #[test]
 fn start_runs_the_program_at_the_address() {
@@ -36,7 +44,7 @@ fn start_runs_the_program_at_the_address() {
         m.start_at(0o1000);
         assert_eq!(m.pending_stop, None);
         assert!(m.csl.run && !m.csl.execute);
-        let r = m.run_until(100_000, |m| m.upc == haltlp && m.csl.halt_loop);
+        let r = run_to_halt(&mut m, haltlp);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         assert_eq!(r, Ok(true));
         assert_eq!(m.ram_file[1], W36::wrap(0o123));
@@ -92,7 +100,7 @@ fn io_instructions_agree_with_the_software_processor() {
             m.memory[0o1000 + k] = W36::wrap(*w);
         }
         m.start_at(0o1000);
-        let r = m.run_until(100_000, |m| m.upc == haltlp && m.csl.halt_loop);
+        let r = run_to_halt(&mut m, haltlp);
         assert_eq!(r, Ok(true), "fill {:o}", fill.get());
         let block = usize::from(m.cur_block & 7) << 4;
         for k in 1..=8 {

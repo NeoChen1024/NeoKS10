@@ -17,7 +17,7 @@ mod common;
 
 use common::{FILLS, label, machine, run_until, symbol};
 use ks10_core_uop::alu;
-use ks10_core_uop::machine::{Coverage, Machine, PcFlags};
+use ks10_core_uop::machine::{Coverage, Machine};
 use pdp10::{Half, W36};
 
 const CODE: usize = 0o1000;
@@ -53,26 +53,6 @@ impl std::fmt::Display for State {
         }
         Ok(())
     }
-}
-
-fn ks10_flags(f: PcFlags) -> u32 {
-    use ks10_core_soft::flags::Flags as F;
-    [
-        (f.ov, F::AROV),
-        (f.cry0, F::CRY0),
-        (f.cry1, F::CRY1),
-        (f.fov, F::FOV),
-        (f.fpd, F::FPD),
-        (f.user, F::USER),
-        (f.pcu, F::USERIO),
-        (f.trap2, F::TRAP2),
-        (f.trap1, F::TRAP1),
-        (f.fxu, F::FXU),
-        (f.nodiv, F::NODIV),
-    ]
-    .iter()
-    .filter(|(v, _)| *v)
-    .fold(0, |a, (_, b)| a | b)
 }
 
 fn reference(c: &Case) -> Result<State, String> {
@@ -147,7 +127,7 @@ fn model(text: &str, fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Resul
     coverage.merge(&m.coverage);
     Ok(State {
         pc: m.memory[1].get() & 0o777777,
-        flags: ks10_flags(m.flags),
+        flags: common::ks10_flags(m.flags),
         ac: std::array::from_fn(|k| m.ram_file[k].get()),
         mem: [m.memory[E].get(), m.memory[E + 1].get()],
     })
