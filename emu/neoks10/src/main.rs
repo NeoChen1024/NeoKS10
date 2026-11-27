@@ -17,7 +17,7 @@ use engine::{Engine, Input, Kind, Options, Out, Pace, Request};
 
 const USAGE: &str = "\
 usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-                   [--replay FILE] [--script FILE] [--pace normal|fast|idle|realtime]
+                   [--replay FILE] [--script FILE] [--pace normal|fast|realtime]
                    [--no-idle]
        neoks10 console [--control PATH]
        neoks10 ctl [--control PATH] [--json] COMMAND...
@@ -25,11 +25,11 @@ usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
 
 In `run`, Ctrl-\\ opens the operator prompt; `help` there lists the commands.
 Pace: `normal` takes the clock of the KS10 from the wall clock (as SIMH
-does) and cannot be recorded; `fast` does not wait; `idle` sleeps for the
-idle time of ITS; `realtime` keeps the virtual time to the wall clock.
-`run` with a terminal or a control socket uses `normal`, and `idle` with
---record. A run with --script or --replay, or with neither a terminal
-nor a socket, uses `fast`.
+does) and cannot be recorded; `fast` does not wait; `realtime` keeps the
+virtual time to the wall clock. `run` with a terminal or a control socket
+uses `normal`; with --record it needs --pace fast or realtime. A run with
+--script or --replay, or with neither a terminal nor a socket, uses
+`fast`.
 `run` listens on the control socket neoks10.sock in the directory of CONFIG
 (or the current directory). `console` and `ctl` use NEOKS10_CONTROL, or
 neoks10.sock in the current directory, if --control is not given.";
@@ -99,9 +99,8 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
                 r.pace = Some(match it.next().map(String::as_str) {
                     Some("normal") => Pace::Normal,
                     Some("fast") => Pace::Fast,
-                    Some("idle") => Pace::Idle,
                     Some("realtime") => Pace::Realtime,
-                    _ => return Err("--pace needs normal, fast, idle or realtime".into()),
+                    _ => return Err("--pace needs normal, fast or realtime".into()),
                 })
             }
             "--no-idle" => r.idle = false,
@@ -136,22 +135,27 @@ fn run(args: &[String]) -> Result<i32, String> {
     // socket takes the clock from the wall clock; a script or a replay
     // does not wait.
     let interactive = std::io::stdin().is_terminal() && a.replay.is_none();
+    let pace = match a.pace {
+        Some(p) => p,
+        None if a.script.is_none()
+            && a.replay.is_none()
+            && (interactive || !a.no_control || cfg.dz11.is_some()) =>
+        {
+            // A record must be repeatable, and `normal` is not: the
+            // choice of the other two is for the user.
+            if a.record.is_some() {
+                return Err(
+                    "a run with a terminal or a socket and --record needs --pace fast or realtime"
+                        .into(),
+                );
+            }
+            Pace::Normal
+        }
+        None => Pace::Fast,
+    };
     let mut e = Engine::new(Options {
         ns_per_instruction: cfg.machine.time_per_instruction_ns,
-        pace: a.pace.unwrap_or(
-            if a.script.is_none()
-                && a.replay.is_none()
-                && (interactive || !a.no_control || cfg.dz11.is_some())
-            {
-                if a.record.is_some() {
-                    Pace::Idle
-                } else {
-                    Pace::Normal
-                }
-            } else {
-                Pace::Fast
-            },
-        ),
+        pace,
         idle: a.idle,
         record: a.record,
         replay: a.replay,

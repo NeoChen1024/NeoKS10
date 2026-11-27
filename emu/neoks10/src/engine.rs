@@ -235,9 +235,6 @@ struct Expect {
 pub enum Pace {
     /// No wait.
     Fast,
-    /// Wait for the time of the idle passes only: full speed while the
-    /// guest works, a sleep of the host while it is idle.
-    Idle,
     /// Wait so that the virtual time does not run ahead of the wall
     /// clock.
     Realtime,
@@ -297,7 +294,7 @@ impl Engine {
     pub fn new(opts: Options) -> Result<Engine, String> {
         if opts.pace == Pace::Normal && (opts.record.is_some() || opts.replay.is_some()) {
             return Err(
-                "--pace normal cannot be repeated: use --pace fast, idle or realtime with --record or --replay"
+                "--pace normal cannot be repeated: use --pace fast or realtime with --record or --replay"
                     .into(),
             );
         }
@@ -1272,7 +1269,6 @@ impl Engine {
             let ns = |n: u64| Duration::from_nanos(n.saturating_mul(self.opts.ns_per_instruction));
             let due = match self.opts.pace {
                 Pace::Fast => continue,
-                Pace::Idle => Instant::now() + ns(self.skipped - skipped),
                 Pace::Realtime => self.base.0 + ns(self.m.count - self.base.1),
                 Pace::Normal => {
                     if self.skipped == skipped || !self.m.idle() {

@@ -174,7 +174,7 @@ fails.
 - A guest program can never cause a panic or a crash of the emulator. A
   guest error is a guest trap or a console message.
 - The modes for tests are deterministic: the `ks10-machine` and `ks10-core-soft` libraries, and
-  `neoks10 run --pace fast`, `idle` or `realtime`. In them, all input that
+  `neoks10 run --pace fast` or `realtime`. In them, all input that
   changes with time (clock, terminal, network) goes through one layer that
   can record and replay it. This layer must exist and work.
 - The mode for daily use (`--pace normal`) does not need to be
