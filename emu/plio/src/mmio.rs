@@ -9,8 +9,8 @@
 //! - Physical memory through `/dev/mem` opened with `O_SYNC`. On the board,
 //!   Linux then maps it without the CPU cache. The reserved region of the
 //!   board interface is mapped this way (see `docs/pl-interface.md` of the
-//!   board repository, and README.md: the PS maps the guest memory without
-//!   the CPU cache).
+//!   board repository, and `docs/architecture.md`: the PS maps the guest
+//!   memory without the CPU cache).
 
 use std::fs::{File, OpenOptions};
 use std::io;

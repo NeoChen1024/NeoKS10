@@ -11,5 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# mmap, munmap and pread in src/mmio.rs (approved by the owner).
+# mmap, munmap and pread in src/mmio.rs.
 libc = "0.2"

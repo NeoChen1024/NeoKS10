@@ -1,7 +1,8 @@
 # Emulator design
 
 This document is the design of the emulator program in `emu/`. It covers
-step 1 of README.md (the software processor boots ITS on a host computer),
+step 1 of the plan in `architecture.md` (the software processor boots ITS
+on a host computer),
 step 2 (the same program on the PS of the board) and the parts of step 5
 that the program supplies (the devices for the core in the PL).
 
@@ -10,8 +11,8 @@ The document has three parts:
 - The machine: what the program must emulate. Each statement has an
   evidence mark (AGENTS.md).
 - The design: the decisions of this document.
-- Decisions of the owner: the decisions that the owner made, and the
-  items that are still open.
+- Design decisions: the decisions with their dates, and the items that
+  are still open.
 
 ## Sources
 
@@ -245,7 +246,7 @@ with the same `KS10_ITS_DISK`; the tapes come from the same directory):
 | One `Machine` owns all state | `Machine` holds the processor, the memory, the 8080 console state, the two adapters and their devices as fields. Devices get a context (memory, interrupt lines, time) for each call; they keep no references |
 | A word is its own type | A type `Word` (36 bits in a `u64`) in a crate `pdp10`, with the octal text and the field helpers |
 | `unsafe` only in `plio::mmio` | The memory of step 5 is a `plio` mapping. All other code is safe |
-| No new dependency without approval | The owner approved `toml` and `serde` for the configuration file, and `reedline` for the operator console (see [Decisions of the owner](#decisions-of-the-owner)) |
+| Each dependency is a decision | `toml` and `serde` read the configuration file, and `reedline` is the line editor of the operator console (see [Design decisions](#design-decisions)) |
 | Decoders and constants from `spec/` | The instruction table and a device register table in `spec/` generate the Rust constants, as `spec/regmap.toml` does now |
 | C interface for co-simulation and the PL bridge | The `ks10` library exports C functions: create a machine, run one instruction, read the instruction record |
 | Device I/O with `pread` and `pwrite` | A disk transfer reads or writes the image file directly into the guest memory, when the adapter map gives contiguous memory |
@@ -442,7 +443,7 @@ tells the operator to give `halt` first.
   guest goes on. CTY output waits in a buffer and appears when the prompt
   closes. An empty line or `cty` returns to CTY mode.
 
-The line editor is `reedline` (approved on 2026-11-27). Its terminal
+The line editor is `reedline` (decision 5). Its terminal
 layer `crossterm` also sets the raw mode of CTY mode, so `neoks10` has
 no `unsafe` code.
 
@@ -488,7 +489,7 @@ TCP control port. The protocol has one command for each line, in the
 syntax above. Each reply is one line of JSON:
 `{"ok":true,"result":...,"text":"..."}` or `{"ok":false,"error":"..."}`.
 `result` is for programs, `text` is for a person. `serde_json` writes
-and reads the lines (approved on 2026-11-27). Some commands exist for
+and reads the lines (decision 9). Some commands exist for
 clients that do not own the terminal:
 
 | Command | Function |
@@ -616,8 +617,8 @@ connects to the same port again thus gets the same ITS terminal.
 - A run that takes requests (a terminal, the control socket or
   `[dz11]`) ends only with `quit`.
 - The default addresses are on the loopback interface (decision 4). A
-  listener on another interface needs the permission of the owner
-  (AGENTS.md).
+  listener on another interface needs an explicit address in the
+  configuration file or in a console command.
 
 **[measured]** 2026-11-27, with `[dz11] listen = "127.0.0.1:10004"`:
 
@@ -656,7 +657,7 @@ enabled = false
 ```
 
 The defaults keep all network listeners on the loopback address. A
-connection to a LAN needs the permission of the owner (AGENTS.md).
+listener on a LAN needs an explicit address.
 
 ### Tests
 
@@ -889,21 +890,21 @@ Differences from the microcode:
 6. `neoks10`: the configuration, the operator console, the control
    socket, scripts, the host side of the DZ11 lines. Done. Then the
    diagnostics, the ITS build.
-7. Step 6 of README.md: the CH11 and the IMP.
+7. Step 6 of the plan in `architecture.md`: the CH11 and the IMP.
 
-## Decisions of the owner
+## Design decisions
 
 Decided on 2026-11-26:
 
 1. The binary name is `neoks10`.
-2. The configuration file is TOML. The crates `toml` and `serde` are
-   approved for it.
+2. The configuration file is TOML. The crates `toml` and `serde` read
+   it.
 3. The escape character is Ctrl-\ (034), as in the ITS build scripts.
 4. The DZ11 listeners are on the loopback address only by default.
 
 Decided on 2026-11-27:
 
-5. The crate `reedline` is approved for the operator console. `neoks10`
+5. The operator console uses the crate `reedline`. `neoks10`
    also uses its terminal layer `crossterm` directly, at the version that
    `reedline` uses, so the build has no other crate. A test
    (2026-11-27) built a small program with `reedline` 0.53.0 for
@@ -913,15 +914,15 @@ Decided on 2026-11-27:
 6. The machine runs while the operator console is open.
 7. The console has no SIMH command names.
 8. The control socket is in the first version.
-9. The crate `serde_json` is approved. A well-known crate is better than
-   a new implementation, within reason.
+9. The control socket uses the crate `serde_json`. A well-known crate is
+   better than a new implementation, within reason.
 10. The interactive console can start a script (`script run FILE`).
-11. `crossterm` is approved as a direct dependency (decision 5).
-12. The crate `sha2` is approved for the image check of a replay. With
+11. `crossterm` is a direct dependency (decision 5).
+12. The crate `sha2` checks the images of a replay. With
    `default-features = false` it brings `digest`, `block-buffer`,
    `crypto-common`, `hybrid-array`, `typenum` and `cpufeatures`.
-13. The emulator detects the idle loop of ITS (the owner proposed an
-   idle detection as in SIMH). See [Time](#time).
+13. The emulator detects the idle loop of ITS, as SIMH does. See
+   [Time](#time).
 14. `--pace normal` is the mode for daily use and the default of a run
    with a terminal, a control socket or DZ11 listeners. Its clock comes
    from the wall clock, as in SIMH. Only the modes for tests must be

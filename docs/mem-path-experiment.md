@@ -6,9 +6,9 @@ of results".
 
 ## Purpose
 
-The processor is in the PL. The guest memory is in the PS DDR3. The PL has a
-write-through cache with a write queue (README.md). Before the design of the
-cache, these questions need answers:
+The processor is in the PL. The guest memory is in the PS DDR3. The plan
+puts a cache and a write queue in the PL (`architecture.md`). Before the
+design of the cache, these questions need answers:
 
 1. How many reads and writes does the guest make, and where?
 2. How much time does one read and one write through an HP port take?
@@ -153,8 +153,6 @@ Verification of the test design (`tb/memprobe/`):
 
 ### Procedure on the board
 
-Each step on the board needs the permission of the owner in that session.
-
 1. Build the bitstream from a commit with no changes: `make synth`. The
    `BUILD` register then identifies the design.
 2. Build the program: `make cross`. The program is `emu/memprobe`.
@@ -216,7 +214,7 @@ queue depths of 4, 8, 16 and 32 entries:
 | Depth of the write queue | Part C |
 | Data width and clock of the HP port | B7 |
 | One HP port, or one for reads and one for writes | B5, B6 |
-| Write-through cache, or a different design | Part C: the stop time must be small. The owner sets the limit when the numbers exist |
+| Write-through cache, or a different design | Part C: the stop time must be small. I set the limit when the numbers exist |
 | Non-cached mapping on the PS, or the ACP port | B8, B9 |
 
 ## Record of results
@@ -227,7 +225,7 @@ design, the kernel version, and the method. Small tables of data go to
 `docs/data/`. Raw traces stay outside the repository.
 
 Do not replace a planned value with a result silently. If a result
-contradicts an estimate in README.md or in a design note, correct that text
+contradicts an estimate in `architecture.md` or in a design note, correct that text
 in the same commit.
 
 ### M1: first version of the test design, 100 MHz, PS idle

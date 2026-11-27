@@ -4,7 +4,9 @@ This file is a workflow guide. It is not a specification. Do not copy
 instruction semantics, bit layouts or other numbers from this file into code.
 Get them from the sources below.
 
-`README.md` gives the goal and the architecture. Read it first.
+`README.md` gives the goal and the state of the project.
+`docs/architecture.md` gives the parts, the verification levels and the
+plan. Read both first.
 
 ## Status
 
@@ -250,3 +252,17 @@ approximately 80% of the sentences:
 - No metaphors, no idioms, no Latin abbreviations.
 - Numbers have units.
 - Technical names stay as they are.
+
+### Voice of the documents
+
+`README.md`, `docs/` and the comments in code are public. They are in the
+voice of the author of the project.
+
+- Do not write "the owner", "the agent", "the session", or "approved by".
+  These words belong to the work rules in this file.
+- Write a decision as a design decision with its date. Give the reason,
+  not the person who decided.
+- Do not repeat a rule of this file in a document. If a document needs
+  the rule, link to this file.
+- `README.md` is for visitors. Keep it short: the goal, the state, a quick
+  start, and links. Details go to `docs/`.
