@@ -212,6 +212,7 @@ fn remote_units(c: &mut Client) -> Units {
     for k in 0..8 {
         u.disk.push((k, "-".into()));
         u.tape.push((k, "-".into()));
+        u.line.push((k, "-".into()));
     }
     if let Ok(v) = c.send("show devices")
         && let Some(list) = v["result"]["units"].as_array()

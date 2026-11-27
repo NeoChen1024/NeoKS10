@@ -3,6 +3,7 @@
 mod cmd;
 mod config;
 mod control;
+mod dz;
 mod engine;
 mod script;
 mod term;
@@ -184,6 +185,17 @@ fn run(args: &[String]) -> Result<i32, String> {
         e.set_script(script::Script::load(p)?, true);
     }
     let (tx, rx) = channel::<Request>();
+    // The DZ11 listeners send their requests through `tx`. A run that
+    // takes requests ends only with `quit`.
+    let takes_requests = interactive || !a.no_control || cfg.dz11.is_some();
+    if takes_requests && !e.replaying() {
+        e.set_requests(tx.clone());
+        if let Some(d) = &cfg.dz11 {
+            for (k, addr) in d.addresses()?.iter().enumerate() {
+                eprintln!("neoks10: {}", e.dz_listen(k, addr)?);
+            }
+        }
+    }
     // Set when the machine thread ends (a quit from the socket or a
     // script), so that the terminal leaves raw mode and returns.
     let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

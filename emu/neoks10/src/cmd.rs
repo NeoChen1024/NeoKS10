@@ -38,6 +38,8 @@ pub enum Tok {
 pub enum Kind {
     Disk,
     Tape,
+    /// A DZ11 line.
+    Line,
 }
 
 impl Kind {
@@ -45,6 +47,7 @@ impl Kind {
         match self {
             Kind::Disk => "disk",
             Kind::Tape => "tape",
+            Kind::Line => "dz line",
         }
     }
 }
@@ -77,6 +80,10 @@ pub enum Id {
     ScriptRun,
     ScriptStop,
     ScriptShow,
+    DzShow,
+    DzListen,
+    DzClose,
+    DzDisconnect,
 }
 
 pub struct Spec {
@@ -256,6 +263,36 @@ pub const SPECS: &[Spec] = &[
         help: "Show the step of the running script",
         halted: false,
     },
+    Spec {
+        id: Id::DzShow,
+        toks: &[Lit("dz"), Lit("show")],
+        help: "Show the DZ11 lines: listeners and connections",
+        halted: false,
+    },
+    Spec {
+        id: Id::DzListen,
+        toks: &[
+            Lit("dz"),
+            Lit("line"),
+            Unit(Kind::Line),
+            Lit("listen"),
+            Text,
+        ],
+        help: "Listen for Telnet on HOST:PORT for the line",
+        halted: false,
+    },
+    Spec {
+        id: Id::DzClose,
+        toks: &[Lit("dz"), Lit("line"), Unit(Kind::Line), Lit("close")],
+        help: "Stop the listener of the line; a connection stays",
+        halted: false,
+    },
+    Spec {
+        id: Id::DzDisconnect,
+        toks: &[Lit("dz"), Lit("line"), Unit(Kind::Line), Lit("disconnect")],
+        help: "End the connection of the line",
+        halted: false,
+    },
 ];
 
 /// The nouns, with their help text for the completion menu.
@@ -264,6 +301,7 @@ pub const NOUNS: &[(&str, &str)] = &[
     ("cpu", "The processor: show, halt, continue, step, start"),
     ("cty", "The console terminal"),
     ("disk", "The RP06 disk units"),
+    ("dz", "The DZ11 lines: Telnet listeners and connections"),
     ("expect", "Wait for text in the CTY output"),
     ("help", "List the commands"),
     ("mem", "The memory: examine, deposit"),
@@ -328,6 +366,10 @@ pub enum Command {
     ScriptRun(String),
     ScriptStop,
     ScriptShow,
+    DzShow,
+    DzListen(usize, String),
+    DzClose(usize),
+    DzDisconnect(usize),
 }
 
 impl Command {
@@ -774,6 +816,10 @@ fn build(id: Id, v: Vec<Val>) -> Result<Command, String> {
         Id::ScriptRun => Command::ScriptRun(path()),
         Id::ScriptStop => Command::ScriptStop,
         Id::ScriptShow => Command::ScriptShow,
+        Id::DzShow => Command::DzShow,
+        Id::DzListen => Command::DzListen(unit(), text()),
+        Id::DzClose => Command::DzClose(unit()),
+        Id::DzDisconnect => Command::DzDisconnect(unit()),
     })
 }
 
@@ -813,6 +859,7 @@ pub fn markdown() -> String {
 pub struct Units {
     pub disk: Vec<(usize, String)>,
     pub tape: Vec<(usize, String)>,
+    pub line: Vec<(usize, String)>,
 }
 
 /// A completion candidate.
@@ -871,10 +918,10 @@ pub fn complete(line: &str, pos: usize, units: &Units) -> (usize, Vec<Cand>) {
                     });
                 }
                 Unit(k) | OptUnit(k) => {
-                    let list = if k == Kind::Disk {
-                        &units.disk
-                    } else {
-                        &units.tape
+                    let list = match k {
+                        Kind::Disk => &units.disk,
+                        Kind::Tape => &units.tape,
+                        Kind::Line => &units.line,
                     };
                     for (n, d) in list {
                         push(Cand {
@@ -1072,8 +1119,18 @@ mod tests {
         let units = Units {
             disk: vec![(0, "rp0.dsk".into())],
             tape: vec![(0, "minsys.tape".into()), (2, "-".into())],
+            line: vec![(5, "127.0.0.1:10009".into())],
         };
         assert_eq!(values("ta", &units), ["tape"]);
+        assert_eq!(values("dz line ", &units), ["5"]);
+        assert_eq!(
+            values("dz line 5 ", &units),
+            ["listen", "close", "disconnect"]
+        );
+        assert_eq!(
+            parse("dz line 5 listen 127.0.0.1:10009").unwrap(),
+            Some(Command::DzListen(5, "127.0.0.1:10009".into()))
+        );
         assert_eq!(values("tape ", &units), ["0", "2"]);
         assert_eq!(values("tape 2 ", &units), ["mount", "unmount"]);
         assert_eq!(values("tape 2 m", &units), ["mount"]);

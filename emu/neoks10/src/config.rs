@@ -22,9 +22,31 @@ pub struct Config {
     pub boot: Option<BootCfg>,
     #[serde(default)]
     pub control: ControlCfg,
+    pub dz11: Option<DzCfg>,
     /// The directory of the file, for the relative paths.
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// `[dz11]`: the listeners of the 8 lines.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DzCfg {
+    /// `HOST:PORT` of line 0; line k listens on PORT + k.
+    pub listen: String,
+}
+
+impl DzCfg {
+    /// The address of each line.
+    pub fn addresses(&self) -> Result<Vec<String>, String> {
+        let bad = || format!("[dz11] listen = \"{}\": HOST:PORT expected", self.listen);
+        let (host, port) = self.listen.rsplit_once(':').ok_or_else(bad)?;
+        let port: u16 = port.parse().map_err(|_| bad())?;
+        if port > u16::MAX - 7 {
+            return Err(format!("[dz11] listen: port {port} + 7 is above 65535"));
+        }
+        Ok((0..8).map(|k| format!("{host}:{}", port + k)).collect())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,5 +213,17 @@ mod tests {
         assert!(Config::parse("[disk.0]\nimage = \"x\"\ntype = \"rp07\"\n").is_err());
         // A typing error in a key.
         assert!(Config::parse("[disk.0]\nimgae = \"x\"\n").is_err());
+    }
+
+    #[test]
+    fn dz_addresses() {
+        let c = Config::parse("[dz11]\nlisten = \"127.0.0.1:10004\"\n").unwrap();
+        let a = c.dz11.unwrap().addresses().unwrap();
+        assert_eq!(a[0], "127.0.0.1:10004");
+        assert_eq!(a[7], "127.0.0.1:10011");
+        let c = Config::parse("[dz11]\nlisten = \"[::1]:65530\"\n").unwrap();
+        assert!(c.dz11.unwrap().addresses().is_err());
+        let c = Config::parse("[dz11]\nlisten = \"localhost\"\n").unwrap();
+        assert!(c.dz11.unwrap().addresses().is_err());
     }
 }

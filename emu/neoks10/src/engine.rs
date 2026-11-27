@@ -10,6 +10,7 @@
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cmd::{Command, Space, Units};
+use crate::dz;
 use crate::script::Script;
 
 /// The instructions between two looks at the requests.
@@ -71,6 +73,15 @@ pub enum Input {
         word: u64,
     },
     Mark(String),
+    /// A host connects to a DZ11 line (carrier on).
+    DzConnect(usize),
+    /// Characters from the host of a DZ11 line.
+    DzData {
+        line: usize,
+        data: Vec<u8>,
+    },
+    /// The host of a DZ11 line is gone (carrier off).
+    DzHangup(usize),
     /// The end of the run (`quit`); a replay ends here.
     Quit,
 }
@@ -145,6 +156,32 @@ pub enum Request {
     Subscribe(Sender<Out>),
     /// The units and their images, for the completion.
     Units(Sender<Units>),
+    /// A connection to a DZ11 line (`dz.rs`). The reply is the number of
+    /// the connection, or why the line does not take it.
+    DzConnect {
+        line: usize,
+        peer: SocketAddr,
+        out: Sender<Vec<u8>>,
+        reply: Sender<Result<u64, String>>,
+    },
+    DzInput {
+        line: usize,
+        id: u64,
+        data: Vec<u8>,
+    },
+    DzHangup {
+        line: usize,
+        id: u64,
+    },
+}
+
+/// The host side of one DZ11 line.
+#[derive(Default)]
+struct DzLine {
+    listener: Option<dz::Listener>,
+    /// The connection: its number, the address of the host, the channel
+    /// to its writer.
+    conn: Option<(u64, SocketAddr, Sender<Vec<u8>>)>,
 }
 
 /// A running script.
@@ -212,6 +249,10 @@ pub struct Engine {
     base: (Instant, u64),
     /// `--pace normal`: the ticks done since `base`.
     ticks: u64,
+    dz: [DzLine; 8],
+    dz_next: u64,
+    /// A sender for the DZ11 listeners, if the run takes requests.
+    requests: Option<Sender<Request>>,
     script: Option<ScriptRun>,
     /// The passes of the idle loop done at once.
     skipped: u64,
@@ -271,6 +312,9 @@ impl Engine {
             images: Default::default(),
             base: (Instant::now(), 0),
             ticks: 0,
+            dz: Default::default(),
+            dz_next: 0,
+            requests: None,
             script: None,
             skipped: 0,
             quit: false,
@@ -298,9 +342,23 @@ impl Engine {
                 })
                 .collect()
         };
+        let line = self
+            .dz
+            .iter()
+            .enumerate()
+            .map(|(k, d)| {
+                let l = d
+                    .listener
+                    .as_ref()
+                    .map_or("no listener".to_string(), |l| l.addr.to_string());
+                let c = if d.conn.is_some() { ", connected" } else { "" };
+                (k, format!("{l}{c}"))
+            })
+            .collect();
         Units {
             disk: list(0),
             tape: list(1),
+            line,
         }
     }
 
@@ -418,6 +476,24 @@ impl Engine {
                 Ok(format!("{p:o}/ {}", W36::wrap(word).halves_text()))
             }
             Input::Mark(t) => Ok(format!("mark at {}: {t}", self.m.count)),
+            Input::DzConnect(l) | Input::DzHangup(l) if l >= 8 => {
+                Err(format!("dz line {l}: no such line"))
+            }
+            Input::DzConnect(l) => {
+                self.m.io.dz.lines[l].carrier = true;
+                Ok(format!("dz line {l}: connected"))
+            }
+            Input::DzHangup(l) => {
+                self.m.io.dz.lines[l].carrier = false;
+                Ok(format!("dz line {l}: disconnected"))
+            }
+            Input::DzData { line, data } => match self.m.io.dz.lines.get_mut(line) {
+                Some(l) => {
+                    l.input.extend(data);
+                    Ok(String::new())
+                }
+                None => Err(format!("dz line {line}: no such line")),
+            },
             Input::Quit => {
                 self.quit = true;
                 Ok("quit".into())
@@ -589,6 +665,18 @@ impl Engine {
                 return None;
             }
             Command::ShowDevices => self.show_devices(),
+            Command::DzShow => self.dz_show(),
+            Command::DzListen(l, a) => r(self.dz_listen(l, &a)),
+            Command::DzClose(l) => match self.dz[l].listener.take() {
+                Some(x) => Reply::ok(format!("dz line {l}: {} closed", x.addr), Value::Null),
+                None => Reply::err(format!("dz line {l} does not listen")),
+            },
+            Command::DzDisconnect(l) => match self.dz[l].conn.take() {
+                // Dropping the sender ends the writer, which closes the
+                // socket.
+                Some(_) => r(self.input(Input::DzHangup(l))),
+                None => Reply::err(format!("dz line {l} has no connection")),
+            },
             Command::RecordMark(t) => r(self.input(Input::Mark(t))),
             Command::ScriptRun(p) => r(self.load_script(&p)),
             Command::ScriptStop => match self.script.take() {
@@ -737,6 +825,15 @@ impl Engine {
 
     /// Send new CTY output to the subscribers.
     fn distribute(&mut self) {
+        for (k, l) in self.m.io.dz.lines.iter_mut().enumerate() {
+            if l.output.is_empty() {
+                continue;
+            }
+            let b = std::mem::take(&mut l.output);
+            if let Some(c) = &self.dz[k].conn {
+                let _ = c.2.send(b);
+            }
+        }
         let out = &self.m.console.output;
         if out.len() > self.sent {
             let b = out[self.sent..].to_vec();
@@ -765,7 +862,82 @@ impl Engine {
             Request::Units(s) => {
                 let _ = s.send(self.units());
             }
+            Request::DzConnect {
+                line,
+                peer,
+                out,
+                reply,
+            } => {
+                let r = if self.replaying() {
+                    Err("the emulator replays a record".to_string())
+                } else if self.dz[line].conn.is_some() {
+                    Err(format!("line {line} is busy"))
+                } else {
+                    self.input(Input::DzConnect(line)).map(|_| {
+                        self.dz_next += 1;
+                        self.dz[line].conn = Some((self.dz_next, peer, out));
+                        self.notice(format!("neoks10: dz line {line}: {peer} connected"));
+                        self.dz_next
+                    })
+                };
+                let _ = reply.send(r);
+            }
+            Request::DzInput { line, id, data } => {
+                if self.dz[line].conn.as_ref().is_some_and(|c| c.0 == id) {
+                    let _ = self.input(Input::DzData { line, data });
+                }
+            }
+            Request::DzHangup { line, id } => {
+                if self.dz[line].conn.as_ref().is_some_and(|c| c.0 == id) {
+                    self.dz[line].conn = None;
+                    let _ = self.input(Input::DzHangup(line));
+                    self.notice(format!("neoks10: dz line {line}: disconnected"));
+                }
+            }
         }
+    }
+
+    /// The sender for the DZ11 listeners. Without it, `dz line N listen`
+    /// is not possible.
+    pub fn set_requests(&mut self, tx: Sender<Request>) {
+        self.requests = Some(tx);
+    }
+
+    /// Listen on `addr` for DZ11 line `line`.
+    pub fn dz_listen(&mut self, line: usize, addr: &str) -> Result<String, String> {
+        if self.replaying() {
+            return Err("a replay takes no connections".into());
+        }
+        let Some(tx) = self.requests.clone() else {
+            return Err("this run takes no requests".into());
+        };
+        // The old listener stops first, so that the same address works.
+        self.dz[line].listener = None;
+        let l = dz::listen(line, addr, tx)?;
+        let t = format!("dz line {line}: listens on {}", l.addr);
+        self.dz[line].listener = Some(l);
+        Ok(t)
+    }
+
+    fn dz_show(&self) -> Reply {
+        let mut text = String::new();
+        let mut list = Vec::new();
+        for (k, d) in self.dz.iter().enumerate() {
+            let listen = d.listener.as_ref().map(|l| l.addr.to_string());
+            let peer = d.conn.as_ref().map(|c| c.1.to_string());
+            text += &format!(
+                "dz line {k}: {}, {}\n",
+                listen
+                    .as_ref()
+                    .map_or("no listener".to_string(), |a| format!("listens on {a}")),
+                peer.as_ref()
+                    .map_or("no connection".to_string(), |p| format!(
+                        "connected from {p}"
+                    ))
+            );
+            list.push(json!({"line": k, "listen": listen, "peer": peer}));
+        }
+        Reply::ok(text, json!({"lines": list}))
     }
 
     /// The count of the next event that must stop a batch.
@@ -1152,6 +1324,9 @@ fn changes_guest(c: &Command) -> bool {
             | Command::Expect { .. }
             | Command::ShowDevices
             | Command::ScriptShow
+            | Command::DzShow
+            | Command::DzListen(..)
+            | Command::DzClose(_)
     )
 }
 
@@ -1328,5 +1503,75 @@ mod tests {
         }
         assert_eq!(calls, 500);
         assert_eq!(e.m.timer.time1.get(), 5000 << 12);
+    }
+
+    // A Telnet client on line 3 (loopback): the line gets carrier and
+    // the data bytes, a second client gets "busy", and the record has the
+    // connection and the input.
+    #[test]
+    fn dz_connection() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("neoks10-dz-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = dir.join("run.rec");
+        let mut e = Engine::new(options(Some(rec.clone()), None)).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Request>();
+        e.set_requests(tx.clone());
+        e.dz_listen(3, "127.0.0.1:0").unwrap();
+        let addr = e.dz[3].listener.as_ref().unwrap().addr;
+        let machine = std::thread::spawn(move || {
+            e.serve(&rx);
+            e
+        });
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 256];
+        while !String::from_utf8_lossy(&got).contains("line 3") {
+            let n = c.read(&mut buf).unwrap();
+            assert!(n > 0);
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert!(got.starts_with(&dz::GREETING));
+        c.write_all(&[b'a', 255, 251, 3, b'b', b'\r', b'\n'])
+            .unwrap();
+        let mut second = std::net::TcpStream::connect(addr).unwrap();
+        let mut s = String::new();
+        second.read_to_string(&mut s).unwrap();
+        assert!(s.contains("line 3 is busy"), "{s}");
+        // Wait until the machine thread has the input.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (rtx, rrx) = std::sync::mpsc::channel();
+            tx.send(Request::Command {
+                cmd: Command::DzShow,
+                from: 0,
+                reply: rtx,
+            })
+            .unwrap();
+            let _ = rrx.recv().unwrap();
+            let text = std::fs::read_to_string(&rec).unwrap();
+            if text.contains("dz_data") || Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (rtx, _rrx) = std::sync::mpsc::channel();
+        tx.send(Request::Command {
+            cmd: Command::Quit,
+            from: 0,
+            reply: rtx,
+        })
+        .unwrap();
+        let e = machine.join().unwrap();
+        let l = &e.m.io.dz.lines[3];
+        assert!(l.carrier);
+        assert_eq!(l.input.iter().copied().collect::<Vec<u8>>(), b"ab\r");
+        let text = std::fs::read_to_string(&rec).unwrap();
+        assert!(text.contains("{\"dz_connect\":3}"), "{text}");
+        assert!(
+            text.contains("\"dz_data\":{\"line\":3,\"data\":[97,98,13]}"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

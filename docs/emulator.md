@@ -187,8 +187,9 @@ the microcode file.
   record in reverse order.
 - DZ11: the silo, the transmit scanner, the line parameters, both
   interrupts. CH11: transmit, receive, loop back. IMP: the registers
-  only, with "IMP not ready". The host side of the DZ11 lines, the
-  Chaosnet and the IMP comes with the host layer.
+  only, with "IMP not ready". The host side of the DZ11 lines is in
+  `neoks10` ([DZ11 lines](#dz11-lines)). The host side of the Chaosnet
+  and the IMP comes later.
 - The 8080 `BT` command runs the channel command list `DSKSEQ`
   (`dr.m80`) on the emulated RH11. The `MB` command runs `MTASEQ` and
   `QTXFR` on the emulated TM03 (`emu/ks10/src/boot.rs`). `MT` gives the
@@ -415,7 +416,7 @@ neoks10 trace diff A B
 
 The first version (2026-11-27) has `run`, `console`, `ctl` and `help`.
 `--trace`, `--cpu` and the subcommands `image`, `tape` and `trace` come
-later, and the `dz` commands come with the host side of the DZ11.
+later.
 `docs/console.md` lists the commands that exist.
 
 ### Operator console
@@ -443,7 +444,7 @@ no `unsafe` code.
 ```
 tape 0 mount minsys.tape --ro      tape 0 rewind      tape 0 unmount
 disk 0 attach rp0.dsk              boot disk 0        boot tape 2
-dz line 7 listen 127.0.0.1:10018   mem examine 1000..1017
+dz line 7 listen 127.0.0.1:10011   mem examine 1000..1017
 mem examine exec:774000            mem deposit 1000 254000,,1000
 cpu show      cpu halt      cpu continue      cpu step 10
 show devices  record mark TEXT     quit
@@ -569,6 +570,42 @@ escape character. The `its/` directory of this repository holds the
 scripts that the ITS build needs under `build/<emulator>/` (AGENTS.md).
 They use the commands above.
 
+### DZ11 lines
+
+Each of the 8 lines of the DZ11 has its own TCP listener. A user who
+connects to the same port again thus gets the same ITS terminal.
+
+- `[dz11] listen = "HOST:PORT"` in the configuration gives the address
+  of line 0. Line k listens on PORT + k. Without `[dz11]`, no line
+  listens.
+- `dz line N listen HOST:PORT` gives one line a listener while the
+  machine runs; `dz line N close` stops it. `dz line N disconnect` ends
+  the connection. `dz show` lists the lines.
+- A line takes one connection at a time. A second client gets
+  "line N is busy" and the connection closes.
+- The protocol is Telnet (RFC 854) in character mode. At the start,
+  `neoks10` sends WILL ECHO, WILL SUPPRESS-GO-AHEAD and DO
+  SUPPRESS-GO-AHEAD; ITS echoes. Received commands are removed. CR LF
+  and CR NUL become CR. A data byte 255 goes out as IAC IAC.
+- A connection sets the carrier of the line, and its end clears it.
+  ITS does not read the modem status of the DZ11 **[its]** (its.1652
+  and ts3tty.402 have no reference to `%DZRMS`). For ITS the lines are
+  thus hardwired terminals: after a disconnection, the job of the line
+  stays, and the next connection gets it.
+- The machine thread decides about each connection. A connection, its
+  input and its end are inputs of the host layer, so `--record` writes
+  them and a replay repeats them. A replay takes no connections.
+- A run that takes requests (a terminal, the control socket or
+  `[dz11]`) ends only with `quit`.
+- The default addresses are on the loopback interface (decision 4). A
+  listener on another interface needs the permission of the owner
+  (AGENTS.md).
+
+**[measured]** 2026-11-27: with `[dz11] listen = "127.0.0.1:10004"`, a
+Telnet client on line 0 typed Ctrl-Z, `:login` and `:listf sys;`, and
+got the listing. ITS sent 7-bit characters. After a new connection to
+the same port, a CR gave `Flushed` and the DDT prompt of the same job.
+
 ### Configuration file
 
 The configuration file names the machine and the attachments. An example
@@ -588,7 +625,6 @@ image = "minsys.tape"
 read_only = true
 
 [dz11]
-lines = 8
 listen = "127.0.0.1:10004"
 
 [chaosnet]
