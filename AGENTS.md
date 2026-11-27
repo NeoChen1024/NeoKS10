@@ -64,7 +64,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10` is the machine and the software processor. `plio` is the access to the PL. `memprobe` is the program of the memory path test |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10` is the machine and the software processor. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -82,7 +82,8 @@ directory that `.gitignore` excludes.
 `make gen` writes files from `spec/`: `rtl/gen/`, `tb/gen/`,
 `emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
 `emu/ks10/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
-`docs/devices.md`. These files are in git, so that a build does not need
+`docs/devices.md`. It also writes `docs/console.md` from the command table
+of `emu/neoks10`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
 fails.
 

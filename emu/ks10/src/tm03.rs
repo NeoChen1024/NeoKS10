@@ -815,6 +815,26 @@ impl Tm03 {
         self.end_transfer(dma_error);
     }
 
+    /// Mount an image while the system runs: the transport comes on
+    /// line, the formatter sets SSC and attention (KLH10 6d733f2,
+    /// dvtm03.c, tm_cmddon: the mount gives "SSC - slave changed state").
+    pub fn mount(&mut self, n: usize, file: File, read_only: bool) {
+        self.attach(n, file, read_only);
+        self.ssc = true;
+        self.attention();
+    }
+
+    /// Remove the tape of transport `n`; SSC and attention as for a mount.
+    pub fn unmount(&mut self, n: usize) {
+        let s = &mut self.slaves[n & 7];
+        s.file = None;
+        s.pos = 0;
+        s.tm = false;
+        s.rewinding = false;
+        self.ssc = true;
+        self.attention();
+    }
+
     /// Mount an image on transport `n` at the load point.
     pub fn attach(&mut self, n: usize, file: File, read_only: bool) {
         let s = &mut self.slaves[n & 7];

@@ -294,10 +294,12 @@ that record on `soft` then repeats the run in software.
 The program `neoks10` has subcommands.
 
 ```
-neoks10 run [CONFIG] [--control PATH] [--record FILE] [--replay FILE]
-            [--trace FILE] [--cpu soft|pl] [--realtime] [--script FILE]
+neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
+            [--replay FILE] [--script FILE] [--realtime]
+            [--trace FILE] [--cpu soft|pl]
 neoks10 console [--control PATH]
-neoks10 ctl [--control PATH] COMMAND...
+neoks10 ctl [--control PATH] [--json] COMMAND...
+neoks10 help [--markdown]
 neoks10 image create rp06 FILE
 neoks10 image info FILE
 neoks10 image convert --from klh10 IN OUT
@@ -314,8 +316,16 @@ neoks10 trace diff A B
 - `--trace` writes one record for each completed instruction, in the
   format that the co-simulation compares.
 - `--script` reads operator commands from a file (see [Scripts](#scripts)).
+- `help --markdown` writes `docs/console.md`; `make gen` runs it.
 - `image convert` exists for KLH10 images; the step 0 images need no
   conversion.
+- `run` ends with `quit`. With `--no-control` and no terminal on stdin,
+  it also ends when the processor stops.
+
+The first version (2026-11-27) has `run`, `console`, `ctl` and `help`.
+`--trace`, `--cpu` and the subcommands `image`, `tape` and `trace` come
+later, and the `dz` commands come with the host side of the DZ11.
+`docs/console.md` lists the commands that exist.
 
 ### Operator console
 
@@ -376,20 +386,25 @@ noun "tpe"; did you mean "tape"?`.
 `neoks10.sock` in the directory of the configuration file
 (`--control PATH` changes it). The socket file has mode 0600. There is no
 TCP control port. The protocol has one command for each line, in the
-syntax above. Each reply is one line of JSON: `{"ok":true,"result":...}`
-or `{"ok":false,"error":"..."}`. A small JSON writer in `neoks10` makes
-the replies; the protocol parses no JSON, so it needs no new crate. Some
-commands exist for clients that do not own the terminal:
+syntax above. Each reply is one line of JSON:
+`{"ok":true,"result":...,"text":"..."}` or `{"ok":false,"error":"..."}`.
+`result` is for programs, `text` is for a person. `serde_json` writes
+and reads the lines (approved on 2026-11-27). Some commands exist for
+clients that do not own the terminal:
 
 | Command | Function |
 |---|---|
-| `cty send TEXT` | Type TEXT on the CTY (escapes `\r`, `\e`, `\xHH`) |
+| `cty send TEXT`, `send TEXT` | Type TEXT on the CTY (escapes `\r`, `\e`, `\xHH`) |
 | `cty read [--from N]` | The CTY output from byte N, and the next N |
 | `expect TEXT [--steps N]` | Wait until TEXT is in the CTY output, at most N instructions |
-| `show STATE --json` | The state as JSON (all `show` commands) |
 
 `neoks10 console` and `neoks10 ctl` use the socket. Several clients can
-connect at the same time.
+connect at the same time. Each connection has its own position in the
+CTY output: an `expect` looks at the output after the last match of that
+connection. `ctl --json` prints the reply line as it comes.
+
+A Unix socket path has at most about 107 bytes. `neoks10` uses the path
+relative to the current directory if that is shorter.
 
 **Threads and determinism.** One thread owns `Machine` and runs the
 instructions. The terminal thread and the socket threads send commands
@@ -399,14 +414,48 @@ command that changes the guest (a key, a tape mount) is an input of the
 host layer: it gets the instruction count, and `--record` writes it. A
 replay thus gives the same run without the terminal or the socket.
 
+- The record file has one line of JSON for each input. Image paths are
+  relative to the directory of the record file, so that the record has
+  no host directory and works at another place. The last line is the
+  `quit`, where a replay ends.
+- A replay needs the images in the state at the start of the recorded
+  run, so it must run on fresh copies. `neoks10` does not check this
+  yet (docs/unknowns.md).
+- An input from the terminal or the socket gets the count at which the
+  machine thread takes it. A second run of the same client can thus give
+  other counts; only the replay of its record repeats the run.
+
+**[measured]** 2026-11-27: two runs of a script that boots ITS, logs in
+and lists `SYS;` gave identical record files (7 inputs, `quit` at
+instruction 137519396) and identical CTY output. A replay of the record
+on a fresh copy of the disk gave the same CTY output.
+
 ### Scripts
 
-A script file has operator commands, one for each line, and two more:
+A script file has operator commands, one for each line. A line that
+starts with `#` is a comment. Two commands are for scripts:
 
 - `expect TEXT [--steps N]`: wait for TEXT in the CTY output. N is a
-  number of instructions, not a wall-clock time. If the text does not
-  come, the script stops with an error.
+  number of instructions, not a wall-clock time (default 1000000000).
+  If the text does not come, the script stops with an error.
 - `send TEXT`: type TEXT on the CTY.
+
+A script starts with `run --script FILE`, or with `script run FILE` at
+the prompt or on the socket while the machine runs. `script show` gives
+its step, and `script stop` ends it. One script runs at a time. A script
+that starts later looks only at the CTY output after its start.
+
+The machine thread runs the script, so its timing depends only on the
+guest:
+
+- While an `expect` waits, the thread looks at the CTY output after each
+  instruction that prints. The match has the count of that instruction.
+- A `send` comes 100000 instructions (`ks10::console::ANSWER_DELAY`)
+  after the previous step of the script. The DEC diagnostic monitor
+  loses characters that come while it prints (`console.rs`).
+- Other commands run at once, at the count of the previous step.
+- If a step fails, `run` ends with exit status 1 and names the file and
+  the line.
 
 The ITS build of `its/` and `make its-boot` use scripts. The waits count
 instructions, so a script gives the same result on a slow host.
@@ -605,7 +654,9 @@ Decided on 2026-11-26:
 
 Decided on 2026-11-27:
 
-5. The crate `reedline` is approved for the operator console. A test
+5. The crate `reedline` is approved for the operator console. `neoks10`
+   also uses its terminal layer `crossterm` directly, at the version that
+   `reedline` uses, so the build has no other crate. A test
    (2026-11-27) built a small program with `reedline` 0.53.0 for
    armv7-unknown-linux-musleabihf: 43 crates, no asynchronous runtime, a
    static binary of 1.4 MiB. In a pseudo terminal under `qemu-arm`, Tab
@@ -613,10 +664,13 @@ Decided on 2026-11-27:
 6. The machine runs while the operator console is open.
 7. The console has no SIMH command names.
 8. The control socket is in the first version.
+9. The crate `serde_json` is approved. A well-known crate is better than
+   a new implementation, within reason.
+10. The interactive console can start a script (`script run FILE`).
 
 Open:
 
-9. The IMP interface for step 6. The choices include the emulator-only
+11. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.

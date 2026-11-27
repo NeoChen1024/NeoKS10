@@ -46,6 +46,9 @@ tapes"). Not known yet:
   serial number of the RP06, the CH11 check word, and how the IMP
   interface counts its address register in 32-bit mode. `emu/ks10` gives
   0 or leaves the register as it is.
+- How a replay can check that its images are in the state of the start
+  of the recorded run. A hash of each image in the record needs a hash
+  crate, which the owner has not approved yet. `neoks10` does not check.
 - The line speed of the CTY, and the time of the 8080 for one character.
   `emu/ks10/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
   at 1 µs for each instruction).

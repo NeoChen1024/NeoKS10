@@ -107,6 +107,31 @@ pub fn translate(m: &mut Machine, a: Half, user: bool, write: bool) -> Result<u3
     Ok((e.page << 9) | (a.get() as u32 & 0o777))
 }
 
+/// The physical address of `a` from the page tables in memory, without a
+/// change to the machine: no refill of the hardware table, no age bit.
+/// For the operator console. `None` if the entry gives no access.
+pub fn peek(m: &Machine, a: Half, user: bool) -> Option<u32> {
+    if !m.paging {
+        return Some(a.get() as u32);
+    }
+    let v = a.get();
+    let high = v & 0o400000 != 0;
+    let dbr = match (user, high) {
+        (true, false) => m.dbr[0],
+        (true, true) => m.dbr[1],
+        (false, true) => m.dbr[2],
+        (false, false) => m.dbr[3],
+    };
+    let ptw_addr = (dbr.get().wrapping_add((v >> 11) & 0o77) & 0o3777777) as u32;
+    let ptw = m.phys_read(ptw_addr).ok()?;
+    let h = if v & 0o2000 != 0 { ptw.rh() } else { ptw.lh() }.get();
+    if h >> 16 == 0 {
+        return None;
+    }
+    let dec_page = (h & 0o1777) as u32 * 2 + ((v >> 9) & 1) as u32;
+    Some((dec_page << 9) | (v as u32 & 0o777))
+}
+
 fn refill(m: &mut Machine, a: Half, user: bool, write: bool) -> Result<(), Fault> {
     let v = a.get();
     let high = v & 0o400000 != 0;
@@ -155,6 +180,30 @@ fn refill(m: &mut Machine, a: Half, user: bool, write: bool) -> Result<(), Fault
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // peek gives the address of the page table entry and changes nothing:
+    // the age bit stays and the hardware entry stays invalid.
+    #[test]
+    fn peek_changes_nothing() {
+        let mut m = Machine::new();
+        m.paging = true;
+        m.dbr[3] = W36::wrap(0o10000);
+        // Exec page 1 (addresses 2000-3777, the right half of word 0):
+        // read/write (11), age bit 2.5, ITS page 123.
+        m.mem[0o10000] = W36::from_halves(Half::ZERO, Half::wrap(0o610123));
+        let before = m.mem[0o10000];
+        assert_eq!(
+            peek(&m, Half::wrap(0o2005), false),
+            Some((0o123 * 2) << 9 | 5)
+        );
+        assert_eq!(
+            peek(&m, Half::wrap(0o3005), false),
+            Some((0o123 * 2 + 1) << 9 | 5)
+        );
+        assert_eq!(peek(&m, Half::wrap(0o0005), false), None);
+        assert_eq!(m.mem[0o10000], before);
+        assert!(!m.pager.table[1].valid);
+    }
 
     // A page table word: the left half for an even page, the right half
     // for an odd page (itspag.98, GOTDBR). 620123 is read/write with the

@@ -22,6 +22,7 @@ gen:
 	$(PYTHON) spec/gen_regmap.py
 	$(PYTHON) spec/gen_instructions.py
 	$(PYTHON) spec/gen_devices.py
+	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown > ../docs/console.md
 
 # Format, lint, unit tests, and a check that the generated files are current.
 check: check-gen check-py check-rust check-rtl
@@ -33,6 +34,7 @@ check-gen:
 	$(PYTHON) spec/gen_regmap.py --check
 	$(PYTHON) spec/gen_instructions.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_devices.py --check --its $(ITS_TREE)
+	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown | diff -u ../docs/console.md -
 
 check-py:
 	$(PYTHON) -m unittest discover -s spec
