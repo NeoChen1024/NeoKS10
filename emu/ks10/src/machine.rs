@@ -22,6 +22,7 @@ use crate::flags::Flags;
 use crate::ops;
 use crate::pager::{self, Pager, pfw};
 use crate::timer::{self, Timer};
+use crate::unibus::Io;
 
 /// Words of memory: 512 Ki (docs/emulator.md, configuration DB, `TSYSM`).
 pub const MEMORY_WORDS: usize = 512 * 1024;
@@ -31,6 +32,7 @@ pub mod halt {
     pub const HALT: u32 = 0o1;
     pub const IOPF: u32 = 0o100;
     pub const ILLII: u32 = 0o101;
+    pub const ILLINT: u32 = 0o102;
 }
 
 /// Why the processor stopped.
@@ -114,6 +116,8 @@ pub struct Machine {
     /// The PXCT bits of the XCTR in progress (0 if none).
     pub pxct: u8,
     pub oneproc: OneProc,
+    /// The I/O bus: adapters and devices.
+    pub io: Io,
 }
 
 impl Default for Machine {
@@ -198,7 +202,40 @@ impl Machine {
             hsb: W36::wrap(0o500),
             pxct: 0,
             oneproc: OneProc::Off,
+            io: Io::default(),
         }
+    }
+
+    /// A master reset and the start of the microcode (8080 MR command;
+    /// simple.42 at location 3): the processor state, the pager, the
+    /// timers and the Unibus adapters and devices go to their initial
+    /// state. Memory, the ACs and the disk attachments stay.
+    pub fn reset(&mut self) {
+        self.pc = Half::ZERO;
+        self.flags = Flags::default();
+        self.apr = Apr::default();
+        self.pi = Pi::default();
+        self.ebr = W36::ZERO;
+        self.ubr = W36::ZERO;
+        self.paging = false;
+        self.pager.clear_all();
+        self.load_ac_blocks();
+        self.pcst = W36::ZERO;
+        self.timer = Timer {
+            last_tick: self.count,
+            ..Timer::default()
+        };
+        self.dbr = [W36::ZERO; 4];
+        self.hsb = W36::wrap(0o500);
+        self.pxct = 0;
+        self.oneproc = OneProc::Off;
+        self.io.uba = Default::default();
+        self.io.disk.reset();
+        self.io.dz.reset();
+        self.io.chaos.reset();
+        self.io.imp.reset();
+        self.io.events.clear();
+        self.io.memstat = 0;
     }
 
     /// The physical address of a word of the EPT: the EBR plus the
@@ -382,11 +419,12 @@ impl Machine {
     /// The interrupt requests of the APR (and later the devices) as a
     /// mask of levels.
     fn requests(&self) -> u8 {
-        if self.apr.requesting() && self.apr.level != 0 {
+        let apr = if self.apr.requesting() && self.apr.level != 0 {
             Pi::level_bit(self.apr.level)
         } else {
             0
-        }
+        };
+        apr | self.io.requests()
     }
 
     /// The PC word to save at an interrupt or a page failure, with the
@@ -486,13 +524,32 @@ impl Machine {
     fn interrupt(&mut self, n: u8) -> Result<(), Stop> {
         self.pi.in_progress |= Pi::level_bit(n);
         let loc = self.ept_addr(0o40 + 2 * u32::from(n));
+        // The WRU and vector cycles (inout.50, PI10, VECINT): a Unibus
+        // device gives a vector; EPT + 100 + adapter points to the table
+        // of the adapter, and the instruction is at table + vector / 4 in
+        // the executive address space.
+        let vectored = match self.io.acknowledge(n) {
+            None => None,
+            Some((a, v)) => {
+                let t = self
+                    .phys_read(self.ept_addr(0o100 + a))
+                    .unwrap_or(W36::ZERO);
+                if t.rh() == Half::ZERO {
+                    return Err(self.halt(halt::ILLINT, W36::ZERO));
+                }
+                Some(Half::wrap(t.get().wrapping_add(u64::from(v >> 2))))
+            }
+        };
         let old = self.flags;
         let pc = self.pc;
         let pcw = self.int_pc_word();
         // The interrupt instruction runs in executive mode (FORCE EXEC).
         self.flags = Flags(0);
         let r = (|| -> Result<Option<(W36, Half)>, Fault> {
-            let word = self.phys_read(loc)?;
+            let word = match vectored {
+                Some(a) => self.vread(a, Ref::D1)?,
+                None => self.phys_read(loc)?,
+            };
             let Some((e, _)) = self.ea(word)? else {
                 return Ok(None);
             };
@@ -617,6 +674,10 @@ impl Machine {
     pub fn step(&mut self) -> Result<(), Stop> {
         timer::run(self);
         self.console();
+        self.io.poll(self.count);
+        if !self.io.events.is_empty() {
+            self.io.run_events(&mut self.mem, self.count);
+        }
         if let Some(n) = self.pi.accept(self.requests()) {
             // An interrupt at the fetch after a one-proceeded instruction
             // takes the one-proceed trap first (itspag.98, CLTRP1, CLTRP2).

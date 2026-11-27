@@ -60,9 +60,9 @@ Unibus address in the right half.
 | CH11 | 3 | 764140 | 270, and 230 | `ch11.defs1`, `CAICSR`; `its.1652`, `UBAIIT` |
 | IMP (`SSIMP`) | 3 | not read yet | `%LHVEC` and `%LHVEC`+4 | `its.1652`, `UBAIIT` |
 
-The bit layouts of the registers are in the files of the table. The
-emulator does not copy them by hand: they go into a file of `spec/`, as
-the register map of the PL does (see [Program structure](#program-structure)).
+The bit layouts of the registers are in the files of the table.
+`spec/devices.toml` holds them, with the CH11 and the IMP; `docs/devices.md`
+shows them. `make check` compares each entry with the ITS sources.
 
 Each adapter has these registers **[its]** (`ksdefs.194`, `UBAPAG`,
 `UBASTA`, `UBAMNT`):
@@ -77,8 +77,11 @@ Each adapter has these registers **[its]** (`ksdefs.194`, `UBAPAG`,
 Interrupts: word `EPTUIT`+n of the EPT points to the interrupt table of
 adapter n **[its]** (`ksdefs.194`, `EPTUIT`). ITS fills the entry at
 vector/4 of that table with a `JSR` to the handler **[its]** (`its.1652`,
-macro `UBINT`). How the processor takes the interrupt is in the microcode
-(`inout`). This document does not describe it yet.
+macro `UBINT`). The processor asks which adapters request on the PI level
+(WRU cycle), reads the vector of the first one (vector cycle), and runs
+the instruction at table + vector/4 in the executive address space
+**[microcode]** (`inout.50`, PI10, VECINT). A zero table pointer halts
+with code 102.
 
 An I/O reference to an address without a device gives a page fail with
 bit `%PFNXI` **[its]** (`ksdefs.194`, page fail word). The memory status
@@ -165,6 +168,26 @@ the files with a Python script):
 
 The emulator implements the microcode behaviour in software, so it skips
 the microcode file.
+
+### Device model in `emu/ks10`
+
+- The adapters: the paging RAM, the status register with the PI levels
+  of the two request groups, Unibus init, and DMA through the map.
+- RH11 and RP06: the registers, the commands of `rh11.defs48`, attention
+  and the interrupt with IE, DMA of 18-bit words. A command ends after a
+  fixed delay in virtual time; a data transfer moves its data at that end.
+- DZ11: the silo, the transmit scanner, the line parameters, both
+  interrupts. CH11: transmit, receive, loop back. IMP: the registers
+  only, with "IMP not ready". The host side of the DZ11 lines, the
+  Chaosnet and the IMP comes with the host layer.
+- The 8080 `BT` command runs the channel command list `DSKSEQ`
+  (`dr.m80`) on the emulated RH11 (`emu/ks10/src/boot.rs`).
+
+**[measured]** 2026-11-27 (`cargo test --release -p ks10 --test its` with
+`KS10_ITS_DISK` naming the step 0 `rp0.dsk`): `BT`, then `its` and ESC G
+at the DSKDMP prompt, start ITS. The Salvager runs, ITS prints `DB ITS
+1652 IN OPERATION`, the system job logs in, and a login on the console
+lists `SYS;`. This takes about 140 million steps.
 
 ### Image formats in step 0
 
@@ -463,8 +486,8 @@ Differences from the microcode:
    block. Done in `emu/ks10`, except the Unibus interrupts, which come
    with the adapters.
 4. The adapters, the RH11 with the TM03: boot from tape (salvager,
-   DSKDMP).
-5. The RH11 with the RP06: boot ITS from `rp0.dsk`.
+   DSKDMP). The adapters are done; the TM03 is not.
+5. The RH11 with the RP06: boot ITS from `rp0.dsk`. Done.
 6. The DZ11, the diagnostics, the ITS build.
 7. Step 6 of README.md: the CH11 and the IMP.
 

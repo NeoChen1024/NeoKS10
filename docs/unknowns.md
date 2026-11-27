@@ -29,6 +29,14 @@ tapes"). Not known yet:
 - The halt turns off the PI system in the hardware (`inout.50`, WRTHSB:
   "TURN OFF PI SYSTEM"). `emu/ks10` does not model a continue after a
   halt.
+- Device times in `emu/ks10`, all estimates in instructions at 1 µs each:
+  the RP06 seek and transfer time (`rh11.rs`, DELAY = 100), the DZ11
+  character time (`dz11.rs`, 9600 baud), the CH11 transmission time
+  (`ch11.rs`).
+- The parity bits of the UBA paging RAM as read (%UPPAR, %UPPVL), the
+  serial number of the RP06, the CH11 check word, and how the IMP
+  interface counts its address register in 32-bit mode. `emu/ks10` gives
+  0 or leaves the register as it is.
 - The line speed of the CTY, and the time of the 8080 for one character.
   `emu/ks10/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
   at 1 µs for each instruction).

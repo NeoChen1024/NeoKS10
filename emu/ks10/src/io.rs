@@ -10,14 +10,15 @@
 //!   (IORD2, IORD3, IOWR2, IOWR3).
 //! - I/O must be legal (A/IOT).
 //!
-//! This version has no devices: every I/O address is a nonexistent I/O
-//! register, which is a page failure with bits "no IO register" and "IO
-//! cycle" (itspag.98, HARD: "I/O failures come here").
+//! The addresses go to the I/O bus (`unibus`). An address without a
+//! device is a page failure with bits "no IO register" and "IO cycle"
+//! (itspag.98, HARD: "I/O failures come here").
 
 use pdp10::{Half, W36};
 
 use crate::machine::{Fault, Inst, Machine, Next};
 use crate::pager::pfw;
+use crate::unibus::Reply;
 
 type R = Result<Next, Fault>;
 
@@ -33,15 +34,30 @@ fn no_register(m: &Machine, a: u32, byte: bool) -> Fault {
     Fault::PageFail(W36::wrap(w))
 }
 
-/// Read an I/O register (the Unibus adapters and their devices come
-/// later).
+/// Read an I/O register.
 pub fn io_read(m: &mut Machine, a: u32, byte: bool) -> Result<u64, Fault> {
-    Err(no_register(m, a, byte))
+    let now = m.count;
+    match m.io.read(a & !1 | if byte { 0 } else { a & 1 }, now) {
+        Reply::Value(v) => Ok(v),
+        Reply::NoDevice => Err(no_register(m, a, byte)),
+    }
 }
 
-/// Write an I/O register.
-pub fn io_write(m: &mut Machine, a: u32, _value: u64, byte: bool) -> Result<(), Fault> {
-    Err(no_register(m, a, byte))
+/// Write an I/O register. A byte write changes the byte that the address
+/// selects: the high byte for an odd address.
+pub fn io_write(m: &mut Machine, a: u32, value: u64, byte: bool) -> Result<(), Fault> {
+    let mask = match (byte, a & 1) {
+        (false, _) => 0o177777,
+        (true, 0) => 0o377,
+        (true, _) => 0o177400,
+    };
+    let Machine { io, mem, count, .. } = m;
+    let addr = if byte { a & !1 } else { a };
+    if io.write(mem, *count, addr, value, mask) {
+        Ok(())
+    } else {
+        Err(no_register(m, a, byte))
+    }
 }
 
 pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
