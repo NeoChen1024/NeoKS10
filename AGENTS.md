@@ -127,8 +127,9 @@ fails.
 - `make microcode KS10_ITS_DISK=<rp0.dsk>` extracts the listing of the
   microcode from the dump tape of the ITS build (`output.tape`, next to
   `rp0.dsk`), compares it with the RAM file on the disk, and runs the
-  tests of `emu/ks10uop` that need it (the power-up sequence). Run it when
-  `emu/ks10uop` or the microcode changes.
+  tests of `emu/ks10uop` that need it (the power-up sequence and the
+  single instructions). Run it when `emu/ks10uop` or the microcode
+  changes.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example

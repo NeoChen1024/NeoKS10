@@ -443,9 +443,11 @@ and 145) **[manual]**:
 
 The microcode uses two microinstructions for each cycle: `START READ`
 or `START WRITE` set up the cycle, and `MEM WAIT` (`MEM/1, WAIT/1`)
-completes it. A read gives the word through `DBM/MEM`; a write takes the
-DBus of the `MEM WAIT` word (`MEM_[]` is `DBUS/DP, RAMADR/VMA`)
-**[microcode]** (ks10, the macros after `MEM CYCLE`).
+completes it. A read gives the word through `DBM/MEM`. A write puts the
+word on DP in the `MEM WAIT` word (`MEM_[]` is `AD/B, DBUS/DP,
+RAMADR/VMA`) **[microcode]** (ks10, the macros after `MEM CYCLE`). In
+the data phase the bus mixers of DPM8 and DPM9 take DP 00–35 **[manual]**
+(M8621-0-DPM8 and DPM9 rev B, MIX inputs).
 
 **Paging.** A virtual reference goes through the page table of DPM6
 only if DPM8 PAGE EN is 1: PAGED REF is BUS REQUEST AND PAGE EN AND NOT
@@ -465,87 +467,222 @@ microcode fills the entry from the page tables in memory that
 512 entries by VMA 18–26: VALID, WRITEABLE, CACHEABLE and USER, and the
 physical page 16–26 from DP 18, 21, 22, VMA USER and DP 25–35.
 
-Other DPM readings (M8621-0-DPMA rev B) **[manual]**:
+**The cycle in the registers.** The cycle type (DPM5 E33), MEMORY CYCLE
+(DPM6 E16 R0), VMA and the VMA flags load at the clock. The word that
+completes a cycle sees what the starting word loaded **[manual]**:
 
-- An AC write: RAMFILE WRITE is AC REF AND NOT MEM READ AND MEMORY CYCLE
-  AND MEM WAIT (E22, E54). The write takes place at `MEM WAIT`.
-- PXCT: `SPEC/PXCT EN` loads E71: PXCT ON gets NOT `SPEC/PXCT OFF`, and
-  the bits B09–B12 get DP 09–12. PREVIOUS EN is the bit that the `PXCT`
-  field selects (E63), with PXCT ON. XR PREV loads from PREVIOUS EN.
-- A pending interrupt or the 1 ms timer makes a page fail on a memory
-  cycle (M8621-0-DPM6 rev C, E9, E16): the microcode takes interrupts
+- MEM EN is `MEM` AND (`WAIT` OR (`BWRITE` AND DROM `COND FUNC`)) (DPM5
+  E118). MEM WAIT is MEM EN OR `SPEC/MEM WAIT` OR `SPEC/MEMCLR` OR DP
+  RESET (DPM5 E8).
+- START CYCLE is MEM EN AND (READ EN OR WRITE EN) AND NOT RPW CYCLE AND
+  SYNC (DPM5 E5). READ EN and WRITE EN are the new cycle type. RPW CYCLE
+  is MEM READ AND MEM WRITE AND NOT STOP MAIN MEMORY, with the old
+  values (DPM5 E32). E16 loads START CYCLE at MEM WAIT.
+- MEMORY DELAY is (MEM EN OR `SPEC/MEM WAIT`) AND MEMORY CYCLE (DPM5
+  E30): this word completes the cycle.
+- FORCE RAMFILE is (CACHE HIT EN OR AC REF) AND MEMORY DELAY AND MEM
+  READ (DPM5 E14). It changes the DBus select DBM (3) into the RAM file
+  (2) in both halves (M8620-0-DPE3 rev B, E70).
+- RAMFILE WRITE is MEMORY CYCLE AND MEM WAIT AND (AC REF AND NOT MEM READ,
+  or NOT AC REF AND NOT STOP MAIN MEMORY) (M8621-0-DPMA rev B, E22, E54).
+  The second term writes the cache data: the RAM file gets the DBus at
+  each memory cycle. The address comes from `RAMADR` of the word.
+- INT OR ERR is (MEMORY CYCLE AND NOT VMA PHYSICAL AND NOT MEM WRITE AND
+  (INT OR 1MS)) OR NXM ERR OR BAD DATA EN (DPM6 E15, E9). E16 latches INT
+  (DPEB INTERRUPT REQ) and 1MS (DPMC 1 MSEC) at MEM WAIT. INT OR ERR
+  makes a page fail: the microcode takes interrupts and the 1 ms tick
   through `PAGE-FAIL`.
+
+**RAM file address** (M8620-0-DPE6 rev B) **[manual]**. Bits 00–02 are 0
+unless `RAMADR` bit 4 is 1 (E7, E16, E8). Bits 03–05 come from E14, E15
+and E13 through E3. Bits 06–09 come from E22, E23, E24 and E21.
+
+| `RAMADR` | Address |
+|---|---|
+| 0 `AC#` | current block, AC |
+| 1 `AC*#` | current block, the 74LS181 output (E79) |
+| 2 `XR#` | previous block if XR PREV, else current block; XR |
+| 4 `VMA` | if AC REF: previous block if VMA PREVIOUS, else current block; VMA 32–35. Else 1000 plus VMA 27–35 (the cache) |
+| 6 `RAM` | VMA 26–35 |
+| 7 `#` | DBM 26–28 and DBM 11–17: the number field bits 08–17 with `DBM/#` |
+
+**DBM** (M8621-0-DPM1 and DPM2 rev B) **[manual]**. Input 5 (VMA) has
+in the left half: 00 VMA USER, 02 FETCH, 03 MEM READ, 04 MEM WR-TEST, 05
+MEM WRITE, 07 CACHE INH, 08 PHYSICAL, 09 PREVIOUS, 10 VMA I/O, 11 WRU,
+12 VECTOR, 13 I/O BYTE, and 14–17 VMA 14–17. Bits 01 and 06 are 0. The
+right half is VMA 18–35. Input 6 is MB.
+
+**PXCT** (M8621-0-DPMA rev B) **[manual]**. `SPEC/PXCT EN` (group 10,
+code 6) loads E71: PXCT ON gets NOT `SPEC/PXCT OFF` (group 20, code 6),
+and B09–B12 get DP 09–12. `SPEC/PXCT OFF` is code 36: both groups. PREVIOUS
+EN is the input of E63 that the `PXCT` field selects: 0 is 0, 1 is B09,
+2 and 3 are B10, 4 and 5 are B11, 6 and 7 are B12. E63 is enabled if
+PXCT ON AND (`PXCT` bit 11 OR B09) (E62). XR PREV loads from PREVIOUS EN
+at `SPEC/LOADXR` (DPEA E311).
+
+**Console** (M8616-0-CSL4 rev C) **[manual]**. The 8080 sets CONTINUE
+(bit 0), EXECUTE (bit 1) and RUN (bit 2) with a write to register 212
+(E171, E149, E135). `SPEC/#` (group 10, code 0) with the number field
+clears them: bit 12 CONTINUE, bit 13 EXECUTE, bit 14 RUN. Bit 15 sets
+HALT LOOP and bit 16 clears it (E161). The skip inputs of group 10 are
+EXECUTE (4), NOT I/O LATCH (5), NOT CONTINUE (6) and NOT 1 MSEC (7),
+through the latch CRA2 E98 (M8622-0-CRA2 rev B).
+
+**NICOND and traps** **[manual]**. TRAP 1, 2 and 3 come from a decoder
+of the trap flags. It is enabled only if CSL4 TRAP EN AND DPEB TRAP EN (M8620-0-DPE9
+rev B, E125). DPEB TRAP EN is DP 22 at `SPEC/APR EN` (M8620-0-DPEB rev B,
+E173). `SPEC/NICOND` loads TRAP CYCLE (CRA2 E159).
+
+**Interrupt request** (M8620-0-DPEB rev B) **[manual]**. `SPEC/LDPI`
+loads the complement of DP: program requests from DP 11–17, levels in
+progress from DP 21–27, PI ON from DP 28, and active levels from DP
+29–35 (E126, E140, E175). A level requests if it has a program request,
+or a bus request and is active (E168, E154, E161). Two priority encoders
+and a comparator give INTERRUPT EN if PI ON and the highest request is
+above the highest level in progress (E147, E134, E148). E167 latches it
+as INTERRUPT REQ at each clock. An APR request (DPMB APR INT REQ) drives
+a bus request at the level of DP 33–35 (E173, E166).
+
+**1 ms timer** (M8621-0-DPMC rev D) **[manual]**. At each 1 ms step of
+the counter, E1 takes CSL4 1 MSEC EN. `SPEC/CLRCLK` clears E1 after the
+clock, through E3 R2. E3 R3 copies E1 at each clock and gives DPMC 1 MSEC.
 
 ## Stage 1
 
-Stage 1 runs the instructions that need no I/O, in the state after
-power-up: PAGE EN, TRAP EN and the APR enables 0, so no paging, no cache
-and no trap. The console inputs are fixed: no 1 ms tick, no interrupt. A test runs one
-instruction from a state and compares the result with `emu/ks10` for the
-same state. The model is `emu/ks10uop/src/alu.rs` and `machine.rs`.
+Stage 1 runs single instructions that need no I/O, in the state after
+power-up: PAGE EN, TRAP EN and the APR enables are 0, so there is no
+paging, no cache and no trap. The model is `emu/ks10uop/src/alu.rs` and
+`machine.rs`.
 
 A function is either modelled or a stop with "unmodelled". The model
 does not guess a value. A shift line that nothing drives is undefined; a
 step that reads one stops.
 
-**State of 2026-11-27.** Modelled:
+**Initial state.** `Machine::new` takes a fill value. The 2901
+registers, the RAM file and main memory get it. The other registers and
+flags without a reset get 0 if the fill is 0, and all ones if not. Each
+test runs with both fills: a correct run does not depend on them. The
+cycle type of DPM5 E33 is the exception; [`unknowns.md`](unknowns.md)
+gives the reason.
+
+**Modelled** (2026-11-27):
 
 - the microsequencer: skip, dispatch, the dispatch ROM, AREAD, the AC
-  dispatch, the stack;
-- the arithmetic unit with the shifts, DIVIDE, MULTI PREC and E603;
-- the DBus (DP, RAM file, DBM) and DBM (DP, DP swapped, number field);
-- the RAM file with `RAMADR` 0, 1 (`ACALU` `B` and `AC+N`), 6 and 7;
+  dispatch, the stack, NICOND;
+- the arithmetic unit with the shifts, DIVIDE, MULTI PREC and E603. If
+  DP depends on the DBus and the DBus selects DP, the model computes DP
+  with D = 0 and with D = all ones. If the two agree, the 2901 function
+  does not depend on D, and the model uses the value;
+- the DBus with FORCE RAMFILE; DBM inputs 3, 4, 5, 6 and 7;
+- the RAM file with `RAMADR` 0, 1 (`ACALU` `B` and `AC+N`), 2, 4, 6 and 7,
+  and RAMFILE WRITE;
+- memory cycles on 512 Ki words of main memory: VMA and the VMA flags,
+  the cycle type, MEMORY CYCLE, AC references, MB;
 - SCAD with `SCADA` SC or `S#`, `SCADB` FE; SC and FE;
-- IR and AC; the program flags with `SPEC/FLAGS` and `SPEC/ASHOV`;
-  `SPEC/LDACBLK`; the VMA load.
+- IR, AC, XR with XR PREV; the program flags with `SPEC/FLAGS` and
+  `SPEC/ASHOV`; `SPEC/LDACBLK`, `SPEC/LDPI`, `SPEC/APR EN`, `SPEC/PREV`,
+  `SPEC/PXCT EN`, `SPEC/PXCT OFF`, `SPEC/MEMCLR`, `SPEC/MEM WAIT`,
+  `SPEC/NICOND`, `SPEC/CLRCLK`, `SPEC/#`;
+- the console inputs RUN, CONTINUE, EXECUTE, TRAP EN and 1 MSEC EN, and
+  HALT LOOP; INTERRUPT REQ from program requests; the 1 ms flag.
 
-These functions keep DP and change nothing else, because stage 1 has no
-interrupts, no APR conditions and no page fail: `SPEC/LDPI`, `SPEC/APR
-EN`, `SPEC/MEMCLR`.
+Timing within a cycle is not modelled: SYNC is 1 at the clock, and the
+skip latch CRA2 E98 has the values of the cycle. The cache directory
+(DPM7) is not modelled; without PAGE EN there is no cache hit.
 
 The rest stops (the `unmodelled` branches of `machine.rs`):
 
-- memory and I/O cycles (`READ CYCLE`, `WRITE TEST`, `WRITE CYCLE`,
-  `AREAD`, `DP FUNC`, `WAIT`, `BWRITE`);
-- DBus input 0 (flags, PI, VMA); DBM inputs 0, 1, 2, 5, 6, and DP with a
-  byte insertion; DP on the DBus while DP depends on the DBus;
-- `RAMADR` 2 and 4, and `ACALU` other than `B` and `AC+N`;
+- paging: PAGE EN with a virtual VMA and a memory cycle;
+- a page fail from INT OR ERR; an APR interrupt request (APR enables
+  24–31 not 0) where INTERRUPT REQ is read;
+- I/O cycles (VMA I/O, WRU, VECTOR), a read-pause-write cycle, and a bus
+  cycle above 512 Ki words;
+- DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
+  on the DBus where DP depends on D;
+- `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
 - `SCADA` 2–7 and `SCADB` 1–3;
-- `SPEC` group 40 codes 2 and 5 (`EXPTST`), group 20 codes other than 5
-  and 7 (so `LOADXR`, `LDINST` and `PXCT OFF`), and all of group 10;
-- the skip inputs INTERRUPT REQ, EXECUTE, −I/O LATCH, −CONTINUE and
-  −1 MSEC;
-- the dispatches DIAG ADR, PAGE FAIL, NICOND and BYTE, and `DISP/MUL`
-  with `J` bit 10 clear;
+- `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2, 3 and 4
+  (`APR FLAGS`, `CLRCSH`, `SWEEP`); group 10 codes 2, 3 and 4 (I/O
+  latch, I/O busy, `LDPAGE`);
+- the skip input NOT I/O LATCH;
+- the dispatches DIAG ADR, PAGE FAIL and BYTE, and `DISP/MUL` with `J`
+  bit 10 clear;
 - `MULTI SHIFT`, and `CALL` with a return in one word;
 - a read of a shift line that nothing drove in the previous cycle.
 
+**NICOND inputs EA1, EF1 and EK1.** The model takes them as inactive.
+The schematics do not trace them ([`unknowns.md`](unknowns.md)). The ITS
+microcode depends on them being inactive: the assembler put other words
+at the NICOND addresses for codes 0, 4 and 6. KS10FPGA has no such
+inputs in its NICOND dispatch **[emulator]** (KS10FPGA 5090e7a1,
+`disp_ni.v`).
+
 **Power-up [measured]** 2026-11-27 (`emu/ks10uop/tests/power_up.rs`, the
 ITS listing 262). The power-up sequence runs from 0 to `PWRON` in 637
-cycles, from two initial states (zero, and a pattern in the registers,
-the RAM file and the flags). The table of the powers of ten in the
+cycles, from both fills. The table of the powers of ten in the
 workspace equals 10^n for n from 0 to 21, as the test computes them, and
 the microcode check of 10^21 passes. MASK, XWD1, ONE, PC, USER and the
-trap flags have the values that the comments of the sequence give.
+trap flags have the values that the comments of the sequence give. In
+642 cycles the machine is in `HALTLP` with HALT LOOP set. Location 0 has
+the halt code 0 (`HALT/POWER`) and location 1 has PC 0.
 
-The run executes only these codes, so the test verifies nothing else:
+### Single instructions
+
+Design decision 2026-11-27: the test puts the ACs into block 0 of the
+RAM file and PC into the 2901 register. The console starts a program
+with EXECUTE of a JRST, which reads the console register with an I/O
+cycle (`cmds.m80`, `STCMD`, `EXINT`; inout, `CONT`); stage 1 has no I/O.
+The test then does what the console command `SI` does: it sets CONTINUE
+without RUN ("I/O WRT 212/1") **[its]** (`cmds.m80`, `SICMD`; `condef.m80`,
+`CPUCTL`). One 1 ms step with 1 MSEC EN 0 clears the 1 ms flag first. The microcode then does one
+instruction, finds RUN 0 at NICOND (code 5), and halts with the halt code
+2 (`HALT/CSL`) in location 0 and PC in location 1 (inout, `HALTLP`,
+`CONT`, `HALTED`, `PWRON`, `STOPC`). It also writes the halt status block
+at 500 (`WRTHSB`, `DUMP`). The test checks PC, ONE, MASK, XWD1 and the
+halt code there.
+
+**Result [measured]** 2026-11-27 (`emu/ks10uop/tests/instructions.rs`,
+the ITS listing 262). The test compares the ACs, PC, the program flags
+and the words at 2000 and 2001 with `emu/ks10`. 28 cases of 34 agree,
+from both fills: moves to and from memory and ACs, ADD and SUB with
+overflow and carries, ADDB, AND, IOR, SETZM, AOS (memory, AC
+destination, AC operand), HRRZ, HLL, CAIE, SKIPL, an indexed and an
+indirect MOVE, IMUL, MUL, IDIV and DIV. The six shift cases (ASH, ASHC,
+LSH, ROT) stop at `SCADB` 2: the SCAD mixers are not read. The test
+checks that they still stop there.
+
+The run executes these codes (both fills, with the halt path):
 
 | Field | Codes (octal) |
 |---|---|
-| `AD` | 1 5 24 33 34 35 37 41 42 44 45 47 65 74 |
-| `DEST` | 0 1 3 5 7 |
-| `SHSTYLE` | NORM, left and right |
-| `SKIP` | 32 56 63 70 |
-| `DISP` | 41 70 |
-| `DBUS`, `DBM` | 1 2 3; 4 7 |
-| `RAMADR` | 1 6 7 |
+| `AD` | 1 5 11 21 22 24 25 32 33 34 35 37 40 41 42 44 45 46 47 51 57 65 70 74 |
+| `DEST` | 0–7 |
+| `SHSTYLE` | NORM left and right, ASHC right, DIV left |
+| `SKIP` | 32 36 42 52 56 62 63 64 66 70 |
+| `DISP` | 1 12 13 34 37 41 62 64 66 70 |
+| `DBUS`, `DBM` | 1 2 3; 4 5 6 7 |
+| `RAMADR` | 0 1 2 4 6 7 |
 | `SCAD`/`SCADA`/`SCADB` | 6/0/0 7/1/0 |
-| `SPEC` | 0 25 27 43 46 47 |
+| `SPEC` | 0 4 6 10 15 21 25 27 36 43 46 47 61 |
 
-A model with the skip on SC after its load fails the test. A model that
-shifts 0 into the sign on a right shift passes it, and so does a model
-with the MUL dispatch on the QR 37 of the same cycle: power-up shifts
-only positive values and does not multiply with `DISP/MUL`.
+Modelled, but no case exercises it: PXCT ON and PREVIOUS EN 1, so XR
+PREV 1 and the previous block of `RAMADR` 4; `SPEC/PREV`, `SPEC/LDPXCT`,
+`SPEC/MEM WAIT` and `SPEC/CLRCLK`; the VMA flags from `DP FUNC`; the USER
+terms in user mode; INTERRUPT REQ 1 and `SKIP/INT`; the NICOND trap
+codes. Some of these rest on readings at overview scale (DPEB E126,
+E140, E175; DPE9 E125; CRA2 E147; DPMC E1). They need a closer reading
+before a case reaches them.
+
+`RAMADR/#` takes the address through DBM. Of the 173 words that use the
+RAM file with `RAMADR/#`, all have `DBM/#` **[measured]** 2026-11-27 (a
+scan of the ITS listing 262).
+
+Mutants of the memory model: a write of MB in place of DP stops each
+case; no FORCE RAMFILE gives four differences. An AC write at the end of
+a read survives: FORCE RAMFILE gives the DBus the same RAM file word,
+so the write does not change it. The MUL dispatch on QR 37 of the same
+cycle now gives differences in IMUL and MUL. The right shift with 0 into
+the sign waits for the shift cases.
 
 ## Field tables
 

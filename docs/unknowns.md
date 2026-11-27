@@ -80,13 +80,24 @@ schematics (MP00540):
 - Backplane inputs of the microsequencer that the CRA sheets do not
   trace: NICOND inputs 0, 4 and 6 (EA1, EF1, EK1), the MUL dispatch input
   FK2, and the page fail dispatch inputs EU1, FE2, FL2, FS2. The ITS
-  microcode does not depend on them **[measured]** 2026-11-27 (the ITS
-  listing 262): the NICOND block (60–77) has its words at 61, 62, 63, 65,
-  67, 71, 72, 73, 75 and 77, and the assembler put other words at 60, 64,
-  66, 70, 74 and 76; every `DISP/MUL` word has `J` bit 10 set; no word
-  uses `DISP/PAGE FAIL`.
+  microcode depends on EA1, EF1 and EK1 being inactive, and does not read
+  the others **[measured]** 2026-11-27 (the ITS listing 262): the NICOND
+  block (60–77) has its words at 61, 62, 63, 65, 67, 71, 72, 73, 75 and
+  77, and the assembler put other words at 60, 64, 66, 70, 74 and 76;
+  every `DISP/MUL` word has `J` bit 10 set; no word uses `DISP/PAGE
+  FAIL`. The model takes EA1, EF1 and EK1 as inactive.
+- The cycle type of DPM5 E33 at power on. No reset clears it, and the
+  power-up sequence depends on it **[measured]** 2026-11-27 (the
+  microcode-level model, `tests/power_up.rs`): the loop for the powers of
+  ten loads VMA with addresses that are not AC references. With E33 all
+  ones, the model stops at `PWRON` with "read-pause-write cycle": RPW
+  CYCLE is 1, so START CYCLE is 0 (M8621-0-DPM5 rev B, E32, E5). What the
+  hardware then does with the write is not read (DPMA E17, DPMC). E33 has
+  no clear input and loads only at MEM EN. The model starts E33 with no
+  cycle; this value has no source. A source would be an 8080 or
+  diagnostic sequence that runs a memory cycle before the microcode
+  starts at 0, or a read of the RPW write path.
 - The byte dispatch inputs BYTE DISP 09–11 (DPE3).
-- XR PREV, which DPMA PREVIOUS EN loads with XR (DPEA E311).
 - The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1), and the SCAD
   mixers (DPM3).
 

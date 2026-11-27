@@ -227,17 +227,24 @@ impl Alu {
         (f, carry_out, carry_02)
     }
 
-    /// The output Y before the registers change. It does not depend on D
-    /// if `DEST/A` selects the A register or if no source uses D; then
-    /// `d` is not used.
+    /// The output Y before the registers change, if it does not depend on
+    /// D: `DEST/A` selects the A register, no source uses D, or the
+    /// function gives the same Y for every D.
     pub fn y_without_d(&self, c: &Controls) -> Option<W40> {
         if c.dest & 7 == 0 {
             return Some(self.reg[usize::from(c.a & 15)]);
         }
+        let zero = self.function(c, W40::ZERO).0;
         if uses_d(c.src_left) || uses_d(c.src_right) {
-            return None;
+            // D is one operand of each function. A function of D and a
+            // fixed operand gives the same result for D = 0 and D = all
+            // ones only if it does not depend on D: OR with all ones, AND
+            // with 0, and NOT R AND S with S = 0. The sums, differences and
+            // exclusive ORs differ for the two values.
+            let ones = self.function(c, W40::ONES).0;
+            return (zero == ones).then_some(W40::wrap(zero));
         }
-        Some(W40::wrap(self.function(c, W40::ZERO).0))
+        Some(W40::wrap(zero))
     }
 
     /// Run one microinstruction: compute F and Y, and clock the registers.
@@ -375,6 +382,20 @@ mod tests {
             clock_right: true,
             ..Controls::default()
         }
+    }
+
+    #[test]
+    fn y_does_not_depend_on_d_if_the_function_is_constant() {
+        let alu = Alu::new(W40::wrap(0o12345));
+        // AND of D with zero (source DZ): Y is 0 for every D.
+        let mut c = ctl(4, 7, 1);
+        assert_eq!(alu.y_without_d(&c), Some(W40::ZERO));
+        // OR of D with zero: Y is D.
+        c.func = 3;
+        assert_eq!(alu.y_without_d(&c), None);
+        // D plus A (source DA).
+        let c = ctl(0, 5, 1);
+        assert_eq!(alu.y_without_d(&c), None);
     }
 
     #[test]

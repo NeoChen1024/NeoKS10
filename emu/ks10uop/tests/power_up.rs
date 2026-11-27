@@ -8,74 +8,22 @@
 //! The test needs the listing of the ITS build: `KS10_MCR_LISTING` (`make
 //! microcode` sets it). Without it the test prints SKIPPED.
 
-use ks10uop::alu::W40;
-use ks10uop::cram::{CRAM_WORDS, Microword};
-use ks10uop::listing::{self, DROM_WORDS};
-use ks10uop::machine::{Machine, PcFlags, Stop};
+mod common;
+
+use common::{FILLS, label, machine, run_until, symbol as work};
 use pdp10::W36;
-
-/// The value of a workspace name in the listing, for example `DECLO=344`
-/// (ks10, "# REDEFINED WHEN USED AS WORSPACE ADDRESS").
-fn work(text: &str, name: &str) -> usize {
-    let key = format!("\t{name}=");
-    let line = text.lines().find(|l| l.contains(&key)).expect(name);
-    let v = line.split(&key).nth(1).unwrap();
-    let digits: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
-    usize::from_str_radix(&digits, 8).unwrap()
-}
-
-fn machine(text: &str, fill: W40) -> Machine {
-    let l = listing::parse(text).expect("listing");
-    let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
-    for (a, w) in &l.cram {
-        cram[usize::from(*a)] = *w;
-    }
-    let mut drom = vec![0; DROM_WORDS];
-    for (a, w) in &l.drom {
-        drom[usize::from(*a)] = *w;
-    }
-    Machine::new(cram, drom, fill)
-}
 
 #[test]
 fn the_power_up_sequence_computes_the_powers_of_ten() {
-    let Ok(path) = std::env::var("KS10_MCR_LISTING") else {
-        println!("SKIPPED: KS10_MCR_LISTING is not set");
+    let Some(text) = common::listing_text("power up") else {
         return;
     };
-    let text = String::from_utf8_lossy(&std::fs::read(path).expect("listing")).into_owned();
-    let pwron = listing::label(&text, "PWRON").expect("PWRON");
+    let pwron = label(&text, "PWRON");
     let (declo, dechi) = (work(&text, "DECLO"), work(&text, "DECHI"));
-    for fill in [W40::ZERO, W40::wrap(0xA5_A5A5_A5A5)] {
+    for fill in FILLS {
         let mut m = machine(&text, fill);
-        if fill != W40::ZERO {
-            m.flags = PcFlags {
-                ov: true,
-                cry0: true,
-                cry1: true,
-                fov: true,
-                fpd: true,
-                user: true,
-                pcu: true,
-                trap2: true,
-                trap1: true,
-                fxu: true,
-                nodiv: true,
-            };
-        }
-        let mut stop = None;
-        while m.upc != pwron && m.cycles < 100_000 {
-            if let Err(e) = m.step() {
-                stop = Some(e);
-                break;
-            }
-        }
-        println!(
-            "fill {:o}: {} cycles, upc {:04o}, {stop:?}",
-            fill.get(),
-            m.cycles,
-            m.upc
-        );
+        let r = run_until(&mut m, 100_000, |m| m.upc == pwron);
+        println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         println!("{}", m.coverage);
         // The table: 10^n as two words, the high word 10^n >> 35 and the
         // low word with bit 0 clear (extend, DBSLOW and ADDCRY: "KEEP LOW
@@ -92,8 +40,7 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
                 fill.get()
             );
         }
-        assert_eq!(stop, None::<Stop>);
-        assert_eq!(m.upc, pwron);
+        assert_eq!(r, Ok(()));
         // The constants (simple, "POWER UP SEQUENCE"): MASK has "A ONE IN
         // 36-BITS AND 0 IN BITS -2,-1,36,37"; XWD1 has "1 IN EACH HALF
         // WORD"; ONE is "THE CONSTANT 1". The register numbers are the
@@ -105,5 +52,28 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
         assert_eq!(ks10uop::alu::word(reg("PC")), W36::ZERO);
         // "ENTER EXEC MODE", "CLEAR TRAP FLAGS".
         assert!(!m.flags.user && !m.flags.trap1 && !m.flags.trap2);
+    }
+}
+
+/// After PWRON the microcode stores the halt code in location 0 and PC in
+/// location 1, sets HALT LOOP and waits for CONTINUE (inout, PWRON, STOPC,
+/// H1, HALTLP). The power-up halt code is 0 (ks10, `HALT/POWER=0`), and
+/// the power-up sequence clears PC.
+#[test]
+fn power_up_ends_in_the_halt_loop() {
+    let Some(text) = common::listing_text("halt loop") else {
+        return;
+    };
+    let haltlp = label(&text, "HALTLP");
+    for fill in FILLS {
+        let mut m = machine(&text, fill);
+        let r = run_until(&mut m, 100_000, |m| m.upc == haltlp && m.console.halt_loop);
+        println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
+        assert_eq!(r, Ok(()));
+        assert_eq!(m.memory[0], W36::ZERO);
+        assert_eq!(m.memory[1], W36::ZERO);
+        // The loop stays in HALTLP while CONTINUE is 0.
+        run_until(&mut m, 20, |_| false).unwrap_err();
+        assert_eq!(m.upc & !1, haltlp & !1, "upc {:04o}", m.upc);
     }
 }
