@@ -294,6 +294,11 @@ that record on `soft` then repeats the run in software.
   the idle passes count at 1 for each `time_per_instruction_ns`. The run
   depends on the host and cannot be repeated, so `normal` refuses
   `--record` and `--replay`.
+- If the host stops (a sleep of the host, a stop of the process), the
+  ticks of the lost time come back. They come one interval of the timer
+  at a time, so that ITS gets each interval interrupt. **[measured]**
+  2026-11-27: after a `SIGSTOP` of 10 s during the boot, the time base
+  was back at the wall clock within 1 s (11028 ms after 11.00 s).
 
 | `--pace` | Wait | Guest clock | Host CPU | Repeatable |
 |---|---|---|---|---|
@@ -771,8 +776,8 @@ Decided on 2026-11-27:
    idle detection as in SIMH). See [Time](#time).
 14. `--pace normal` is the mode for daily use and the default of a run
    with a terminal or a control socket. Its clock comes from the wall
-   clock, as in SIMH, and it does not need to be repeatable. The rule
-   "The emulator is deterministic" of AGENTS.md has this exception.
+   clock, as in SIMH. Only the modes for tests must be repeatable, and
+   the record and replay layer must exist for them (AGENTS.md).
 
 Open:
 
@@ -780,6 +785,15 @@ Open:
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.
+
+## To do
+
+- The timing of the devices in `--pace normal`. The seek and transfer
+  times of the RH11/RP06, the tape motion of the TM03 and the character
+  time of the DZ11 are in instructions. Because the guest works at full
+  speed in `normal`, they are shorter in wall time than on a KS10. A
+  model in wall time can replace them in `normal`; the modes for tests
+  keep the times in instructions.
 
 ## Open items
 

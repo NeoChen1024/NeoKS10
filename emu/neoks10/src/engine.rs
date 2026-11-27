@@ -912,16 +912,19 @@ impl Engine {
         end
     }
 
-    /// `--pace normal`: the ticks of the wall clock since the last call.
-    /// After a stop of the host of more than 1 s, the time is lost, as on
-    /// a stopped KS10.
+    /// `--pace normal`: the ticks of the wall clock since the last call,
+    /// up to the first one at which the interval expires. After a stop of
+    /// the host (a sleep of the host, a long stop of the thread), the
+    /// ticks thus come back one interval at a time, and the guest gets
+    /// each interval interrupt.
     fn wall_ticks(&mut self) {
         let ms = self.base.0.elapsed().as_millis() as u64;
-        let due = ms.saturating_sub(self.ticks);
-        for _ in 0..due.min(1000) {
-            self.m.tick();
+        while self.ticks < ms {
+            self.ticks += 1;
+            if self.m.tick() {
+                break;
+            }
         }
-        self.ticks = if due > 1000 { ms } else { self.ticks + due };
     }
 
     fn next_tick(&self) -> Instant {
@@ -1005,8 +1008,13 @@ impl Engine {
                 // The batch ends at the next tick, so that a tick comes
                 // within one batch, and the idle passes count at the
                 // rate of time_per_instruction_ns.
+                // If the ticks are behind the wall clock, a batch is 1 ms
+                // of instructions.
                 self.wall_ticks();
-                let left = self.next_tick().saturating_duration_since(Instant::now());
+                let mut left = self.next_tick().saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    left = Duration::from_millis(1);
+                }
                 let n = left.as_nanos() as u64 / self.opts.ns_per_instruction.max(1);
                 end = end.min(self.m.count + n.max(1));
             }
@@ -1297,5 +1305,28 @@ mod tests {
         let mut o = options(None, None);
         o.pace = Pace::Normal;
         assert!(Engine::new(o).unwrap().m.wall_clock);
+    }
+
+    // After 5 s without ticks (a sleep of the host), the ticks come back
+    // one interval at a time: with an interval of 10 ms, 10 ticks for
+    // each call, and all 5000 ticks in the end.
+    #[test]
+    fn normal_catches_up() {
+        let mut o = options(None, None);
+        o.pace = Pace::Normal;
+        let mut e = Engine::new(o).unwrap();
+        e.m.timer.period = W36::wrap(10 << 12);
+        e.m.timer.ttg = e.m.timer.period;
+        e.base.0 = Instant::now() - Duration::from_secs(5);
+        e.wall_ticks();
+        assert_eq!(e.ticks, 10);
+        let mut calls = 1;
+        while e.ticks < 5000 {
+            e.m.apr.flags = 0;
+            e.wall_ticks();
+            calls += 1;
+        }
+        assert_eq!(calls, 500);
+        assert_eq!(e.m.timer.time1.get(), 5000 << 12);
     }
 }

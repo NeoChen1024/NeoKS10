@@ -786,10 +786,11 @@ impl Machine {
         self.idle_loop().is_some()
     }
 
-    /// One tick of the 1 ms clock, if [`Machine::wall_clock`] is set.
-    pub fn tick(&mut self) {
+    /// One tick of the 1 ms clock, if [`Machine::wall_clock`] is set. True
+    /// if the interval expired at it (the APR flag "interval done").
+    pub fn tick(&mut self) -> bool {
         self.timer.last_tick = self.count;
-        timer::tock(self);
+        timer::tock(self)
     }
 
     /// One [`Machine::step`]. If the step was a pass of the idle loop

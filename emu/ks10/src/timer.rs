@@ -76,7 +76,8 @@ pub fn run(m: &mut Machine) {
     }
 }
 
-pub(crate) fn tock(m: &mut Machine) {
+/// One tick. True if the interval expired at it.
+pub(crate) fn tock(m: &mut Machine) -> bool {
     let t = &mut m.timer;
     let low = t.time1.get() + UNITS_PER_MS;
     if low & (1 << 35) != 0 {
@@ -90,13 +91,15 @@ pub(crate) fn tock(m: &mut Machine) {
         t.quan = W36::wrap((t.quan.get() + UNITS_PER_MS) & MASK36);
     }
     let ttg = t.ttg.signed() - UNITS_PER_MS as i64;
-    if ttg <= 0 {
+    let expired = ttg <= 0;
+    if expired {
         t.ttg = W36::wrap((ttg + t.period.signed()) as u64 & MASK36);
         m.apr.flags |= flag::INTERVAL;
     } else {
         t.ttg = W36::wrap(ttg as u64);
     }
     sample(m);
+    expired
 }
 
 /// The PC sample table (PF-INT, .IF/PCST): if the AOBJN pointer in PCST is

@@ -135,11 +135,12 @@ fails.
 
 - A guest program can never cause a panic or a crash of the emulator. A
   guest error is a guest trap or a console message.
-- The emulator is deterministic. All input that changes with time (clock,
-  terminal, network) goes through one layer that can record and replay it.
-  One exception: in `neoks10 run --pace normal`, the timer ticks come from
-  the wall clock, for daily use. That mode has no record and no replay.
-  Tests do not use it.
+- The modes for tests are deterministic: the `ks10` library, and
+  `neoks10 run --pace fast`, `idle` or `realtime`. In them, all input that
+  changes with time (clock, terminal, network) goes through one layer that
+  can record and replay it. This layer must exist and work.
+- The mode for daily use (`--pace normal`) does not need to be
+  repeatable. Tests do not use it.
 - One `Machine` structure owns all state. Do not use `Rc<RefCell<_>>`.
 - A 36-bit word is its own type. Do not pass guest words as a bare `u64`.
 - `unsafe` is permitted in one module only: the module for `mmap` and for
