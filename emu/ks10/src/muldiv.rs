@@ -60,14 +60,16 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
     let a = m.ac[i.ac];
     match i.op & 0o14 {
         0o00 => {
-            // IMUL: the sign of the true product and its low 35 bits;
-            // Overflow if the product does not fit (IMUL2, IMUL3).
+            // IMUL: the sign of the product and its low 35 bits; Overflow
+            // if the product does not fit (IMUL2, IMUL3). The product of
+            // MULSUB is the true product, except for -2^35 squared: then
+            // it is -2^70, as for MUL ("TRIED TO SQUARE 1B0?").
             let p = i128::from(a.signed()) * i128::from(b.signed());
             let fits = (-(1 << 35)..1 << 35).contains(&p);
             if !fits {
                 m.flags.set(Flags::AROV | Flags::TRAP1);
             }
-            let sign = i128::from(p < 0);
+            let sign = i128::from(p < 0 || p == 1 << 70);
             let w = W36::wrap(((sign << 35) | (p & MAG)) as u64);
             store(m, i, e, w, None)
         }
@@ -145,6 +147,12 @@ mod tests {
         // -2^35 * 1 fits.
         let (w, _, f) = run(0o220, 1 << 35, 0, 1);
         assert_eq!((w, f.has(Flags::AROV)), (1 << 35, false));
+        // IMUL -2^35 squared: the product of MULSUB is negative, as for
+        // MUL (MUL, "TRIED TO SQUARE 1B0?"), so IMUL2 and IMUL3 give
+        // [MAG].EQV.Q = 400000,,0 and Overflow. SIMH gives the same
+        // (docs/emulator.md, "Differential runs").
+        let (w, _, f) = run(0o220, 1 << 35, 0, 1 << 35);
+        assert_eq!((w, f.has(Flags::AROV)), (1 << 35, true));
         // MUL 2^35-1 squared = 2^70 - 2^36 + 1.
         let (h, l, _) = run(0o224, MAG as u64, 0, MAG as u64);
         assert_eq!((h, l), (0o377777_777776, 1));
