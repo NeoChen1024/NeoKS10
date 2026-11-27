@@ -706,22 +706,32 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
 - `SMCPU.CMD` lists the processor diagnostics in the order in which the
   monitor runs them.
 
-**The plan for `make diag`:**
+**`make diag`.** It needs the tape from `make references` and the
+submodule `tools/tapeutils` of `3rdparty/its` (`git -C 3rdparty/its
+submodule update --init tools/tapeutils`). The files stay in
+`build/diag/`.
 
-1. Extract the `.SAV` files from the tape into `build/`. A `.SAV` file is a
-   list of blocks (`-count,,address-1`, then the words) and ends with
-   `JRST start`.
-2. For each program of `SMCPU.CMD`: load `SUBSM.SAV` (if the program needs
-   it), then the program, with `neoks10` and a console script.
-3. Start at 30000. Answer the switch questions with `Y`, `000100` and
-   `0` (`INHPAG`). Type each answer 100 ms of virtual time after its
-   prompt: a character that comes while `SUBSM` prints is read as a
-   control character and lost **[measured]** (2026-11-27, trace of the
-   CTY output loop of `SUBSM`).
-4. Stop after a fixed number of instructions. The result is a pass if the
-   processor did not halt, `PASCNT` did not decrease, and the console
-   output has no error report. A halt gives the PC, which the listing
-   (`.SEQ` file) explains.
+1. The target builds `t10backup` of tapeutils and extracts the files of
+   the tape. A `.SAV` file is a list of blocks (`-count,,address-1`, then
+   the words) and ends with `JRST start`.
+2. `emu/ks10/tests/diag.rs` reads the run file `SMCPU.CMD`. Each line has
+   the name, the passes, the right half of the switches and the
+   iterations in octal **[manual]** (`SMMON.TXT`, section 5.0). Each
+   program runs for the iterations of its line, in its own thread.
+3. `DSKAA` to `DSKAH` run alone from 30000. Such a program passes if it
+   does not halt and `PASCNT` reaches the iterations.
+4. The other programs run under `SUBSM`, from 30000. The answers to the
+   switch questions are `Y`, the left half (`000100`, `INHPAG`; `000110`
+   for `DSKBA`) and the right half of the run file. `DSKBA` needs
+   `OPRSEL` (000010) too: without it, the program limits memory to 32K,
+   and with `INHPAG` it gets too little memory. Each answer comes 100
+   ms of virtual time after its prompt: a character that comes while
+   `SUBSM` prints is read as a control character and lost **[measured]**
+   (2026-11-27, trace of the CTY output loop of `SUBSM`). Such a program
+   passes if it does not halt, prints `END PASS n.` for n = the
+   iterations, and prints no `ERROR`.
+5. A program of the run file without a decision in `diag.rs` fails the
+   test. The programs that do not apply are listed below.
 
 **Reference runs [emulator]** (sims `pdp10-ks` 9556eca0, `set cpu its`,
 `load -c` of the extracted files, 2026-11-26):
@@ -734,19 +744,17 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
 - The title of `DSKCA` gave `CPU#=4097`, `MCV=416` and `MCO=570`. These
   values of `APRID` differ from the ITS microcode (`docs/discrepancies.md`).
 
-**Runs in `emu/ks10` [measured]** (2026-11-27, `cargo test --release -p
-ks10 --test diag` with `KS10_DIAG_DIR`):
+**`make diag` [measured]** (2026-11-27, x86-64 host, 3.7 s for all):
 
-- `DSKAA` to `DSKAH` run 5 million instructions without a halt.
-- `DSKAI` to `DSKAM` and `DSKCA` to `DSKCE` run 3 million instructions
-  under `SUBSM`, `DSKCF` 6 million. Each prints `END PASS 10.` and no
-  error message.
-- `DSKCG` runs tests 1 to 8 (MUUO traps, CMPS, MOVS, CVTDB, CVTBD, EDIT)
-  with no error message, and stops at test 9 (see below).
-- `DSKBA` needs the switch `OPRSEL` (left half 000010) too. Without it, the
-  program limits memory to 32K. With `INHPAG`, `SUBSM` reports 112K
-  (0 to 337777), and the AND with 77777 gives too little memory. A run of
-  300 million instructions gave 3 passes with no error.
+- `DSKAA` to `DSKAG` reached 64 passes (`SMCPU.CMD`: iterations 100
+  octal) in 40000 to 130000 instructions, `DSKAH` 8 passes in 230000.
+- `DSKAI` to `DSKAM` and `DSKCA` to `DSKCE` printed `END PASS 64.` after
+  2.5 to 2.7 million instructions, `DSKCF` after 5.8 million.
+- `DSKCG` ran tests 1 to 8 (MUUO traps, CMPS, MOVS, CVTDB, CVTBD, EDIT)
+  with no error message, and stopped at test 9 (see below).
+- `DSKBA` printed `END PASS 1.` after 85 million instructions.
+- A test of the test: without the flag `AROV` of an overflow, `DSKAD`
+  halted at 032756 and `DSKCF` printed an error message.
 
 **Which programs apply.** The programs are for the DEC microcode:
 

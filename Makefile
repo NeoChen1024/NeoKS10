@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references its-boot
+.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references its-boot diag
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -149,6 +149,24 @@ its-boot:
 	cmp $(ITS_BOOT_DIR)/boot.out $(ITS_BOOT_DIR)/replay.out
 	rm -f $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
 	@echo "its-boot: ITS booted, listed SYS;, and the replay gave the same output"
+
+# The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
+# The tape comes from `make references`. t10backup of tapeutils (the
+# submodule tools/tapeutils of 3rdparty/its, pinned there) extracts the
+# files into the build output. The test emu/ks10/tests/diag.rs runs the
+# programs of the run file SMCPU.CMD.
+DIAG_DIR = $(abspath $(BUILD_DIR))/diag
+DIAG_TAPE = references/trailing-edge/tapes/ks_diag_gs.tap.bz2
+TAPEUTILS = $(ITS_TREE)/tools/tapeutils
+diag:
+	@test -f $(DIAG_TAPE) || { echo "diag: $(DIAG_TAPE) is missing; run make references" >&2; exit 2; }
+	@test -f $(TAPEUTILS)/t10backup.c || { echo "diag: run git -C $(ITS_TREE) submodule update --init tools/tapeutils" >&2; exit 2; }
+	rm -rf $(DIAG_DIR) && mkdir -p $(DIAG_DIR)/files
+	$(CC) -O2 -o $(DIAG_DIR)/t10backup $(TAPEUTILS)/t10backup.c $(TAPEUTILS)/tapeio.c
+	bunzip2 -c $(DIAG_TAPE) > $(DIAG_DIR)/ks_diag_gs.tap
+	cd $(DIAG_DIR)/files && ../t10backup -x -f ../ks_diag_gs.tap '*' > ../t10backup.log
+	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10 \
+	    --test diag -- --nocapture
 
 # Third-party files (third-party.lock) into references/, which git ignores.
 # bitsavers.org has an rsync server; pdp-10.trailing-edge.com is read with
