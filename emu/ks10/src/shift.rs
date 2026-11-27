@@ -135,7 +135,8 @@ fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
     let mag = x & mag_mask;
     let k = n.unsigned_abs();
     if n >= 0 {
-        // The bits shifted out of the magnitude must all equal the sign.
+        // The bits shifted out of the magnitude must all equal the sign
+        // (simple.42, ASHL: one place for each step of SC, ASH AROV).
         let lost_bits = k.min(mag_bits);
         let lost = if lost_bits == 0 {
             0
@@ -152,7 +153,10 @@ fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
         } else {
             (mag << k) & mag_mask
         };
-        ((sign << mag_bits) | shifted, lost != all)
+        // After mag_bits places, the zeros that came in at the right leave
+        // bit 1 too: they differ from the sign of a negative number.
+        let zeros_lost = sign == 1 && k > mag_bits;
+        ((sign << mag_bits) | shifted, lost != all || zeros_lost)
     } else {
         // Right: the sign comes in at bit 1.
         let fill = if sign == 1 { mag_mask } else { 0 };
@@ -245,6 +249,14 @@ mod tests {
         assert_eq!(ash(0o777777777777, 36, 1), (0o777777777776, false));
         // 400000000000 shifted left 1: a 0 is lost from a negative number.
         assert_eq!(ash(0o400000000000, 36, 1), (0o400000000000, true));
+        // -1 shifted left 35 places is -2^35 and fits. Left 36 places: the
+        // zeros that came in at bit 35 reach bit 1 and leave it, so a 0 is
+        // lost from a negative number (simple.42, ASHL: one place for each
+        // step, ASH AROV). KLH10 sets Overflow too.
+        assert_eq!(ash(0o777777777777, 36, 35), (0o400000000000, false));
+        assert_eq!(ash(0o777777777777, 36, 53), (0o400000000000, true));
+        // ASHC: -1 (both words) left 71 places.
+        assert_eq!(ash((1 << 71) - 1, 71, 71), (1 << 70, true));
         // Right shifts bring in the sign: -2 >> 1 = -1; -1 >> 100 = -1.
         assert_eq!(ash(0o777777777776, 36, -1), (0o777777777777, false));
         assert_eq!(ash(0o777777777777, 36, -100), (0o777777777777, false));
