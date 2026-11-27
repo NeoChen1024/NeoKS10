@@ -788,6 +788,8 @@ impl Machine {
     }
 
     /// Load VMA and the VMA flags (DPM4 E55, E54, E74, E82, E90, E189).
+    /// With `DP FUNC`, E82 takes WRU from DP 11 and E90 takes VECTOR, I/O
+    /// BYTE and VMA I/O from DP 12, 13 and 10 (M8621-0-DPM4, E115, E72).
     fn load_vma(
         &mut self,
         dp: W36,
@@ -805,9 +807,9 @@ impl Machine {
                 fetch: dp.bit(2),
                 physical: dp.bit(8),
                 previous: dp.bit(9),
-                io: dp.bit(12),
+                io: dp.bit(10),
                 wru: dp.bit(11),
-                vector: dp.bit(10),
+                vector: dp.bit(12),
                 io_byte: dp.bit(13),
                 extended: nb(15),
             }
@@ -1300,5 +1302,30 @@ mod tests {
         m.step().unwrap();
         assert!(!m.memory_cycle);
         assert!(m.cycle.write && !m.cycle.read);
+    }
+
+    #[test]
+    fn dp_func_loads_the_io_flags_from_their_dp_bits() {
+        // `VMA_[] WITH FLAGS` (ks10): number field bit 13 DP FUNC, 14
+        // LDVMA. The microcode puts IO CYCLE, WRU CYCLE and VECTOR CYCLE
+        // in DP 10, 11 and 12 (ks10, number field bits 10 to 12).
+        for (bit, want) in [
+            (10, [true, false, false]),
+            (11, [false, true, false]),
+            (12, [false, false, true]),
+        ] {
+            let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
+            cram[0] = Microword::from_bits(0)
+                .with(u::MEM, 1)
+                .with(u::NUM, num(&[13, 14]))
+                .with(u::A, 1)
+                .with(u::DISP, 0o70)
+                .with(u::J, 1);
+            let mut m = Machine::new(cram, vec![0; DROM_WORDS], W40::ZERO);
+            m.alu.reg[1] = alu::d_input(W36::wrap(1 << (35 - bit) | 0o100));
+            m.step().unwrap();
+            let f = m.vma_flags;
+            assert_eq!([f.io, f.wru, f.vector], want, "DP bit {bit}");
+        }
     }
 }

@@ -460,7 +460,8 @@ and 145) **[manual]**:
   (DPE5 E205, E601).
 - **VMA flags** (DPM4 E55, E54, E74, E82, E90). If `DP FUNC` is 1, USER,
   PREVIOUS, PHYSICAL and FETCH load from DP 00, 09, 08 and 02, and the
-  I/O flags (WRU, VECTOR, I/O BYTE, VMA I/O) from DP 11, 10, 13 and 12.
+  I/O flags (VMA I/O, WRU, VECTOR, I/O BYTE) from DP 10, 11, 12 and 13
+  (E72, E115).
   Otherwise PHYSICAL and FETCH come from the number field, the I/O flags
   are 0, PREVIOUS is DPMA PREVIOUS EN OR `SPEC/PREV`, and USER is
   (NOT `FORCE EXEC` AND NOT console EXECUTE AND USER) OR (`FETCH` AND
