@@ -706,9 +706,17 @@ indirect MOVE, IMUL, MUL, IDIV, DIV, and the shifts: ASH left and right,
 by 0 and with overflow in the first or the last step; ASHC both ways; LSH
 both ways and by 40 places; ROT both ways. 48 random left shifts with ASH
 and ASHC from a fixed seed also agree. TRAP 1 after ASH is the overflow
-of the last step ([`discrepancies.md`](discrepancies.md), "ASH: TRAP 1
-when an early step loses significance"). Without that rule in
+of the last step ([`discrepancies.md`](discrepancies.md), "Trap 1 and
+Trap 2: each flag word loads them"). Without that rule in
 `emu/ks10-core-soft`, 15 of the 90 cases differ, from both fills.
+
+36 more cases run twice with flags set: once with the two trap flags,
+once with all flags of executive mode except FPD. They test the words with
+`SPEC/FLAGS`, which load both trap flags (`AD FLAGS`, `JFCL FLAGS`, `SET
+AROV`, `SET PDL OV`, `NO DIVIDE`), and the carry flags of DMOVN
+([`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag
+word loads them" and "DMOVN: the carry flags of the complement"). All
+324 runs agree.
 
 The run executes these codes (both fills, with the halt path):
 
@@ -717,12 +725,12 @@ The run executes these codes (both fills, with the halt path):
 | `AD` | 1 5 11 21 22 24 25 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 74 |
 | `DEST` | 0–7 |
 | `SHSTYLE` | NORM, ROT and ASHC left and right; DIV left |
-| `SKIP` | 32 33 36 42 52 53 56 62 63 64 66 70 |
+| `SKIP` | 31 32 33 36 42 52 53 55 56 62 63 64 66 70 |
 | `DISP` | 1 12 13 34 37 41 62 64 66 70 |
 | `DBUS`, `DBM` | 1 2 3; 4 5 6 7 |
 | `RAMADR` | 0 1 2 4 6 7 |
 | `SCAD`/`SCADA`/`SCADB` | 3/1/0 4/1/0 4/1/2 6/0/0 7/1/0 |
-| `SPEC` | 0 3 4 6 10 15 21 25 27 36 43 44 46 47 61 |
+| `SPEC` | 0 3 4 6 10 15 21 25 27 36 40 43 44 46 47 61 |
 
 Modelled, but no case exercises it: PXCT ON and PREVIOUS EN 1, so XR
 PREV 1 and the previous block of `RAMADR` 4; `SPEC/PREV`, `SPEC/LDPXCT`,

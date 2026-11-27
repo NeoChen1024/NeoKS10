@@ -989,6 +989,40 @@ mod tests {
         assert_eq!(m.pc.get(), 0o1002);
     }
 
+    // Each microcode word with SPEC/FLAGS loads Trap 1 and Trap 2 (DPE9
+    // E60, E78; `Flags::change`). The values come from the
+    // microcode-level model (emu/ks10-core-uop/tests/instructions.rs,
+    // `flag_cases`).
+    #[test]
+    fn flag_words_load_the_trap_flags() {
+        let traps = Flags::TRAP1 | Flags::TRAP2;
+        let run = |inst: u64, ac1: u64, mem: [u64; 2]| {
+            let mut m = Machine::new();
+            m.pc = Half::wrap(0o1000);
+            put(&mut m, 0o1000, inst);
+            put(&mut m, 0o2000, mem[0]);
+            put(&mut m, 0o2001, mem[1]);
+            m.ac[1] = W36::wrap(ac1);
+            m.flags = Flags(traps);
+            m.step().unwrap();
+            m.flags.0
+        };
+        // JFCL 0,: JFCL FLAGS.
+        assert_eq!(run(0o255000_002000, 0, [0, 0]), 0);
+        // POP with overflow: SET PDL OV sets Trap 2 and clears Trap 1.
+        assert_eq!(run(0o262040_002001, 0o2000, [3, 0]), Flags::TRAP2);
+        // IDIV by 0: NO DIVIDE clears Trap 2.
+        let nodiv = Flags::AROV | Flags::TRAP1 | Flags::NODIV;
+        assert_eq!(run(0o230040_002000, 7, [0, 0]), nodiv);
+        // DMOVN with a low word not 0: AD FLAGS of the complement.
+        assert_eq!(
+            run(0o121040_002000, 0, [0o777777_777777, 5]),
+            Flags::CRY0 | Flags::CRY1
+        );
+        // MOVE has no flag word: the trap flags stay.
+        assert_eq!(run(0o200040_002000, 0, [5, 0]), traps);
+    }
+
     // inout.50, TRP1: an opcode below 100 in the trap location is a
     // monitor UUO with the trap flags set: new PC from UPT+431.
     #[test]
@@ -1291,8 +1325,10 @@ mod tests {
                 limit += 1777;
             }
         }
-        // The pass that overflows AC 0 is a step: it sets the flags. After
-        // it, TRAP1 stays set (paging is off) and no pass is skipped.
+        // The pass that overflows AC 0 is a step: it sets the flags and
+        // Trap 1. With paging off there is no trap; the next pass is a
+        // step that clears Trap 1 (AD FLAGS, `Flags::change`), and the
+        // passes after it are skipped again.
         assert!(b.flags.has(Flags::AROV));
         assert!(skipped > 39_000, "{skipped} passes skipped");
         assert!(b.io.dz.lines[4].input.is_empty());

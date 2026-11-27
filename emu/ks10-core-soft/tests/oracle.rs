@@ -176,7 +176,7 @@ fn skip(c: &Case, r: Ref) -> Option<&'static str> {
     }
 }
 
-/// "ASH: TRAP 1 when an early step loses significance"
+/// "Trap 1 and Trap 2: each flag word loads them"
 /// (docs/discrepancies.md): both emulators set Trap 1 for any overflow of
 /// ASH and ASHC, and the microcode sets it only for an overflow of the
 /// last step. For such a case the comparison takes Trap 1 (PC word bit 10)
@@ -185,6 +185,35 @@ fn microcode_trap_1(c: &Case, mut b: Run) -> Run {
     if early_overflow_only(c) {
         for r in b.records.iter_mut().skip(1) {
             r[0] &= !(1 << (35 - 10));
+        }
+    }
+    b
+}
+
+/// "DMOVN: the carry flags of the complement" (docs/discrepancies.md):
+/// if the magnitude of the low word is not 0, the microcode complements
+/// the high word with `AD FLAGS`, and the 2901 sets Carry 0 and Carry 1.
+/// Both emulators leave the flags. For such a case the comparison takes
+/// Carry 0 and Carry 1 (PC word bits 1 and 2) of the emulator as 1.
+fn microcode_dmovn_carry(c: &Case, mut b: Run) -> Run {
+    let op = (c.inst >> 27) as u32;
+    let a = ((c.inst >> 23) & 0o17) as usize;
+    let y = (c.inst & 0o777777) as u32;
+    let word = |e: u32| {
+        if e < 0o20 {
+            c.ac[e as usize]
+        } else {
+            c.mem.get(&e).copied().unwrap_or(0)
+        }
+    };
+    let low = match op {
+        0o121 => word((y + 1) & 0o777777),
+        0o125 => c.ac[(a + 1) & 0o17],
+        _ => return b,
+    };
+    if low & 0o377777_777777 != 0 {
+        for r in b.records.iter_mut().skip(1) {
+            r[0] |= 3 << (35 - 2);
         }
     }
     b
@@ -812,7 +841,7 @@ fn random_instructions() {
             let theirs =
                 reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
             for (c, b) in chunk.iter().zip(theirs) {
-                let b = &microcode_trap_1(c, b);
+                let b = &microcode_dmovn_carry(c, microcode_trap_1(c, b));
                 match ours(c) {
                     Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
                     Ok(a) => {

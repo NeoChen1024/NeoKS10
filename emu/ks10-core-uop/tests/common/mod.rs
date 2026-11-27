@@ -84,3 +84,23 @@ pub fn ks10_flags(f: PcFlags) -> u32 {
     .filter(|(v, _)| *v)
     .fold(0, |a, (_, b)| a | b)
 }
+
+/// The program flags of `ks10-core-soft` in the form of the model: the
+/// inverse of [`ks10_flags`].
+pub fn pc_flags(v: u32) -> PcFlags {
+    use ks10_core_soft::flags::Flags as F;
+    let has = |f: u32| v & f != 0;
+    PcFlags {
+        ov: has(F::AROV),
+        cry0: has(F::CRY0),
+        cry1: has(F::CRY1),
+        fov: has(F::FOV),
+        fpd: has(F::FPD),
+        user: has(F::USER),
+        pcu: has(F::USERIO),
+        trap2: has(F::TRAP2),
+        trap1: has(F::TRAP1),
+        fxu: has(F::FXU),
+        nodiv: has(F::NODIV),
+    }
+}

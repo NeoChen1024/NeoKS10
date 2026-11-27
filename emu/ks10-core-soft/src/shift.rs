@@ -137,8 +137,8 @@ impl Ash {
     /// step with `ASH AROV` **[microcode]** (simple, `ASH36 LEFT`, `ASHCL`).
     /// At each test, OV keeps its value or is set, but TRAP 1 takes the
     /// result of the step (M8620-0-DPE9 rev B, E78, E85, E92; see
-    /// docs/discrepancies.md, "ASH: TRAP 1 when an early step loses
-    /// significance"). Thus TRAP 1 is the overflow of the last step.
+    /// docs/discrepancies.md, "Trap 1 and Trap 2: each flag word loads
+    /// them"). Thus TRAP 1 is the overflow of the last step.
     fn set_flags(&self, f: &mut Flags) {
         if self.overflow {
             f.set(Flags::AROV);

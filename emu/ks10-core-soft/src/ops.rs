@@ -340,7 +340,8 @@ fn aobj(m: &mut Machine, i: Inst, e: Half) -> R {
     })
 }
 
-/// The flags that a subroutine jump clears (PRM 2.9, JSP).
+/// The flags that a subroutine jump clears (PRM 2.9, JSP; CLR FPD is a
+/// word with SPEC/FLAGS, [`Flags::change`]).
 const CALL_CLEARS: u32 = Flags::FPD | Flags::TRAP1 | Flags::TRAP2;
 
 /// PUSHJ, PUSH, POP, POPJ, JSR, JSP, JSA, JRA (PRM 2.9, 2.10).
@@ -362,7 +363,7 @@ fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
                 m.flags.clear(CALL_CLEARS);
             }
             if p.lh() == Half::ZERO {
-                m.flags.set(Flags::TRAP2);
+                m.flags.change(Flags::TRAP2);
             }
             if i.op == 0o260 {
                 return Ok(Next::Jump(e));
@@ -379,7 +380,7 @@ fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
             }
             m.ac[i.ac] = p;
             if p.lh() == Half::ONES {
-                m.flags.set(Flags::TRAP2);
+                m.flags.change(Flags::TRAP2);
             }
             Ok(if i.op == 0o263 {
                 Next::Jump(value.rh())
@@ -545,12 +546,12 @@ fn jfcl(m: &mut Machine, i: Inst, e: Half) -> R {
             sel |= f;
         }
     }
-    if m.flags.0 & sel != 0 {
-        m.flags.clear(sel);
-        Ok(Next::Jump(e))
-    } else {
-        Ok(Next::Step)
-    }
+    let jump = m.flags.0 & sel != 0;
+    // JFCL FLAGS is a word with SPEC/FLAGS: it also clears the trap flags
+    // (simple.42, JFCL; [`Flags::change`]).
+    m.flags.clear(sel);
+    m.flags.change(0);
+    Ok(if jump { Next::Jump(e) } else { Next::Step })
 }
 
 /// A local UUO (opcodes 001 to 037; PRM 2.16): opcode, A and E to location

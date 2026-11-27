@@ -257,34 +257,61 @@ The project uses the schematic: group 20 drives bits 00–07. The
 microcode text counts 7 bits because bit 00 is outside the 4000 words of
 the control RAM.
 
-## ASH: TRAP 1 when an early step loses significance
+## Trap 1 and Trap 2: each flag word loads them
 
-- **[microcode]** **[manual]** The ITS microcode shifts ASH and ASHC left
-  one place per step and tests each step with `ASH AROV` (`SPEC/ASHOV`)
-  (simple, `ASHL` with the macro `ASH36 LEFT`, and `ASHCL`). At each
-  `SPEC/ASHOV`, DPE9 E78 loads OV and TRAP 1. OV has a hold term: OV AND
-  NOT JFCL 09 (E68). TRAP 1 has none: P OR X OR (LOAD AND DP 10) OR (DBM
-  08 AND `SPEC/FLAGS`) (M8620-0-DPE9 rev B, E85, E92, E78). Rev A1 gives
-  the same terms with other chip numbers (E209; the table "Program flags"
-  in [`microcode-model.md`](microcode-model.md)). A step without overflow
-  thus clears TRAP 1, and TRAP 1 is the overflow of the last step.
-- **[microcode]** The DEC microcode has the same loops (KS10FPGA
-  5090e7a1, `microcode/V130R1/simple.mic`, `ASH36 LEFT`, `ASHL`). The DEC
-  KS10 thus behaves in the same way.
+- **[microcode]** Trap 1 and Trap 2 have no hold term (M8620-0-DPE9 rev
+  B). E60 loads Trap 2 from DBM 07 OR (DBM 15 AND DP 09), at each word
+  with `SPEC/FLAGS`. E85 and E78 load Trap 1 from the ASH overflow, the
+  overflow of `AD FLAGS`, SCAD 01 at `SPEC/EXPTST`, DP 10 at `LOAD FLAGS`
+  and DBM 08. E78 loads at each word with `SPEC/FLAGS`, `SPEC/ASHOV` or
+  `SPEC/EXPTST` (E47). Rev A1 gives the same terms with other chip
+  numbers (E209; the table "Program flags" in
+  [`microcode-model.md`](microcode-model.md)).
+- **[microcode]** The words with `SPEC/FLAGS` come from the macros of
+  ks10, "MACROS -- PC FLAGS". The listing of the ITS build has 50 of them
+  and 6 words with `SPEC/ASHOV` or `SPEC/EXPTST`. They are in these
+  instructions (simple, flt, extend):
+  - `AD FLAGS`: MOVN, MOVM of a negative number, ADD, SUB, AOJ, AOS, SOJ,
+    SOS, DADD, DSUB, DMOVN, DMOVNM, DMUL.
+  - `JFCL FLAGS`: each JFCL.
+  - `CLR FPD` and `SET FPD`: PUSHJ, JSR, JSP, the byte instructions,
+    DMUL.
+  - `SET AROV`, `SET PDL OV` and `NO DIVIDE`: only on the path of an
+    overflow.
+  - `LOAD FLAGS`: JRSTF, XJRSTF, the interrupt and the trap.
+  - `ASH AROV` and `EXP TEST` load Trap 1 only: ASH, ASHC and the
+    floating point instructions.
+- Thus such a word clears each trap flag that it does not set. ADD without
+  overflow clears Trap 1 and Trap 2. `SET PDL OV` sets Trap 2 and clears
+  Trap 1. A step of ASH without overflow clears Trap 1, so Trap 1 is the
+  overflow of the last step of the shift (simple, `ASH36 LEFT`, `ASHL`,
+  `ASHCL`). DMUL ends with `CLR FPD`, then sets Trap 1 if Overflow is set,
+  also from an earlier instruction (simple, `DMTRAP`).
+- With traps on, the microcode takes the trap at the next instruction, so
+  the rule shows only with traps off. The boot loader of ITS runs with
+  traps off. An ADD of the loader clears a Trap 1 of an earlier
+  instruction (the lockstep run, `emu/ks10-core-uop/tests/its_boot.rs`,
+  2026-11-27).
 - **[measured]** 2026-11-27, the microcode-level model
-  (`emu/ks10-core-uop/tests/instructions.rs`). ASH 1,2 with AC 1 =
-  200000,,000001 gives AC 1 = 4, OV 1 and TRAP 1 0: the first step
-  overflows, the second does not. Random left shifts with ASH and ASHC
-  agree with the rule "TRAP 1 is the overflow of the last step".
+  (`emu/ks10-core-uop/tests/instructions.rs`, `flag_cases`). 36 cases
+  start with the two trap flags set, and again with all flags of
+  executive mode except FPD. The model and `emu/ks10-core-soft` agree
+  with the rule above, from both fills. Without the rule and the carry
+  of the next section in `emu/ks10-core-soft`, 96 of the 144 runs
+  differ. ASH 1,2 with AC 1 = 200000,,000001 gives AC 1 = 4,
+  OV 1 and TRAP 1 0: the first step overflows, the second does not.
+  Random left shifts with ASH and ASHC agree with the rule. The model
+  does not run the floating point instructions and DMUL yet, so the rule
+  for them has only the reading of the microcode.
+- **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at each PC flags word,
+  Trap 1 is 0 unless the word sets it. At ASH TEST, both OV and TRAP 1
+  take the overflow of the step, with no hold. Its OV does not agree with
+  DPE9: E68 holds OV, so OV after ASH 1,2 of 200000,,000001 is 1, but
+  KS10FPGA gives 0. The model and `emu/ks10-core-soft` keep OV.
 - **[manual]** The PRM sets Overflow and Trap 1 if a left shift loses a
   bit of significance (PRM 2.5, ASH). **[emulator]** sims 9556eca0,
   `kx10_cpu.c`, ASH (240), and KLH10 6d733f2, `kn10ops.c`, `x_ashflg`, do
   this.
-- **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at ASH TEST, both OV and
-  TRAP 1 take the overflow of the step, with no hold. It runs the DEC
-  microcode, so its TRAP 1 agrees with the rule above. Its OV does not:
-  DPE9 E68 holds OV, so OV after ASH 1,2 of 200000,,000001 is 1, but
-  KS10FPGA gives 0. The model and `emu/ks10-core-soft` keep OV.
 - No DEC KS10 diagnostic tests the case (a reading of the KLAD sources,
   2026-11-27). DSKAJ tests AROV with ASH and ASHC by 1 place, and DSKEA
   the trap with ASH by 1 place: there, the only step is the last step.
@@ -295,8 +322,43 @@ the control RAM.
   machine, and the arithmetic trap instruction in 421 is a JFCL (seen in
   a run on `emu/ks10-core-soft`, 2026-11-27).
 
-The project uses the microcode and the schematics (rank 1). `emu/ks10-core-soft`
-sets Trap 1 to the overflow of the last step (`shift.rs`, `Ash`). The
-differential run takes Trap 1 of SIMH and KLH10 as 0 for a case with an
-overflow only before the last step, and compares the rest
+The project uses the microcode and the schematics (rank 1).
+`emu/ks10-core-soft` loads both trap flags at each such word
+(`flags.rs`, `Flags::change` and `Flags::arith`), and sets Trap 1 to the
+overflow of the last step of ASH (`shift.rs`, `Ash`). The differential
+run starts each case with the flags 0, so only the ASH case shows there.
+It takes Trap 1 of SIMH and KLH10 as 0 for a case with an overflow only
+before the last step, and compares the rest
 (`emu/ks10-core-soft/tests/oracle.rs`, `microcode_trap_1`).
+
+## DMOVN: the carry flags of the complement
+
+- **[microcode]** DMOVN and DMOVNM negate the low word without its sign
+  (simple, `DBLNGA`). If the result is not 0, the microcode complements
+  the high word with `[AR]_.NOT.[AR], AD FLAGS`.
+- **[manual]** A 2901 logic function also gives the 2902 a generate G
+  and a propagate P (The Am2900 Family Data Book, 1978, Am2901A, Figure
+  8). `.NOT.A` is R XNOR S with R = 0, so a slice gives G = NOT(S3 S2 S1
+  S0) and P = 1. AR holds the word in bits 0 to 35, and 0 in bits 36 and
+  37 (the D input, DPE1 to DPE4). So the slice of bits 34 to 37 has G = 1,
+  and the carry goes through all slices: CARRY OUT is 1. The result has
+  no overflow, so Carry 1 = overflow XOR carry 0 = 1 (EK-OKS10-TM-002,
+  5.5.5).
+- **[measured]** 2026-11-27, the microcode-level model
+  (`emu/ks10-core-uop/tests/instructions.rs`, `flag_cases`). DMOVN of
+  0,,5, of 5,,5, of 777777,,777777 and 5, of 400000,,0 and 5, and DMOVNM
+  set Carry 0 and Carry 1.
+- **[emulator]** KS10FPGA 5090e7a1, `alu.v`: only the arithmetic
+  functions give the carry out, so the complement sets no carry flag.
+  sims 9556eca0 (`kx10_cpu.c`, DMOVN) and KLH10 6d733f2 (`inmove.c`,
+  `i_dmovn`): before the change of 2026-11-27, `emu/ks10-core-soft` set
+  no flag here, and the differential run found no difference.
+- The DEC diagnostics do not test the case. DSKCC tests the flags of
+  DMOVN and DMOVNM with the low words 0 and 400000,,0 (`DMVNF`,
+  `DMVNMF`): the magnitude is 0, so the high word is negated.
+
+The project uses the microcode and the data path (rank 1).
+`emu/ks10-core-soft` sets Carry 0 and Carry 1 (`dbl.rs`, `negate`). The
+differential run takes Carry 0 and Carry 1 of SIMH and KLH10 as 1 for
+such a case (`emu/ks10-core-soft/tests/oracle.rs`,
+`microcode_dmovn_carry`).
