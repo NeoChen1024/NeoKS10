@@ -40,7 +40,11 @@ TOPS-10 and of TOPS-20 is not a goal.
   The other emulators are references for tests only.
 - **The software processor comes first.** The emulator includes an
   interpreter for the full instruction set. It makes the system usable
-  without the PL, and it is the model that the logic is compared with.
+  without the PL.
+- **The real microcode is the reference.** A model of the KS10 data path
+  runs the microcode of the ITS build and the 8080 console program. It
+  decides the behaviour of an instruction where the sources disagree,
+  and it is the model that the logic is compared with.
 
 ## Components
 
@@ -49,7 +53,7 @@ TOPS-10 and of TOPS-20 is not a goal.
 | Instruction table | Data file | One definition of each instruction. Decoders, documents and coverage lists are generated from it |
 | Register map | Data file | One definition of the PS/PL interface. A SystemVerilog package and Rust constants are generated from it |
 | Emulator | Rust | Console, devices, image formats, and the software processor |
-| Processor core | SystemVerilog | First a multi-cycle state machine. A pipeline is a later step |
+| Processor core | SystemVerilog | First the KS10 data path that runs the assembled ITS microcode, with the real 8080 console program. A pipeline is a later step |
 | Memory bridge | SystemVerilog | Cache, write queue, AXI master to the PS memory |
 | Panel | SystemVerilog | Lamp brightness and the HDMI signal |
 | Test tools | Rust, Verilator, SymbiYosys | Differential tests, co-simulation, mutation, formal proofs |
@@ -80,7 +84,7 @@ parts of this project is not a proof that one of them is correct.
 | 1 | The Rust emulator with the software processor passes the diagnostics and boots ITS on a host computer |
 | 2 | The same emulator runs on the PS of the board |
 | 3 | Measurements of the PS/PL memory path: latency of the HP port, uncached mapping, write queue |
-| 4 | The processor core agrees with the software processor in co-simulation |
+| 4 | The processor core agrees with the microcode-level model in co-simulation |
 | 5 | The core runs on the board with the devices on the PS |
 | 6 | Front panel on HDMI, Chaosnet, IMP interface |
 

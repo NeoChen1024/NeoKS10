@@ -25,14 +25,25 @@ source.
    sources (`src/system/`, for example `ksdefs` and the device drivers) and
    the 8080 front-end sources (`src/kshack/*.m80`): they give what ITS and
    the boot process expect.
-2. The manuals: the ITS notes in `doc/kshack/` of the same repository, and
-   the DEC manuals on <https://bitsavers.org/pdf/dec/pdp10/>.
-3. The behaviour of other emulators (KLH10, the `pdp10-ks` simulator).
-4. Inside this repository:
+   A microcode step does what the KS10 data path does with it. The field
+   definitions of `ks10` and the DEC KS10 hardware documents (rank 3)
+   give the data path. A model of the data path that runs the assembled
+   microcode is the executable form of this rank.
+2. The expected values of the DEC KS10 diagnostics: recorded data of the
+   machine. A value applies only if the ITS microcode takes the path of
+   the DEC microcode, and only to the class of operands of the test.
+3. The manuals: the ITS notes in `doc/kshack/` of the same repository, and
+   the DEC manuals on <https://bitsavers.org/pdf/dec/pdp10/>. A statement
+   for the whole PDP-10 family applies to the KS10 only if no KS10 source
+   differs.
+4. The behaviour of other emulators (KLH10, the `pdp10-ks` simulator).
+   They find cases to examine. Their agreement does not decide a case.
+5. Inside this repository:
    - `spec/instructions.*` is the only definition of the instruction set.
    - `spec/devices.*` is the only definition of the I/O device registers.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
-   - The software processor in `emu/` is the model for the logic in `rtl/`.
+   - The microcode-level model in `emu/` is the model for the logic in
+     `rtl/`. The instruction-level software processor is compared with it.
 
 The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. The
 submodule `3rdparty/PYNQ-Z2` pins the commit that this repository uses. Do not
@@ -164,8 +175,9 @@ fails.
 
 ## Rules for the logic (SystemVerilog)
 
-- The first core is a multi-cycle state machine. Do not add a pipeline
-  before the first core runs ITS.
+- The first core runs the assembled ITS microcode on the KS10 data path,
+  with the real 8080 console program. It is multi-cycle. Do not add a
+  pipeline before the first core runs ITS.
 - The core gives a record at each completed instruction. The co-simulation
   compares this record with the software processor.
 - The register map comes from `spec/regmap.*`.

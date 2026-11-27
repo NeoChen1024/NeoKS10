@@ -901,10 +901,19 @@ Decided on 2026-11-27:
    repeatable, and the record and replay layer must exist for them
    (AGENTS.md).
 15. The DZ11 lines use Telnet, with one listener port for each line.
+16. The order of the sources (AGENTS.md, "Sources of truth"): the
+   microcode with the data path first, then the expected values of the
+   DEC diagnostics, the manuals, and the emulators.
+17. A microcode-level model of the KS10 comes next (choice B of
+   2026-11-27): a model of the data path runs the microcode that the ITS
+   build assembles (`KSHACK; MCR 262`, copied to `RAM RAM`), and the
+   real 8080 console program. The first core in the PL has the same
+   goal.
+18. KLH10 is a second reference emulator, next to SIMH.
 
 Open:
 
-16. The IMP interface for step 6. The choices include the emulator-only
+19. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.
@@ -918,11 +927,12 @@ Open:
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
 
-- A model of the 2901 data path and the microcode steps of the KS10. It
-  can run a sequence of the microcode (for example FDV to SNORM in
-  `flt.5`) on given operands, and so decide a case where `emu/ks10` and
-  SIMH differ and no DEC vector exists. The first case is FDV with
-  normalized operands (`docs/unknowns.md`).
+- The microcode-level model (decision 17). Its first stage: the data path
+  and the microcode without paging and I/O, on a flat memory. It decides
+  the cases of `docs/unknowns.md` that no DEC vector decides; the first
+  one is FDV with normalized operands. The DEC KS10 hardware documents
+  for the data path must be found and put into `third-party.lock` first.
+- KLH10 as the second reference of the differential run (decision 18).
 
 ## Open items
 
