@@ -40,3 +40,27 @@ level only (`emu/ks10/src/apr.rs`, `Pi::accept`).
   agree for ITS.
 
 The project uses the microcode (`emu/ks10/src/pag.rs`, `wrubr`).
+
+## The AC of MOVSRJ at the end
+
+- **[manual]** PRM 1982, 2.12, MOVSRJ: "AC bits 9-35 contain the number of
+  source bytes skipped over (if any)".
+- **[microcode]** `src/kshack/extend.4`, MVSKP and MOVST3: after the
+  extra source bytes are skipped, AC+3 is 0, and the end stores AC+3 (0)
+  with the flags into AC.
+
+The project uses the microcode: AC bits 9-35 are 0 at the end
+(`emu/ks10/src/extend.rs`, `movs`).
+
+## FAD with a large exponent difference
+
+- **[manual]** PRM 1982, 2.3, footnote to FAD: if the difference of the
+  exponents is more than 72 (64 in the KI10), the hardware uses 0 for the
+  smaller operand; from 54 to 72, a negative operand becomes all ones.
+- **[microcode]** `src/kshack/flt.5`, FAD to FAS4: the smaller operand is
+  shifted right in BR!Q (ASHC) by the full difference, with no limit. A
+  negative operand always becomes all ones.
+- **[emulator]** sims `pdp10-ks` 9556eca0 (`kx10_cpu.c`, FAD, for KL and
+  KS): 0 for a difference of 65 or more.
+
+The project uses the microcode (`emu/ks10/src/float.rs`, `fad`).

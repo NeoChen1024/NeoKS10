@@ -1,12 +1,14 @@
-//! Opcode 701 (dispatch on AC; spec/instructions.toml, acdisp 701): the
-//! EBR and UBR registers, the cache and page table sweeps, and the PC
-//! sample table pointer.
+//! Opcodes 701 and 702 (dispatch on AC; spec/instructions.toml, acdisp
+//! 701 and 702): the EBR and UBR registers, the cache and page table
+//! sweeps, the PC sample table pointer, the ITS page table pointers
+//! (DBR1 to DBR4), SPM and LPMR, the time base, the interval timer and the
+//! halt status block address.
 //!
 //! All of it follows the ITS version of the microcode **[microcode]**
 //! (inout.50, "IO -- INTERNAL DEVICES -- EBR & UBR", CLRPT, CLRCSH, the
-//! .IF/ITS and .IF/PCST parts). This version has no page table and no
-//! cache, so CLRPT, CLRCSH and the sweeps of WREBR and WRUBR have no
-//! effect.
+//! .IF/ITS and .IF/PCST parts). The sweeps of WREBR, WRUBR, LDBRn and
+//! LPMR clear the hardware page table (ksdefs.194: "resets the cache and
+//! page table"); there is no cache.
 
 use pdp10::{Half, W36};
 
@@ -19,21 +21,75 @@ pub fn op701(m: &mut Machine, i: Inst, e: Half) -> R {
         return Err(Fault::Uuo);
     }
     match i.ac {
-        // CLRCSH, CLRPT.
-        0 | 2 => {}
+        // CLRCSH: the cache only (ksdefs.194). CLRPT: the page table entry
+        // of E.
+        0 => {}
+        2 => m.pager.clear(e),
         1 => m.write(e, context_word(m))?,
         3 => {
             let c = m.read(e)?;
             m.ubr = wrubr(m.ubr, c);
             m.load_ac_blocks();
+            m.pager.clear_all();
         }
-        4 => wrebr(m, e),
+        4 => {
+            wrebr(m, e);
+            m.pager.clear_all();
+        }
         5 => m.write(e, rdebr(m.ebr))?,
         // RDPCST, WRPCST (.IF/PCST): the AOBJN pointer of the PC sample
         // table. The samples come with the 1 ms timer.
         0o11 => m.write(e, m.pcst)?,
         0o13 => m.pcst = m.read(e)?,
         _ => return Err(Fault::Uuo),
+    }
+    Ok(Next::Step)
+}
+
+/// Opcode 702 (inout.50, GRP702 to LPMR, the .IF/ITS parts).
+pub fn op702(m: &mut Machine, i: Inst, e: Half) -> R {
+    if !m.flags.io_legal() {
+        return Err(Fault::Uuo);
+    }
+    let next = |k: u64| Half::wrap(e.get() + k);
+    match i.ac {
+        0..=3 => m.write(e, m.dbr[i.ac])?,
+        4 => {
+            let (hi, lo) = m.timer.read(m.count);
+            m.write(e, hi)?;
+            m.write(next(1), lo)?;
+        }
+        5 => m.write(e, m.timer.period)?,
+        6 => m.write(e, m.hsb)?,
+        7 => {
+            // SPM: DBR1, DBR2 and the quantum counter.
+            m.write(e, m.dbr[0])?;
+            m.write(next(1), m.dbr[1])?;
+            m.write(next(2), m.timer.quan)?;
+        }
+        // LDBRn: the DBR gets E itself.
+        0o10..=0o13 => {
+            m.dbr[i.ac - 0o10] = W36::from_halves(Half::ZERO, e);
+            m.pager.clear_all();
+        }
+        0o14 => {
+            let (hi, lo) = (m.read(e)?, m.read(next(1))?);
+            m.timer.write(hi, lo);
+        }
+        0o15 => {
+            let p = m.read(e)?;
+            m.timer.period = p;
+            m.timer.ttg = p;
+        }
+        0o16 => m.hsb = m.read(e)?,
+        _ => {
+            // LPMR
+            let (a, b, c) = (m.read(e)?, m.read(next(1))?, m.read(next(2))?);
+            m.dbr[0] = a;
+            m.dbr[1] = b;
+            m.timer.quan = c;
+            m.pager.clear_all();
+        }
     }
     Ok(Next::Step)
 }
@@ -114,6 +170,43 @@ mod tests {
         // Bits 23 and 24 are not kept.
         wrebr(&mut m, Half::wrap(0o014000));
         assert_eq!(rdebr(m.ebr).get(), 0);
+    }
+
+    // ksdefs.194, LDBR1: "DBR1 <- E"; SPM and LPMR move DBR1, DBR2 and
+    // the quantum counter (inout.50, SPM, LPMR without JPC).
+    #[test]
+    fn dbr_spm_lpmr() {
+        let mut m = Machine::new();
+        op702(
+            &mut m,
+            Inst::new(W36::wrap(0o702400_001234)),
+            Half::wrap(0o1234),
+        )
+        .unwrap();
+        assert_eq!(m.dbr[0].get(), 0o1234);
+        m.timer.quan = W36::wrap(7);
+        op702(
+            &mut m,
+            Inst::new(W36::wrap(0o702340_002000)),
+            Half::wrap(0o2000),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                m.mem[0o2000].get(),
+                m.mem[0o2001].get(),
+                m.mem[0o2002].get()
+            ),
+            (0o1234, 0, 7)
+        );
+        m.mem[0o2001] = W36::wrap(0o5555);
+        op702(
+            &mut m,
+            Inst::new(W36::wrap(0o702740_002000)),
+            Half::wrap(0o2000),
+        )
+        .unwrap();
+        assert_eq!(m.dbr[1].get(), 0o5555);
     }
 
     #[test]

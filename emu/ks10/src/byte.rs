@@ -12,7 +12,7 @@
 use pdp10::{Half, W36};
 
 use crate::flags::Flags;
-use crate::machine::{Fault, Inst, Machine, Next};
+use crate::machine::{Fault, Inst, Machine, Next, Ref};
 
 type R = Result<Next, Fault>;
 
@@ -70,18 +70,19 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
         return Ok(Next::Step);
     }
     m.flags.set(Flags::FPD);
-    let Some((be, _)) = m.ea(ptr)? else {
+    let Some((be, _)) = m.ea_ref(ptr, Ref::E2)? else {
         // An indirect chain that does not end: do the instruction again
         // with FPD set, as after an interrupt.
         return Ok(Next::Jump(m.pc));
     };
     let (p, s) = ps(ptr);
-    let word = m.read(be)?;
+    // The byte data: PXCT BYTE DATA (D2), read and written in one cycle.
+    let word = m.vread(be, Ref::D2)?;
     if i.op & 2 == 0 {
         // ILDB, LDB
         m.ac[i.ac] = load(word, p, s);
     } else {
-        m.write(be, deposit(word, m.ac[i.ac], p, s))?;
+        m.vwrite(be, deposit(word, m.ac[i.ac], p, s), Ref::D2)?;
     }
     m.flags.clear(Flags::FPD);
     Ok(Next::Step)

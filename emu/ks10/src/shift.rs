@@ -4,7 +4,7 @@
 use pdp10::{Half, W36};
 
 use crate::flags::Flags;
-use crate::machine::{Fault, Inst, Machine, Next};
+use crate::machine::{Fault, Inst, Machine, Next, Ref};
 
 type R = Result<Next, Fault>;
 
@@ -173,15 +173,45 @@ fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
 /// n = E - (AC right) + 1 (mod 2^18, no carry between the halves); then the
 /// words move, each read after the earlier writes. So if AC is in the
 /// source or destination block, the words see the final AC. After each
-/// word, the move stops if the destination was not below E.
+/// word, the move stops if the destination was not below E. A page failure
+/// leaves src,,dst of the word that failed in AC (BLT-CLEANUP), so that the
+/// BLT continues there.
 pub fn blt(m: &mut Machine, i: Inst, e: Half) -> R {
+    blt_with(m, i, e, |w| w)
+}
+
+/// BLTBU (716), BLTUB (717) **[microcode]** (simple.42, "UBABLT"): BLT
+/// that converts each word from byte format (bytes 0 to 3 in bits 0 to 31)
+/// to Unibus format (bits 2-9 byte 1, 10-17 byte 0, 20-27 byte 3, 28-35
+/// byte 2), or back. The other bits become 0.
+pub fn bltub(m: &mut Machine, i: Inst, e: Half) -> R {
+    if i.op == 0o716 {
+        blt_with(m, i, e, |w| {
+            let b = |k: u32| w.field(8 * k, 8 * k + 7);
+            W36::wrap((b(1) << 26) | (b(0) << 18) | (b(3) << 8) | b(2))
+        })
+    } else {
+        blt_with(m, i, e, |w| {
+            let (b1, b0) = (w.field(2, 9), w.field(10, 17));
+            let (b3, b2) = (w.field(20, 27), w.field(28, 35));
+            W36::wrap((b0 << 28) | (b1 << 20) | (b2 << 12) | (b3 << 4))
+        })
+    }
+}
+
+fn blt_with(m: &mut Machine, i: Inst, e: Half, f: impl Fn(W36) -> W36) -> R {
     let p = m.ac[i.ac];
     let (mut src, mut dst) = (p.lh(), p.rh());
     let n = (e.get() + (1 << 18) - dst.get() + 1) & Half::MASK;
     m.ac[i.ac] = W36::from_halves(Half::wrap(src.get() + n), Half::wrap(dst.get() + n));
     loop {
-        let w = m.read(src)?;
-        m.write(dst, w)?;
+        let r = m
+            .vread(src, Ref::D2)
+            .and_then(|w| m.vwrite(dst, f(w), Ref::D1));
+        if let Err(x) = r {
+            m.ac[i.ac] = W36::from_halves(src, dst);
+            return Err(x);
+        }
         if dst.get() >= e.get() {
             break;
         }
@@ -267,6 +297,32 @@ mod tests {
     // HALT CPIERR: on a KS10 the BLT changes AC1. With AC1 = 1,,1 the
     // final value 2,,2 is stored first and then moved onto itself
     // (simple.42, BLT stores AC before the first read).
+    // simple.42, UBABLT: byte format bytes 0-3 in bits 0-31; Unibus format
+    // byte 1, byte 0 in bits 2-17, byte 3, byte 2 in bits 20-35.
+    #[test]
+    fn unibus_format() {
+        let mut m = Machine::new();
+        let b = [0o101u64, 0o102, 0o103, 0o104];
+        m.mem[0o1000] = W36::wrap((b[0] << 28) | (b[1] << 20) | (b[2] << 12) | (b[3] << 4));
+        m.ac[1] = W36::from_halves(Half::wrap(0o1000), Half::wrap(0o2000));
+        bltub(
+            &mut m,
+            Inst::new(W36::wrap(0o716040_002000)),
+            Half::wrap(0o2000),
+        )
+        .unwrap();
+        let u = (b[1] << 26) | (b[0] << 18) | (b[3] << 8) | b[2];
+        assert_eq!(m.mem[0o2000].get(), u);
+        m.ac[1] = W36::from_halves(Half::wrap(0o2000), Half::wrap(0o3000));
+        bltub(
+            &mut m,
+            Inst::new(W36::wrap(0o717040_003000)),
+            Half::wrap(0o3000),
+        )
+        .unwrap();
+        assert_eq!(m.mem[0o3000], m.mem[0o1000]);
+    }
+
     #[test]
     fn blt_onto_its_ac() {
         let mut m = Machine::new();

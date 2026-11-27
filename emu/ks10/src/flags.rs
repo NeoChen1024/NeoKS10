@@ -25,8 +25,10 @@ impl Flags {
     pub const USER: u32 = 1 << 12;
     /// Bit 6: User In-out (user mode), Previous Context User (executive).
     pub const USERIO: u32 = 1 << 11;
-    /// Bit 8: Address Failure Inhibit.
-    pub const AFI: u32 = 1 << 9;
+    /// Bit 8 of a PC word: the ITS one-proceed bit. The KS10 has no flag
+    /// there (ks10.47, OIPBIT: "BIT 8 OF PC IS ONE-PROCEED ON KS (NOT IN
+    /// HARDWARE)"); JRSTF with this bit starts a one-proceed.
+    pub const OIP: u32 = 1 << 9;
     /// Bit 9: Trap 2.
     pub const TRAP2: u32 = 1 << 8;
     /// Bit 10: Trap 1.
@@ -35,8 +37,9 @@ impl Flags {
     pub const FXU: u32 = 1 << 6;
     /// Bit 12: No Divide.
     pub const NODIV: u32 = 1 << 5;
-    /// All flags of bits 0 to 12. Bit 7 (Public) is not used on the KS10.
-    pub const ALL: u32 = 0o777740 & !(1 << 10);
+    /// All flags of bits 0 to 12 that the KS10 has: bit 7 (Public) and
+    /// bit 8 are not used.
+    pub const ALL: u32 = 0o777740 & !(1 << 10) & !(1 << 9);
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

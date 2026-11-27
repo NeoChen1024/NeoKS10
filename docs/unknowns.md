@@ -21,6 +21,14 @@ tapes"). Not known yet:
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
 - The instruction times of the KS10, for the virtual time of the emulator.
   docs/emulator.md.
+- The halt status block (`inout.50`, DUMP) has the 2901 registers AR,
+  ARX, BR, BRX, FLG, T0 and the VMA. Their values at a halt come from the
+  microcode steps before the halt. `emu/ks10` writes 0 for them.
+- Whether a reference to nonexistent memory sets the APR flag "no
+  memory" (KSDEFS, RDAPR 1.9) in addition to the page failure.
+- The halt turns off the PI system in the hardware (`inout.50`, WRTHSB:
+  "TURN OFF PI SYSTEM"). `emu/ks10` does not model a continue after a
+  halt.
 - The line speed of the CTY, and the time of the 8080 for one character.
   `emu/ks10/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
   at 1 µs for each instruction).

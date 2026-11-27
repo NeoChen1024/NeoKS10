@@ -398,17 +398,61 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
   values of `APRID` differ from the ITS microcode (`docs/discrepancies.md`).
 
 **Runs in `emu/ks10` [measured]** (2026-11-27, `cargo test --release -p
-ks10 --test diag` with `KS10_DIAG_DIR`): `DSKAA` to `DSKAH` run 5 million
-instructions without a halt. `DSKAI` to `DSKAM` run 3 million
-instructions under `SUBSM` and print `END PASS 10.` with no error
-message. A run of 60 million instructions gave more than 2600 passes of
-each of `DSKAI` to `DSKAM`.
+ks10 --test diag` with `KS10_DIAG_DIR`):
 
-**Which programs apply.** The programs are for the DEC microcode. `DSKEA`
-and `DSKEC` test the paging of the DEC microcode, which the ITS microcode
-does not have; `make diag` leaves them out. For the other programs, a
-difference that comes from the ITS microcode goes into
+- `DSKAA` to `DSKAH` run 5 million instructions without a halt.
+- `DSKAI` to `DSKAM` and `DSKCA` to `DSKCE` run 3 million instructions
+  under `SUBSM`, `DSKCF` 6 million. Each prints `END PASS 10.` and no
+  error message.
+- `DSKCG` runs tests 1 to 8 (MUUO traps, CMPS, MOVS, CVTDB, CVTBD, EDIT)
+  with no error message, and stops at test 9 (see below).
+- `DSKBA` needs the switch `OPRSEL` (left half 000010) too. Without it, the
+  program limits memory to 32K. With `INHPAG`, `SUBSM` reports 112K
+  (0 to 337777), and the AND with 77777 gives too little memory. A run of
+  300 million instructions gave 3 passes with no error.
+
+**Which programs apply.** The programs are for the DEC microcode:
+
+- `DSKEA` and `DSKEC` test the paging of the DEC microcode, which the ITS
+  microcode does not have.
+- `DSKEB` tests the cache. Its AC block test passes; its cache tests
+  measure hits, and this emulator has no cache.
+- `DSKCG` test 9 (page fail recovery) sets up a DEC page table (DSKCGM.MAC,
+  PAGSET).
+- `SUBSM` clears UBR with `DATAO PAG,[LLDUSB,,400000]` (SUBSM.SEQ, line
+  1959). In the DEC format, bits 23 to 35 are a page number, so the UPT is
+  at 0 (PARAM.KSM, "DATAO PAG 010 ASSIGMENTS"). The ITS microcode takes
+  bits 16 to 35 as the address, so the UPT is at 400000. The `DSKCG` test
+  writes the ITS form, 100000,,0, into the literal at 7103.
+
+`make diag` leaves out the programs and tests that do not apply. For the
+other programs, a difference that comes from the ITS microcode goes into
 `docs/discrepancies.md`, with the instruction and the two behaviours.
+
+### Processor model
+
+The software processor in `emu/ks10` follows the ITS microcode. These
+parts are modelled as hardware state, not as microcode steps:
+
+- The page table of the pager (512 entries, one for each DEC page). The
+  microcode refills an entry from the ITS page tables and clears the age
+  bit (`itspag.98`). Sweeps and `CLRPT` clear entries.
+- AREAD: before an instruction runs, the reference to E is checked as
+  the DROM fields READ, TEST and WRITE give. So a page failure comes
+  before a change of the flags.
+- The trap cycle, the one-proceed trap, the page fail trap, the halt
+  status block, the 1 ms clock, and the PC sample table.
+- The I/O instructions reach the I/O address space. With no devices, each
+  reference is a page failure with "no IO register".
+
+Differences from the microcode:
+
+- EXTEND runs to the end in one step. After a page failure inside it,
+  the ACs go back to their values at the start. The microcode keeps the
+  work done (`extend.4`, "PAGE FAIL CLEANUP"). The second try gives the
+  same result, because the strings must not overlap (PRM 2.12).
+- The halt status block has 0 in the words of microcode temporaries
+  (`docs/unknowns.md`).
 
 ### Order of the work
 
@@ -416,7 +460,8 @@ difference that comes from the ITS microcode goes into
 2. The interpreter without paging, with tests against the reference
    traces.
 3. ITS paging, APR, PI, timers, the 8080 console words, the halt status
-   block.
+   block. Done in `emu/ks10`, except the Unibus interrupts, which come
+   with the adapters.
 4. The adapters, the RH11 with the TM03: boot from tape (salvager,
    DSKDMP).
 5. The RH11 with the RP06: boot ITS from `rp0.dsk`.

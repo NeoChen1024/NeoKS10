@@ -22,7 +22,7 @@ fn next_ac(ac: usize) -> usize {
 }
 
 /// The operand: C(E), or 0,,E for the immediate mode (bits 7 and 8 = 1).
-fn operand(m: &Machine, i: Inst, e: Half) -> Result<W36, Fault> {
+fn operand(m: &mut Machine, i: Inst, e: Half) -> Result<W36, Fault> {
     if i.op & 3 == 1 {
         Ok(W36::from_halves(Half::ZERO, e))
     } else {

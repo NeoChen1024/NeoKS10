@@ -9,8 +9,8 @@
 use pdp10::{Half, W36};
 
 use crate::flags::Flags;
-use crate::machine::{Fault, Inst, Machine, Next};
-use crate::{apr, byte, muldiv, pag, shift};
+use crate::machine::{Fault, Inst, Machine, Next, OneProc, Ref, halt};
+use crate::{apr, byte, dbl, extend, float, muldiv, pag, shift};
 
 type R = Result<Next, Fault>;
 
@@ -39,6 +39,9 @@ fn cond(c: u16, a: W36, b: W36) -> bool {
 
 pub fn execute(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
     match i.op {
+        0o105 | 0o114..=0o121 | 0o124 | 0o125 => dbl::execute(m, i, e),
+        0o110..=0o113 | 0o122 | 0o126 | 0o127 | 0o132 | 0o140..=0o177 => float::execute(m, i, e),
+        0o123 => extend::execute(m, i, e),
         0o133..=0o137 => byte::execute(m, i, e),
         0o200..=0o217 => moves(m, i, e),
         0o220..=0o237 => muldiv::execute(m, i, e),
@@ -46,6 +49,31 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
         0o251 => shift::blt(m, i, e),
         0o700 => apr::op700(m, i, e),
         0o701 => pag::op701(m, i, e),
+        0o102 | 0o103 => {
+            // XCTRI, XCTR (simple.42): executive mode only; the PXCT bits
+            // are the AC field. XCTRI differs only in software (ksdefs.194:
+            // "page fails cause it to skip").
+            if m.flags.is_user() {
+                return Err(Fault::Uuo);
+            }
+            Ok(Next::Xctr(m.read(e)?, i.ac as u8))
+        }
+        0o704 | 0o705 => {
+            // UMOVE, UMOVEM (inout.50): I/O legal; the reference of E is
+            // in the previous context (SPEC/PREV).
+            if !m.flags.io_legal() {
+                return Err(Fault::Uuo);
+            }
+            if i.op == 0o704 {
+                m.ac[i.ac] = m.vread(e, Ref::Prev)?;
+            } else {
+                m.vwrite(e, m.ac[i.ac], Ref::Prev)?;
+            }
+            Ok(Next::Step)
+        }
+        0o710..=0o715 | 0o720..=0o725 => crate::io::execute(m, i, e),
+        0o716 | 0o717 => shift::bltub(m, i, e),
+        0o702 => pag::op702(m, i, e),
         0o250 => {
             // EXCH (PRM 2.1)
             let x = m.read(e)?;
@@ -83,7 +111,7 @@ fn store4(m: &mut Machine, i: Inst, e: Half, w: W36) -> R {
 
 /// The operand by the mode: C(E), 0,,E for mode 1, AC for mode 2 (to
 /// memory), C(E) for mode 3.
-fn operand4(m: &Machine, i: Inst, e: Half) -> Result<W36, Fault> {
+fn operand4(m: &mut Machine, i: Inst, e: Half) -> Result<W36, Fault> {
     Ok(match i.op & 3 {
         1 => imm(e),
         _ => m.read(e)?,
@@ -313,31 +341,30 @@ fn aobj(m: &mut Machine, i: Inst, e: Half) -> R {
 }
 
 /// The flags that a subroutine jump clears (PRM 2.9, JSP).
-const CALL_CLEARS: u32 = Flags::FPD | Flags::AFI | Flags::TRAP1 | Flags::TRAP2;
+const CALL_CLEARS: u32 = Flags::FPD | Flags::TRAP1 | Flags::TRAP2;
 
 /// PUSHJ, PUSH, POP, POPJ, JSR, JSP, JSA, JRA (PRM 2.9, 2.10).
 fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
     let ret = Half::wrap(m.pc.get() + 1);
     match i.op {
         0o260 | 0o261 => {
-            // PUSHJ, PUSH
+            // PUSHJ, PUSH: the stack word first, then the AC (a page
+            // failure leaves the AC as it was).
             let p = halves_step(m.ac[i.ac], 1);
             let value = if i.op == 0o260 {
                 m.flags.pc_word(ret)
             } else {
                 m.read(e)?
             };
+            m.vwrite(p.rh(), value, Ref::D2)?;
             m.ac[i.ac] = p;
-            m.write(p.rh(), value)?;
+            if i.op == 0o260 {
+                m.flags.clear(CALL_CLEARS);
+            }
             if p.lh() == Half::ZERO {
                 m.flags.set(Flags::TRAP2);
             }
             if i.op == 0o260 {
-                m.flags
-                    .clear(Flags::FPD | Flags::AFI | Flags::TRAP1 | Flags::TRAP2);
-                if p.lh() == Half::ZERO {
-                    m.flags.set(Flags::TRAP2);
-                }
                 return Ok(Next::Jump(e));
             }
             Ok(Next::Step)
@@ -345,12 +372,12 @@ fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
         0o262 | 0o263 => {
             // POP, POPJ
             let old = m.ac[i.ac];
-            let value = m.read(old.rh())?;
+            let value = m.vread(old.rh(), Ref::D2)?;
             let p = halves_step(old, -1);
-            m.ac[i.ac] = p;
             if i.op == 0o262 {
                 m.write(e, value)?;
             }
+            m.ac[i.ac] = p;
             if p.lh() == Half::ONES {
                 m.flags.set(Flags::TRAP2);
             }
@@ -398,19 +425,18 @@ fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
             // JRSTF: the flags from bits 0 to 12 of the last word of the
             // address calculation (C(X) if indexed).
             m.flags = restore_flags(m.flags, last);
+            arm_oneproc(m, last);
             Ok(Next::Jump(e))
         }
         4 => {
             if user {
                 return Err(Fault::Uuo);
             }
-            // [microcode] simple.42, HALT: PC <- E; inout.50, HALTED: halt
-            // code 1 to physical location 0, the PC to location 1. The halt
-            // status block of the microcode registers is not written.
+            // [microcode] simple.42, HALT: PC <- E; inout.50, HALTED: the
+            // halt status block, halt code 1 to physical location 0, the PC
+            // to location 1.
             m.pc = e;
-            m.deposit(0, ONE)?;
-            m.deposit(1, W36::from_halves(Half::ZERO, e))?;
-            Ok(Next::Stop(crate::machine::Stop::Halt { pc: e, code: 1 }))
+            Ok(Next::Stop(m.halt(halt::HALT, i.word)))
         }
         5 => {
             // XJRSTF (simple.42, XJRSTF): the flags from C(E), the PC from
@@ -434,7 +460,7 @@ fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
             if user {
                 return Err(Fault::Uuo);
             }
-            let (f, pc) = xpcw(m, e, Half::wrap(m.pc.get() + 1))?;
+            let (f, pc) = xpcw(m, e, m.flags, Half::wrap(m.pc.get() + 1))?;
             m.flags = f;
             Ok(Next::Jump(pc))
         }
@@ -448,6 +474,7 @@ fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
             m.pi.dismiss();
             if i.ac == 0o12 {
                 m.flags = restore_flags(m.flags, last);
+                arm_oneproc(m, last);
             }
             Ok(Next::Jump(e))
         }
@@ -477,8 +504,15 @@ fn restore_flags(old: Flags, w: W36) -> Flags {
     Flags(f)
 }
 
+/// One-proceed (simple.42, JRST2): a JRSTF word with bit 8 set.
+fn arm_oneproc(m: &mut Machine, w: W36) {
+    if w.lh().get() as u32 & Flags::OIP != 0 {
+        m.oneproc = OneProc::Armed;
+    }
+}
+
 /// The flags of C(E) and the PC of the right half of C(E+1) (XJRSTF).
-fn xjrstf(m: &Machine, e: Half) -> Result<(Flags, Half), Fault> {
+fn xjrstf(m: &mut Machine, e: Half) -> Result<(Flags, Half), Fault> {
     let f = restore_flags(m.flags, m.read(e)?);
     let pc = m.read(Half::wrap(e.get() + 1))?.rh();
     Ok((f, pc))
@@ -487,12 +521,13 @@ fn xjrstf(m: &Machine, e: Half) -> Result<(Flags, Half), Fault> {
 /// XPCW: the flags to C(E), the PC `ret` to C(E+1), then the new flags
 /// and PC from E+2 and E+3 as XJRSTF does, in executive mode
 /// **[microcode]** (simple.42, XPCW and PIXPCW). For an interrupt, `ret`
-/// is the PC of the interrupted program.
-pub fn xpcw(m: &mut Machine, e: Half, ret: Half) -> Result<(Flags, Half), Fault> {
-    m.write(e, m.flags.pc_word(Half::ZERO))?;
+/// is the PC of the interrupted program, and `old` its flags.
+pub fn xpcw(m: &mut Machine, e: Half, old: Flags, ret: Half) -> Result<(Flags, Half), Fault> {
+    m.write(e, old.pc_word(Half::ZERO))?;
     m.write(Half::wrap(e.get() + 1), W36::from_halves(Half::ZERO, ret))?;
-    m.flags = Flags(0);
-    xjrstf(m, Half::wrap(e.get() + 2))
+    let f = restore_flags(Flags(0), m.read(Half::wrap(e.get() + 2))?);
+    let pc = m.read(Half::wrap(e.get() + 3))?.rh();
+    Ok((f, pc))
 }
 
 /// JFCL (PRM 2.9): AC bits 9 to 12 select Overflow, Carry 0, Carry 1 and
@@ -539,15 +574,13 @@ pub fn muuo(m: &mut Machine, i: Inst, e: Half) -> Result<(), Fault> {
         // (ksdefs.194, WREBR 2.6).
         return Err(Fault::Unimplemented);
     }
-    let nxm = Fault::Nxm;
     let inst = W36::from_halves(Half::wrap(i.word.lh().get() & 0o777740), e);
     let ret = Half::wrap(m.pc.get() + 1);
     let traps = Flags::TRAP1 | Flags::TRAP2;
     let pcw = Flags(m.flags.0 & !traps).pc_word(ret);
-    m.deposit(m.upt_addr(0o424), inst).map_err(nxm)?;
-    m.deposit(m.upt_addr(0o425), pcw).map_err(nxm)?;
-    m.deposit(m.upt_addr(0o426), crate::machine::context_word(m))
-        .map_err(nxm)?;
+    m.phys_write(m.upt_addr(0o424), inst)?;
+    m.phys_write(m.upt_addr(0o425), pcw)?;
+    m.phys_write(m.upt_addr(0o426), crate::machine::context_word(m))?;
     let mut off = 0o430;
     if m.flags.0 & traps != 0 {
         off += 1;
@@ -556,10 +589,8 @@ pub fn muuo(m: &mut Machine, i: Inst, e: Half) -> Result<(), Fault> {
         off += 4;
     }
     let loc = m.upt_addr(off);
-    let new = *m.mem.get(loc as usize).ok_or(Fault::Nxm(loc))?;
-    // GOEXEC: LOAD FLAGS with LEAVE USER: the new word may clear User.
-    m.flags = Flags((new.lh().get() as u32) & Flags::ALL);
-    m.pc = new.rh();
+    let new = m.phys_read(loc)?;
+    m.goexec(new);
     Ok(())
 }
 
