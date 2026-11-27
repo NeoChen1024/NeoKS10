@@ -1,5 +1,5 @@
 //! One instruction on the model, compared with the software processor
-//! `ks10` (docs/microcode-model.md, "Single instructions").
+//! `ks10-core-soft` (docs/microcode-model.md, "Single instructions").
 //!
 //! The model runs the power-up sequence into the halt loop. The test then
 //! puts the instruction at 1000, the operands at 2000 and 2001 and the
@@ -8,7 +8,7 @@
 //! instruction and halts: it stores the halt code 2 in location 0 and PC
 //! in location 1 (inout, HALTLP, CONT, NICOND code 5, HALTED, PWRON).
 //!
-//! `ks10` runs the same instruction from the same state. The test compares
+//! `ks10-core-soft` runs the same instruction from the same state. The test compares
 //! the ACs, PC, the program flags and the words at 2000 and 2001. A
 //! difference is a finding for docs/discrepancies.md, not a value to
 //! adjust (AGENTS.md, "Tests").
@@ -16,8 +16,8 @@
 mod common;
 
 use common::{FILLS, label, machine, run_until, symbol};
-use ks10uop::alu;
-use ks10uop::machine::{Coverage, Machine, PcFlags};
+use ks10_core_uop::alu;
+use ks10_core_uop::machine::{Coverage, Machine, PcFlags};
 use pdp10::{Half, W36};
 
 const CODE: usize = 0o1000;
@@ -56,7 +56,7 @@ impl std::fmt::Display for State {
 }
 
 fn ks10_flags(f: PcFlags) -> u32 {
-    use ks10::flags::Flags as F;
+    use ks10_core_soft::flags::Flags as F;
     [
         (f.ov, F::AROV),
         (f.cry0, F::CRY0),
@@ -76,14 +76,14 @@ fn ks10_flags(f: PcFlags) -> u32 {
 }
 
 fn reference(c: &Case) -> Result<State, String> {
-    let mut m = ks10::Machine::new();
+    let mut m = ks10_core_soft::Machine::new();
     for (k, &a) in c.ac.iter().enumerate() {
         m.ac[k] = W36::wrap(a);
     }
     m.mem[CODE] = W36::wrap(c.inst);
     m.mem[E] = W36::wrap(c.mem[0]);
     m.mem[E + 1] = W36::wrap(c.mem[1]);
-    m.flags = ks10::flags::Flags(0);
+    m.flags = ks10_core_soft::flags::Flags(0);
     m.pc = Half::wrap(CODE as u64);
     m.step().map_err(|s| format!("{s:?}"))?;
     Ok(State {

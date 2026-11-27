@@ -48,7 +48,7 @@ check-rust:
 	cd emu && $(NICE) $(CARGO) test --locked
 
 # 2000 random instructions against each reference emulator that `make
-# oracle` built (emu/ks10/tests/oracle.rs). Without one, the target says
+# oracle` built (emu/ks10-core-soft/tests/oracle.rs). Without one, the target says
 # SKIPPED for it and does not fail.
 ORACLE_CASES ?= 2000
 check-oracle:
@@ -59,7 +59,7 @@ check-oracle:
 	else echo "check-oracle: KLH10 SKIPPED, $(ORACLE_KLH10) is missing (make oracle)"; fi; \
 	if [ -n "$$vars" ]; then \
 	    cd emu && env $$vars KS10_ORACLE_CASES=$(ORACLE_CASES) \
-	        $(NICE) $(CARGO) test -q --locked --release -p ks10 --test oracle -- --nocapture; \
+	        $(NICE) $(CARGO) test -q --locked --release -p ks10-core-soft --test oracle -- --nocapture; \
 	fi
 
 check-rtl:
@@ -145,14 +145,14 @@ cross:
 # names its rp0.dsk; dskdmp.tape and minsys.tape are in the same
 # directory. The image is a third-party file, so the target uses copies
 # in the build output.
-# 1. The tests of emu/ks10 that need the image (boot, idle loop, tapes).
+# 1. The tests of emu/ks10-core-soft that need the image (boot, idle loop, tapes).
 # 2. neoks10 runs tests/its-boot/boot.script with a record; a replay of
 #    the record on a fresh copy must give the same CTY output.
 ITS_BOOT_DIR = $(abspath $(BUILD_DIR))/its-boot
 NEOKS10 = $(CURDIR)/emu/target/release/neoks10
 its-boot:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
-	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10 \
+	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test its --test idle --test tape
 	cd emu && $(NICE) $(CARGO) build --locked --release -p neoks10
 	rm -rf $(ITS_BOOT_DIR) && mkdir -p $(ITS_BOOT_DIR)
@@ -168,11 +168,11 @@ its-boot:
 	rm -f $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
 	@echo "its-boot: ITS booted, listed SYS;, and the replay gave the same output"
 
-# The microcode of the ITS build (emu/ks10uop). KS10_ITS_DISK names rp0.dsk
+# The microcode of the ITS build (emu/ks10-core-uop). KS10_ITS_DISK names rp0.dsk
 # of the ITS build; output.tape, the dump tape of the build, is in the same
 # directory. itstar (the submodule tools/itstar of 3rdparty/its, pinned
 # there) extracts the listing KSHACK; MCR 262 into the build output. The
-# test emu/ks10uop/tests/ram_file.rs reads the RAM file from the disk as
+# test emu/ks10-core-uop/tests/ram_file.rs reads the RAM file from the disk as
 # the 8080 does and compares it with the listing.
 MICROCODE_DIR = $(abspath $(BUILD_DIR))/microcode
 MICROCODE_LISTING = $(MICROCODE_DIR)/mcr.262
@@ -187,12 +187,12 @@ microcode:
 	cp $(MICROCODE_DIR)/tape/kshack/mcr.262 $(MICROCODE_LISTING)
 	rm -rf $(MICROCODE_DIR)/tape
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
-	    $(NICE) $(CARGO) test --locked -p ks10uop --tests -- --nocapture
+	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --tests -- --nocapture
 
 # The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
 # The tape comes from `make references`. t10backup of tapeutils (the
 # submodule tools/tapeutils of 3rdparty/its, pinned there) extracts the
-# files into the build output. The test emu/ks10/tests/diag.rs runs the
+# files into the build output. The test emu/ks10-core-soft/tests/diag.rs runs the
 # programs of the run file SMCPU.CMD.
 DIAG_DIR = $(abspath $(BUILD_DIR))/diag
 DIAG_TAPE = references/trailing-edge/tapes/ks_diag_gs.tap.bz2
@@ -204,7 +204,7 @@ diag:
 	$(CC) -O2 -o $(DIAG_DIR)/t10backup $(TAPEUTILS)/t10backup.c $(TAPEUTILS)/tapeio.c
 	bunzip2 -c $(DIAG_TAPE) > $(DIAG_DIR)/ks_diag_gs.tap
 	cd $(DIAG_DIR)/files && ../t10backup -x -f ../ks_diag_gs.tap '*' > ../t10backup.log
-	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10 \
+	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test diag -- --nocapture
 
 # The reference emulators with their trace hooks (oracle/). Each source is

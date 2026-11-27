@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use ks10::{Machine, Stop, boot};
+use ks10_core_soft::{Machine, Stop, boot};
 use pdp10::{Half, W36};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -548,7 +548,7 @@ impl Engine {
         match space {
             Space::Phys => Some(a),
             Space::Exec | Space::User => {
-                ks10::pager::peek(&self.m, Half::wrap(u64::from(a)), space == Space::User)
+                ks10_core_soft::pager::peek(&self.m, Half::wrap(u64::from(a)), space == Space::User)
             }
         }
     }
@@ -1074,7 +1074,7 @@ impl Engine {
                     }
                 }
                 Command::CtySend(b) => {
-                    if self.m.count < r.at + ks10::console::ANSWER_DELAY {
+                    if self.m.count < r.at + ks10_core_soft::console::ANSWER_DELAY {
                         return;
                     }
                     r.s.steps.pop_front();
@@ -1129,7 +1129,7 @@ impl Engine {
             match (&r.wait, r.s.steps.front()) {
                 (Some((_, until, _)), _) => end = end.min(*until),
                 (None, Some((_, Command::CtySend(_)))) => {
-                    end = end.min(r.at + ks10::console::ANSWER_DELAY);
+                    end = end.min(r.at + ks10_core_soft::console::ANSWER_DELAY);
                 }
                 _ => {}
             }

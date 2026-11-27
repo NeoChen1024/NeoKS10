@@ -11,7 +11,7 @@
 mod common;
 
 use common::{FILLS, label, machine, run_until, symbol as work};
-use ks10uop::alu::W40;
+use ks10_core_uop::alu::W40;
 use pdp10::W36;
 
 #[test]
@@ -48,9 +48,12 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
         // values of the A field in the listing.
         let reg = |name: &str| m.alu.reg[work(&text, name)];
         assert_eq!(reg("MASK").get(), 0o777777_777777 << 2);
-        assert_eq!(ks10uop::alu::word(reg("XWD1")), W36::wrap(0o000001_000001));
-        assert_eq!(ks10uop::alu::word(reg("ONE")), W36::wrap(1));
-        assert_eq!(ks10uop::alu::word(reg("PC")), W36::ZERO);
+        assert_eq!(
+            ks10_core_uop::alu::word(reg("XWD1")),
+            W36::wrap(0o000001_000001)
+        );
+        assert_eq!(ks10_core_uop::alu::word(reg("ONE")), W36::wrap(1));
+        assert_eq!(ks10_core_uop::alu::word(reg("PC")), W36::ZERO);
         // "ENTER EXEC MODE", "CLEAR TRAP FLAGS".
         assert!(!m.flags.user && !m.flags.trap1 && !m.flags.trap2);
     }
@@ -82,7 +85,7 @@ fn power_up_ends_in_the_halt_loop() {
         let location_0 = if fill == W40::ZERO {
             W36::ZERO
         } else {
-            ks10uop::alu::word(fill)
+            ks10_core_uop::alu::word(fill)
         };
         assert_eq!(m.memory[0], location_0);
         assert_eq!(m.memory[1], W36::ZERO);

@@ -20,8 +20,8 @@
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use ks10::console::Script;
-use ks10::{Machine, boot};
+use ks10_core_soft::console::Script;
+use ks10_core_soft::{Machine, boot};
 
 struct Copies(Vec<PathBuf>);
 

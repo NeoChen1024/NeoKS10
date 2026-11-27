@@ -181,7 +181,7 @@ the files with a Python script):
 The emulator implements the microcode behaviour in software, so it skips
 the microcode file.
 
-### Device model in `emu/ks10`
+### Device model in `emu/ks10-core-soft`
 
 - The adapters: the paging RAM, the status register with the PI levels
   of the two request groups, Unibus init, and DMA through the map.
@@ -200,17 +200,17 @@ the microcode file.
   and the IMP comes later.
 - The 8080 `BT` command runs the channel command list `DSKSEQ`
   (`dr.m80`) on the emulated RH11. The `MB` command runs `MTASEQ` and
-  `QTXFR` on the emulated TM03 (`emu/ks10/src/boot.rs`). `MT` gives the
+  `QTXFR` on the emulated TM03 (`emu/ks10-core-soft/src/boot.rs`). `MT` gives the
   same result in the emulator, because the emulator does not load
   microcode.
 
-**[measured]** 2026-11-27 (`cargo test --release -p ks10 --test its` with
+**[measured]** 2026-11-27 (`cargo test --release -p ks10-core-soft --test its` with
 `KS10_ITS_DISK` naming the step 0 `rp0.dsk`): `BT`, then `its` and ESC G
 at the DSKDMP prompt, start ITS. The Salvager runs, ITS prints `DB ITS
 1652 IN OPERATION`, the system job logs in, and a login on the console
 lists `SYS;`. This takes about 140 million steps.
 
-**[measured]** 2026-11-27 (`cargo test --release -p ks10 --test tape`
+**[measured]** 2026-11-27 (`cargo test --release -p ks10-core-soft --test tape`
 with the same `KS10_ITS_DISK`; the tapes come from the same directory):
 
 - `MB` on transport 2 with `dskdmp.tape` prints `ITS MTBOOT.176`. ESC G
@@ -248,7 +248,7 @@ with the same `KS10_ITS_DISK`; the tapes come from the same directory):
 | `unsafe` only in `plio::mmio` | The memory of step 5 is a `plio` mapping. All other code is safe |
 | Each dependency is a decision | `toml` and `serde` read the configuration file, and `reedline` is the line editor of the operator console (see [Design decisions](#design-decisions)) |
 | Decoders and constants from `spec/` | The instruction table and a device register table in `spec/` generate the Rust constants, as `spec/regmap.toml` does now |
-| C interface for co-simulation and the PL bridge | The `ks10` library exports C functions: create a machine, run one instruction, read the instruction record |
+| C interface for co-simulation and the PL bridge | The `ks10-core-soft` library exports C functions: create a machine, run one instruction, read the instruction record |
 | Device I/O with `pread` and `pwrite` | A disk transfer reads or writes the image file directly into the guest memory, when the adapter map gives contiguous memory |
 | Disk image with 8 bytes for each word | The format of step 0 (above). Images of step 0 work without a conversion |
 | Tape image in the format of the ITS tools | The SIMH tape image format with core dump words (above) |
@@ -260,7 +260,7 @@ The crates of `emu/`:
 | Crate | Contents |
 |---|---|
 | `pdp10` | `Word`, octal text, instruction decode generated from `spec/instructions.*` |
-| `ks10` | `Machine`: the processor (interpreter), memory, paging, APR, PI, timers, 8080 console, Unibus adapters, devices, the host layer. The C interface |
+| `ks10-core-soft` | `Machine`: the processor (interpreter), memory, paging, APR, PI, timers, 8080 console, Unibus adapters, devices, the host layer. The C interface |
 | `neoks10` (the binary `neoks10`) | Command line, configuration, operator console, control socket, scripts, image tools |
 | `plio` | Access to the PL (exists) |
 
@@ -359,7 +359,7 @@ emulator waits. Both take the wall clock into the virtual time;
 - `cpu halt` and `cpu show` on an idle ITS after the login: PC 17 in user
   mode, AC 17 `344000,,000017` (`AOJA 0,17`), AC 0 `254200,,031500`, and
   `254200,,000000` (`JRST 4,`) in ACs 1 to 16.
-- The ITS test `idle_skip_boots_its_the_same` (`emu/ks10/tests/idle.rs`)
+- The ITS test `idle_skip_boots_its_the_same` (`emu/ks10-core-soft/tests/idle.rs`)
   boots ITS twice and lists `SYS;`. 118406612 of 138001000 instructions
   were idle passes. The state of the two machines was the same at each
   check, and the two disk images were the same at the end.
@@ -556,7 +556,7 @@ guest:
 
 - While an `expect` waits, the thread looks at the CTY output after each
   instruction that prints. The match has the count of that instruction.
-- A `send` comes 100000 instructions (`ks10::console::ANSWER_DELAY`)
+- A `send` comes 100000 instructions (`ks10_core_soft::console::ANSWER_DELAY`)
   after the previous step of the script. The DEC diagnostic monitor
   loses characters that come while it prints (`console.rs`).
 - Other commands run at once, at the count of the previous step.
@@ -667,7 +667,7 @@ listener on a LAN needs an explicit address.
 - `make its-boot KS10_ITS_DISK=PATH`: PATH is `rp0.dsk` of the ITS build
   (`pdp10-ks`); `dskdmp.tape` and `minsys.tape` are in the same
   directory. The target works on copies in `build/its-boot/`.
-  1. The tests of `emu/ks10` that need the images: the boot and the
+  1. The tests of `emu/ks10-core-soft` that need the images: the boot and the
      listing of `SYS;`, the idle loop, the tapes.
   2. `neoks10` runs `tests/its-boot/boot.script` (boot, login, `:listf
      sys;`) with `--record`. The output must have `FREE BLOCKS`.
@@ -697,7 +697,7 @@ is the PC of the first record, because SIMH runs a loop at 100 at
 start-up to measure its speed. KLH10 takes its debug loop (`apr_walk`)
 when `KS10_TRACE` is set.
 
-`emu/ks10/tests/oracle.rs` runs the cases against each emulator that a
+`emu/ks10-core-soft/tests/oracle.rs` runs the cases against each emulator that a
 variable names. `make check` runs 2000 cases against each emulator that
 `make oracle` built, and says SKIPPED for a missing one.
 
@@ -706,7 +706,7 @@ variable names. `make check` runs 2000 cases against each emulator that
 2. Both emulators run the case from executive mode, with flags 0, no
    paging and no interrupts. A reference emulator runs 500 cases in one
    process. E and E + 1 are not in the halt status block (500 to 520),
-   which the HALT of `emu/ks10` writes.
+   which the HALT of `emu/ks10-core-soft` writes.
 3. The test compares the records before the instruction and before the
    HALT, the record count, and the words at E and E + 1.
 4. A case that found a difference goes into `tests/oracle/cases` as
@@ -742,7 +742,7 @@ boot and the unit tests check them.
 and KLH10 99745 cases, 0 differences, 242 s for both (KLH10 takes 19 s).
 2000 cases take 5 s. `KS10_ORACLE_NOSKIP` also runs the cases of `skip`:
 then 807 of 100001 cases differ from SIMH, 744 of them FDV. The runs
-found two faults of `emu/ks10`: IMUL of -2^35 by -2^35 gave 0, not
+found two faults of `emu/ks10-core-soft`: IMUL of -2^35 by -2^35 gave 0, not
 400000,,0 (`muldiv.rs`; SIMH), and ASH of a negative number by more than
 35 places set no Overflow (`shift.rs`; KLH10). Without the Overflow flag
 of an addition, 11 of 1958 cases differ from SIMH and 13 of 1995 from
@@ -773,13 +773,13 @@ programs can also run alone **[manual]** (`DSKAA.TXT`, sections 3.1 and
   (`DSKCA.TXT`, sections 3.2 and 3.3). The answer `Y` asks for the left
   and right half of the switches in octal (`DSKAM.TXT`, section 3.2).
 - With all switches 0, `SUBSM` enables the pager with `WREBR`
-  **[measured]** (2026-11-27, `emu/ks10` diag example: `WREBR` at 3753
+  **[measured]** (2026-11-27, `emu/ks10-core-soft` diag example: `WREBR` at 3753
   with E bit 22 set). It expects the KI style paging of the DEC
   microcode, which the ITS microcode does not have. The switch `INHPAG`,
   left half 000100, inhibits paging and traps (`DSKAM.TXT`, section 4.0).
   So the answers are `Y`, `000100` and `0`.
 - After each pass, `SUBSM` prints `END PASS n.` (decimal) **[measured]**
-  (2026-11-27, `DSKAI` to `DSKAM` in `emu/ks10`).
+  (2026-11-27, `DSKAI` to `DSKAM` in `emu/ks10-core-soft`).
 - `SMCPU.CMD` lists the processor diagnostics in the order in which the
   monitor runs them.
 
@@ -791,7 +791,7 @@ submodule update --init tools/tapeutils`). The files stay in
 1. The target builds `t10backup` of tapeutils and extracts the files of
    the tape. A `.SAV` file is a list of blocks (`-count,,address-1`, then
    the words) and ends with `JRST start`.
-2. `emu/ks10/tests/diag.rs` reads the run file `SMCPU.CMD`. Each line has
+2. `emu/ks10-core-soft/tests/diag.rs` reads the run file `SMCPU.CMD`. Each line has
    the name, the passes, the right half of the switches and the
    iterations in octal **[manual]** (`SMMON.TXT`, section 5.0). Each
    program runs for the iterations of its line, in its own thread.
@@ -853,7 +853,7 @@ other programs, a difference that comes from the ITS microcode goes into
 
 ### Processor model
 
-The software processor in `emu/ks10` follows the ITS microcode. These
+The software processor in `emu/ks10-core-soft` follows the ITS microcode. These
 parts are modelled as hardware state, not as microcode steps:
 
 - The page table of the pager (512 entries, one for each DEC page). The
@@ -882,7 +882,7 @@ Differences from the microcode:
 2. The interpreter without paging, with tests against the reference
    traces.
 3. ITS paging, APR, PI, timers, the 8080 console words, the halt status
-   block. Done in `emu/ks10`, except the Unibus interrupts, which come
+   block. Done in `emu/ks10-core-soft`, except the Unibus interrupts, which come
    with the adapters.
 4. The adapters, the RH11 with the TM03: boot from tape (salvager,
    DSKDMP). Done.
@@ -959,7 +959,7 @@ Open:
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
 
-- The microcode-level model (decision 17), `emu/ks10uop`
+- The microcode-level model (decision 17), `emu/ks10-core-uop`
   ([`microcode-model.md`](microcode-model.md)). The microcode of the ITS
   build loads and is checked. Next is its first stage: the data path and
   the microcode without paging and I/O, on a flat memory. It decides the

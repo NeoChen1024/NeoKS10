@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use ks10::flags::Flags;
-use ks10::{Machine, Stop};
+use ks10_core_soft::flags::Flags;
+use ks10_core_soft::{Machine, Stop};
 use pdp10::instructions::{self as ins, Class};
 use pdp10::{Half, W36};
 

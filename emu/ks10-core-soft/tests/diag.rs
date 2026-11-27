@@ -20,9 +20,9 @@
 
 use std::path::PathBuf;
 
-use ks10::console::Script;
-use ks10::sav::{self, Packing};
-use ks10::{Machine, Stop};
+use ks10_core_soft::console::Script;
+use ks10_core_soft::sav::{self, Packing};
+use ks10_core_soft::{Machine, Stop};
 use pdp10::Half;
 
 fn dir() -> Option<PathBuf> {

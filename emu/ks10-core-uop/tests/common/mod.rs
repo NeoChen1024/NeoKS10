@@ -2,10 +2,10 @@
 
 #![allow(dead_code)]
 
-use ks10uop::alu::W40;
-use ks10uop::cram::{CRAM_WORDS, Microword};
-use ks10uop::listing::{self, DROM_WORDS};
-use ks10uop::machine::{Machine, Stop};
+use ks10_core_uop::alu::W40;
+use ks10_core_uop::cram::{CRAM_WORDS, Microword};
+use ks10_core_uop::listing::{self, DROM_WORDS};
+use ks10_core_uop::machine::{Machine, Stop};
 
 /// The text of the listing (`KS10_MCR_LISTING`), or None after a SKIPPED
 /// line.

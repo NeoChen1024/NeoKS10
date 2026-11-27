@@ -13,8 +13,8 @@
 
 use std::io::Write;
 
-use ks10::console::Script;
-use ks10::{Machine, Stop, boot};
+use ks10_core_soft::console::Script;
+use ks10_core_soft::{Machine, Stop, boot};
 
 /// Text with \\r, \\n, \\e and \\xHH escapes.
 fn unescape(x: &str) -> String {
@@ -181,8 +181,8 @@ fn main() {
     {
         if let Ok(a) = u64::from_str_radix(a, 8) {
             let saved = m.flags;
-            m.flags = ks10::flags::Flags(0);
-            let w = m.vread(pdp10::Half::wrap(a), ks10::machine::Ref::D1);
+            m.flags = ks10_core_soft::flags::Flags(0);
+            let w = m.vread(pdp10::Half::wrap(a), ks10_core_soft::machine::Ref::D1);
             m.flags = saved;
             println!("  exec {a:06o}: {:?}", w.map(|w| w.halves_text()));
         }

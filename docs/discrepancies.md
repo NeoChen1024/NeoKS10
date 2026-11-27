@@ -27,7 +27,7 @@ The project uses the microcode: `APRID` gives 020406,,003301.
   ARE ON").
 
 The project uses the microcode: a program request counts on an active
-level only (`emu/ks10/src/apr.rs`, `Pi::accept`).
+level only (`emu/ks10-core-soft/src/apr.rs`, `Pi::accept`).
 
 ## Bits 0 and 2 of the RDUBR word
 
@@ -39,7 +39,7 @@ level only (`emu/ks10/src/apr.rs`, `Pi::accept`).
   until a WRUBR sets them. ITS always sets both bits, so both sources
   agree for ITS.
 
-The project uses the microcode (`emu/ks10/src/pag.rs`, `wrubr`).
+The project uses the microcode (`emu/ks10-core-soft/src/pag.rs`, `wrubr`).
 
 ## The AC of MOVSRJ at the end
 
@@ -50,7 +50,7 @@ The project uses the microcode (`emu/ks10/src/pag.rs`, `wrubr`).
   with the flags into AC.
 
 The project uses the microcode: AC bits 9-35 are 0 at the end
-(`emu/ks10/src/extend.rs`, `movs`).
+(`emu/ks10-core-soft/src/extend.rs`, `movs`).
 
 ## FAD with a large exponent difference
 
@@ -63,7 +63,7 @@ The project uses the microcode: AC bits 9-35 are 0 at the end
 - **[emulator]** sims `pdp10-ks` 9556eca0 (`kx10_cpu.c`, FAD, for KL and
   KS): 0 for a difference of 65 or more.
 
-The project uses the microcode (`emu/ks10/src/float.rs`, `fad`).
+The project uses the microcode (`emu/ks10-core-soft/src/float.rs`, `fad`).
 
 ## TM03: a space that stops at a tape mark
 
@@ -77,7 +77,7 @@ The project uses the microcode (`emu/ks10/src/float.rs`, `fad`).
   accepts FCE after a space.
 
 The project uses the 8080 source: a space that stops at a tape mark
-before the count ends sets FCE (`emu/ks10/src/tm03.rs`).
+before the count ends sets FCE (`emu/ks10-core-soft/src/tm03.rs`).
 
 ## TM03: a read of a tape mark
 
@@ -107,7 +107,7 @@ error.
 
 The project uses the microcode. The differential run does not compare
 ASH left shifts of more than 28 places, or ASHC left shifts of more than
-29 places (`emu/ks10/tests/oracle.rs`, `skip`).
+29 places (`emu/ks10-core-soft/tests/oracle.rs`, `skip`).
 
 ## Shift count -256
 
@@ -118,7 +118,7 @@ ASH left shifts of more than 28 places, or ASHC left shifts of more than
   `SC = ((0377 ^ AB) + 1) & 0377` is 0 for this E, so nothing shifts. ROT
   and ROTC use 0400 for this case.
 
-The project uses the microcode (`emu/ks10/src/shift.rs`, `count`). The
+The project uses the microcode (`emu/ks10-core-soft/src/shift.rs`, `count`). The
 differential run does not compare this count.
 
 ## CIRC
@@ -142,14 +142,14 @@ CIRC cases of the differential run agree with KLH10.
   (its magnitude is 200377,,000001; bit 9 is 0).
 - **[measured]** 2026-11-27: sims 9556eca0 `pdp10-ks` gives
   777375,,773772 for this test and prints "C(AC) FAILED" at 032610. It
-  passes the other FDV tests of DSKCB. `emu/ks10` passes DSKCB (`make
+  passes the other FDV tests of DSKCB. `emu/ks10-core-soft` passes DSKCB (`make
   diag`).
 - **[measured]** 2026-11-27, `oracle.rs` without `skip`: with normalized
   operands, 744 of 2075 FDV cases (all forms) differ in bit 35 of the
   quotient. No DEC vector with normalized operands separates the two
   emulators. Which one does what the microcode does is open
   (`docs/unknowns.md`).
-- **[measured]** 2026-11-27: KLH10 6d733f2a agrees with `emu/ks10` in
+- **[measured]** 2026-11-27: KLH10 6d733f2a agrees with `emu/ks10-core-soft` in
   all 2123 FDV cases of 100000 (both emulators are rank 4; this does not
   decide the case).
 - **[microcode]** `src/kshack/flt.5`, DCODE of FDVB and FDVRB (FL-BOTH):
@@ -272,7 +272,7 @@ the control RAM.
   5090e7a1, `microcode/V130R1/simple.mic`, `ASH36 LEFT`, `ASHL`). The DEC
   KS10 thus behaves in the same way.
 - **[measured]** 2026-11-27, the microcode-level model
-  (`emu/ks10uop/tests/instructions.rs`). ASH 1,2 with AC 1 =
+  (`emu/ks10-core-uop/tests/instructions.rs`). ASH 1,2 with AC 1 =
   200000,,000001 gives AC 1 = 4, OV 1 and TRAP 1 0: the first step
   overflows, the second does not. Random left shifts with ASH and ASHC
   agree with the rule "TRAP 1 is the overflow of the last step".
@@ -284,7 +284,7 @@ the control RAM.
   TRAP 1 take the overflow of the step, with no hold. It runs the DEC
   microcode, so its TRAP 1 agrees with the rule above. Its OV does not:
   DPE9 E68 holds OV, so OV after ASH 1,2 of 200000,,000001 is 1, but
-  KS10FPGA gives 0. The model and `emu/ks10` keep OV.
+  KS10FPGA gives 0. The model and `emu/ks10-core-soft` keep OV.
 - No DEC KS10 diagnostic tests the case (a reading of the KLAD sources,
   2026-11-27). DSKAJ tests AROV with ASH and ASHC by 1 place, and DSKEA
   the trap with ASH by 1 place: there, the only step is the last step.
@@ -293,10 +293,10 @@ the control RAM.
   before the comparison (DSKDAM, `SENTRY`, `CHECK`). It enables the traps
   with `WREBR` 020000 (`LTRPEN`), so a trap clears the flags of the
   machine, and the arithmetic trap instruction in 421 is a JFCL (seen in
-  a run on `emu/ks10`, 2026-11-27).
+  a run on `emu/ks10-core-soft`, 2026-11-27).
 
-The project uses the microcode and the schematics (rank 1). `emu/ks10`
+The project uses the microcode and the schematics (rank 1). `emu/ks10-core-soft`
 sets Trap 1 to the overflow of the last step (`shift.rs`, `Ash`). The
 differential run takes Trap 1 of SIMH and KLH10 as 0 for a case with an
 overflow only before the last step, and compares the rest
-(`emu/ks10/tests/oracle.rs`, `microcode_trap_1`).
+(`emu/ks10-core-soft/tests/oracle.rs`, `microcode_trap_1`).

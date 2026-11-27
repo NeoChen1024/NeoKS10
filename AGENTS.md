@@ -80,7 +80,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), and their generators |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10` is the machine and the software processor. `ks10uop` is the microcode-level model. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-core-soft` is the machine and the software processor. `ks10-core-uop` is the microcode-level model. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -97,8 +97,8 @@ directory that `.gitignore` excludes.
 
 `make gen` writes files from `spec/`: `rtl/gen/`, `tb/gen/`,
 `emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
-`emu/ks10/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
-`docs/devices.md`. It also writes `emu/ks10uop/src/fields.rs` from the
+`emu/ks10-core-soft/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
+`docs/devices.md`. It also writes `emu/ks10-core-uop/src/fields.rs` from the
 field definitions of the ITS microcode. It also writes `docs/console.md` from the command table
 of `emu/neoks10`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
@@ -122,13 +122,13 @@ fails.
   `kn10-ks-its`, pinned in `oracle/*.pin`) with the trace patches of
   `oracle/` into `build/`. The short differential run of `make check`
   uses them, through the variables `KS10_ORACLE` and `KS10_ORACLE_KLH10`
-  of `emu/ks10/tests/oracle.rs`. Without one, `make check` prints
+  of `emu/ks10-core-soft/tests/oracle.rs`. Without one, `make check` prints
   SKIPPED for it: a skip is not a pass.
 - `make microcode KS10_ITS_DISK=<rp0.dsk>` extracts the listing of the
   microcode from the dump tape of the ITS build (`output.tape`, next to
   `rp0.dsk`), compares it with the RAM file on the disk, and runs the
-  tests of `emu/ks10uop` that need it (the power-up sequence and the
-  single instructions). Run it when `emu/ks10uop` or the microcode
+  tests of `emu/ks10-core-uop` that need it (the power-up sequence and the
+  single instructions). Run it when `emu/ks10-core-uop` or the microcode
   changes.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
@@ -164,7 +164,7 @@ fails.
 
 - A guest program can never cause a panic or a crash of the emulator. A
   guest error is a guest trap or a console message.
-- The modes for tests are deterministic: the `ks10` library, and
+- The modes for tests are deterministic: the `ks10-core-soft` library, and
   `neoks10 run --pace fast`, `idle` or `realtime`. In them, all input that
   changes with time (clock, terminal, network) goes through one layer that
   can record and replay it. This layer must exist and work.

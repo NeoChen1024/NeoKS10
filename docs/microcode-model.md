@@ -1,6 +1,6 @@
 # Microcode-level model
 
-`emu/ks10uop` is a model of the KS10 at the level of the microcode. A
+`emu/ks10-core-uop` is a model of the KS10 at the level of the microcode. A
 model of the data path runs the microcode that the ITS build assembles.
 If the sources disagree about an instruction, this model decides
 (AGENTS.md, "Sources of truth"). It is also the model that the logic in
@@ -9,8 +9,8 @@ If the sources disagree about an instruction, this model decides
 The work has three stages:
 
 1. The data path and the microsequencer on a flat memory, without paging
-   and I/O. Random instructions compare it with `emu/ks10`.
-2. ITS paging, the I/O cycles to the devices of `emu/ks10`, interrupts,
+   and I/O. Random instructions compare it with `emu/ks10-core-soft`.
+2. ITS paging, the I/O cycles to the devices of `emu/ks10-core-soft`, interrupts,
    page fail. Then the diagnostics and an ITS boot.
 3. A model of the 8080 runs the real console program.
 
@@ -43,14 +43,14 @@ The 8080 loads it from the RAM file before it starts the microcode
 3. The pages after the first come from the next sectors: the transfer
    list `QXFR` (`dr.m80`) sets no disk address.
 
-`ks10::boot::read_microcode` does these steps on the emulated RH11 and
+`ks10_core_soft::boot::read_microcode` does these steps on the emulated RH11 and
 RP06.
 
 `.RAMFILE` in `ks10` gives the layout of an entry **[microcode]**: 108
 bits, the listed fields from left to right, two parity bits and two pads
 (MICRO, `$RAMFL` and `RAMFL4`). The generator `spec/gen_microcode.py`
 reads this layout and the field definitions into
-`emu/ks10uop/src/fields.rs`.
+`emu/ks10-core-uop/src/fields.rs`.
 
 **Parity.** The parity bit of `ODD PARITY<ranges>` is the XOR of the given
 bits of the RAM file entry **[microcode]** (MICRO, `PNTB91`). With the
@@ -60,7 +60,7 @@ the complement. The ranges are bits of the RAM file entry, not of the
 microword.
 
 **Check of the RAM file [measured]** 2026-11-27 (`make microcode`, test
-`emu/ks10uop/tests/ram_file.rs`). The RAM file was read from `rp0.dsk` of
+`emu/ks10-core-uop/tests/ram_file.rs`). The RAM file was read from `rp0.dsk` of
 the ITS build of 2026-11-26 as the 8080 reads it:
 
 - All 4000 entries have the right parity bits and zero pads.
@@ -106,8 +106,8 @@ support, not proof.
 
 This section gives what each microword field does. The field values and
 their names are in the field definitions of `ks10` **[microcode]**; the
-generated `emu/ks10uop/src/fields.rs` has their positions. The exact
-logic of each mixer and condition is in the code of `ks10uop`, with its
+generated `emu/ks10-core-uop/src/fields.rs` has their positions. The exact
+logic of each mixer and condition is in the code of `ks10-core-uop`, with its
 source. Bit numbers of a 36-bit word are those of DEC (bit 0 at the left).
 
 Schematic citations give the drawing, its revision and the chips.
@@ -594,7 +594,7 @@ clock, through E3 R2. E3 R3 copies E1 at each clock and gives DPMC 1 MSEC.
 
 Stage 1 runs single instructions that need no I/O, in the state after
 power-up: PAGE EN, TRAP EN and the APR enables are 0, so there is no
-paging, no cache and no trap. The model is `emu/ks10uop/src/alu.rs` and
+paging, no cache and no trap. The model is `emu/ks10-core-uop/src/alu.rs` and
 `machine.rs`.
 
 A function is either modelled or a stop with "unmodelled". The model
@@ -659,7 +659,7 @@ at the NICOND addresses for codes 0, 4 and 6. KS10FPGA has no such
 inputs in its NICOND dispatch **[emulator]** (KS10FPGA 5090e7a1,
 `disp_ni.v`).
 
-**Power-up [measured]** 2026-11-27 (`emu/ks10uop/tests/power_up.rs`, the
+**Power-up [measured]** 2026-11-27 (`emu/ks10-core-uop/tests/power_up.rs`, the
 ITS listing 262). The power-up sequence runs from 0 to `PWRON` in 637
 cycles, from both fills. The table of the powers of ten in the
 workspace equals 10^n for n from 0 to 21, as the test computes them, and
@@ -692,9 +692,9 @@ instruction, finds RUN 0 at NICOND (code 5), and halts with the halt code
 at 500 (`WRTHSB`, `DUMP`). The test checks PC, ONE, MASK, XWD1 and the
 halt code there.
 
-**Result [measured]** 2026-11-27 (`emu/ks10uop/tests/instructions.rs`,
+**Result [measured]** 2026-11-27 (`emu/ks10-core-uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
-and the words at 2000 and 2001 with `emu/ks10`. All 42 cases agree,
+and the words at 2000 and 2001 with `emu/ks10-core-soft`. All 42 cases agree,
 from both fills: moves to and from memory and ACs, ADD and SUB with
 overflow and carries, ADDB, AND, IOR, SETZM, AOS (memory, AC
 destination, AC operand), HRRZ, HLL, CAIE, SKIPL, an indexed and an
@@ -704,7 +704,7 @@ both ways and by 40 places; ROT both ways. 48 random left shifts with ASH
 and ASHC from a fixed seed also agree. TRAP 1 after ASH is the overflow
 of the last step ([`discrepancies.md`](discrepancies.md), "ASH: TRAP 1
 when an early step loses significance"). Without that rule in
-`emu/ks10`, 15 of the 90 cases differ, from both fills.
+`emu/ks10-core-soft`, 15 of the 90 cases differ, from both fills.
 
 The run executes these codes (both fills, with the halt path):
 

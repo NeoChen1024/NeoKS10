@@ -187,17 +187,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
-name = "ks10"
+name = "ks10-core-soft"
 version = "0.1.0"
 dependencies = [
  "pdp10",
 ]
 
 [[package]]
-name = "ks10uop"
+name = "ks10-core-uop"
 version = "0.1.0"
 dependencies = [
- "ks10",
+ "ks10-core-soft",
  "pdp10",
  "sha2",
 ]
@@ -265,7 +265,7 @@ name = "neoks10"
 version = "0.1.0"
 dependencies = [
  "crossterm",
- "ks10",
+ "ks10-core-soft",
  "pdp10",
  "reedline",
  "serde",

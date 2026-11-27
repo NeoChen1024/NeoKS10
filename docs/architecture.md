@@ -52,7 +52,7 @@ see the same data without cache maintenance.
 | Device register table | Data file | One definition of each I/O device register |
 | Register map | Data file | One definition of the PS/PL interface. A SystemVerilog package and Rust constants come from it |
 | Emulator | Rust | Console, devices, image formats, and the software processor |
-| Microcode-level model | Rust | `emu/ks10uop`: the data path, the assembled ITS microcode, and the 8080 model ([`microcode-model.md`](microcode-model.md)) |
+| Microcode-level model | Rust | `emu/ks10-core-uop`: the data path, the assembled ITS microcode, and the 8080 model ([`microcode-model.md`](microcode-model.md)) |
 | Processor core | SystemVerilog | The KS10 data path. It is multi-cycle. A pipeline is a later step |
 | Memory bridge | SystemVerilog | Cache, write queue, AXI master to the PS memory |
 | Panel | SystemVerilog | Lamp brightness and the HDMI signal |

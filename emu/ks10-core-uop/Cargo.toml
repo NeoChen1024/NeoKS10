@@ -1,5 +1,5 @@
 [package]
-name = "ks10uop"
+name = "ks10-core-uop"
 version = "0.1.0"
 description = "The KS10 at the level of the microcode: the data path runs the assembled ITS microcode"
 edition.workspace = true
@@ -14,5 +14,5 @@ workspace = true
 pdp10 = { path = "../pdp10" }
 
 [dev-dependencies]
-ks10 = { path = "../ks10" }
+ks10-core-soft = { path = "../ks10-core-soft" }
 sha2 = { version = "0.11.2", default-features = false }

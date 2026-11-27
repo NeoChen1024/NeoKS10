@@ -1,15 +1,15 @@
-# Cases of emu/ks10/tests/oracle.rs: cases that found a difference, and
+# Cases of emu/ks10-core-soft/tests/oracle.rs: cases that found a difference, and
 # directed cases for operands that the generator does not reach. One line each,
 # in octal: the instruction at 1000, the 16 ACs, then ADDR:WORD for E and
 # E + 1 if they are not ACs. The lines do not depend on the generator.
 
 # Seed 14276 of the first generator: IMUL 15,15 with AC 15 = -2^35 gives
 # 400000,,0 and Overflow (simple.42, IMUL2, IMUL3). Fixed in
-# emu/ks10/src/muldiv.rs.
+# emu/ks10-core-soft/src/muldiv.rs.
 220640000015 000000000075 777777000000 416633163401 400000000000 000000000000 344747712246 000000000022 777777777777 653520730254 000000000000 106062746072 777777777755 000000000060 400000000000 711264711164 712412631267
 
 # Seed 4830, found with KLH10: ASH 1,2065 (53 places) with AC 1 = -1 gives
-# 400000,,0 and Overflow (simple.42, ASHL). Fixed in emu/ks10/src/shift.rs.
+# 400000,,0 and Overflow (simple.42, ASHL). Fixed in emu/ks10-core-soft/src/shift.rs.
 240040002065 130223427736 777777777777 547127152270 000000000044 200000000000 175662301612 000000000010 000000000001 577777777777 675137350141 000000000060 477426570033 507427547747 777777777714 421305241623 654677235712 2065:450457672077 2066:000000000032
 
 # Directed: ASHC 1,107 (71 places) and ASHC 1,106 (70 places) with AC 1 and

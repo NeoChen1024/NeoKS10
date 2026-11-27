@@ -2,7 +2,7 @@
 """Generate the device register files from spec/devices.toml.
 
 Outputs (paths relative to the repository root):
-  emu/ks10/src/devregs.rs   one Rust module for each device
+  emu/ks10-core-soft/src/devregs.rs   one Rust module for each device
   docs/devices.md           the tables for people
 
 Usage: gen_devices.py [--check] [--its DIR] [--root DIR]
@@ -20,7 +20,7 @@ import tomllib
 from pathlib import Path
 
 SOURCE = "spec/devices.toml"
-OUT_RS = "emu/ks10/src/devregs.rs"
+OUT_RS = "emu/ks10-core-soft/src/devregs.rs"
 OUT_MD = "docs/devices.md"
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 DEV_RE = re.compile(r"^[a-z][a-z0-9_]*$")

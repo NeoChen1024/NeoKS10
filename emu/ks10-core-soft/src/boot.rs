@@ -11,7 +11,7 @@
 //! 3. Word 103 of the home block points to the page of file pointers; read
 //!    it to 1000 (GOODPK, BLKRDR).
 //! 4. Word 2 points to the microcode (MICROP, DMEM2CRAM). `BT` does not
-//!    load it; [`read_microcode`] reads it for `ks10uop`. Word 4 points to the monitor pre-boot; read its
+//!    load it; [`read_microcode`] reads it for `ks10-core-uop`. Word 4 points to the monitor pre-boot; read its
 //!    first page to 1000 (LBINT with RM100 = 4).
 //! 5. Words 36 to 40: the RH11 base address with the adapter number, the
 //!    unit, the density and slave (PASSSRC). Start at 1000.

@@ -1,5 +1,5 @@
 [package]
-name = "ks10"
+name = "ks10-core-soft"
 version = "0.1.0"
 description = "The KS10 machine with the ITS microcode behaviour: processor, memory, console, devices"
 edition.workspace = true

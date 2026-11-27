@@ -4,7 +4,7 @@
 #
 # This is the only definition of these registers in the repository
 # (AGENTS.md, "Sources of truth"). spec/gen_devices.py writes the Rust
-# constants (emu/ks10/src/devregs.rs) and docs/devices.md from it.
+# constants (emu/ks10-core-soft/src/devregs.rs) and docs/devices.md from it.
 # `gen_devices.py --check --its DIR` compares every entry that has an
 # `its` name with the value of that symbol in the ITS system sources
 # (src/system/ of the ITS tree).
