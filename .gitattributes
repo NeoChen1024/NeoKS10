@@ -1,0 +1,2 @@
+# The patch of SIMH keeps the CR LF line ends of kx10_cpu.c.
+oracle/*.patch -text

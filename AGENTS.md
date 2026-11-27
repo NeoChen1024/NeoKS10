@@ -101,6 +101,11 @@ fails.
 
 - `make check` is: format, lint, unit tests, a check that the generated
   files are current, and a short random differential run.
+- `make oracle` builds the reference emulator (SIMH `pdp10-ks`, pinned in
+  `oracle/sims.pin`) with the trace patch of `oracle/` into `build/`. The
+  short differential run of `make check` uses it, through the variable
+  `KS10_ORACLE` of `emu/ks10/tests/oracle.rs`. Without it, `make check`
+  prints SKIPPED for that run: a skip is not a pass.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example

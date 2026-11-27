@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references its-boot diag
+.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot diag oracle
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -24,8 +24,9 @@ gen:
 	$(PYTHON) spec/gen_devices.py
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown > ../docs/console.md
 
-# Format, lint, unit tests, and a check that the generated files are current.
-check: check-gen check-py check-rust check-rtl
+# Format, lint, unit tests, a check that the generated files are current,
+# and a short random differential run against the reference emulator.
+check: check-gen check-py check-rust check-rtl check-oracle
 
 # The instruction table is also compared with the ITS sources of the
 # submodule 3rdparty/its (microcode, MIDAS, KSDEFS).
@@ -43,6 +44,18 @@ check-rust:
 	cd emu && $(CARGO) fmt --check
 	cd emu && $(NICE) $(CARGO) clippy --locked --all-targets -- -D warnings
 	cd emu && $(NICE) $(CARGO) test --locked
+
+# 2000 random instructions against SIMH (emu/ks10/tests/oracle.rs). The
+# run needs `make oracle`; without its program, the target says so and
+# does not fail.
+ORACLE_CASES ?= 2000
+check-oracle:
+	@if [ -x $(ORACLE_SIMH) ]; then \
+	    cd emu && KS10_ORACLE=$(ORACLE_SIMH) KS10_ORACLE_CASES=$(ORACLE_CASES) \
+	        $(NICE) $(CARGO) test -q --locked --release -p ks10 --test oracle -- --nocapture; \
+	else \
+	    echo "check-oracle: SKIPPED, $(ORACLE_SIMH) is missing (make oracle)"; \
+	fi
 
 check-rtl:
 	$(VERILATOR) --lint-only -Wall rtl/gen/regmap_pkg.sv
@@ -167,6 +180,21 @@ diag:
 	cd $(DIAG_DIR)/files && ../t10backup -x -f ../ks_diag_gs.tap '*' > ../t10backup.log
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10 \
 	    --test diag -- --nocapture
+
+# The reference emulator with the trace hook (oracle/). The submodule
+# tools/sims of 3rdparty/its must be at the commit of oracle/sims.pin. The
+# build works on a copy in the build output; the submodule stays clean.
+ORACLE_DIR = $(abspath $(BUILD_DIR))/oracle
+SIMS = $(ITS_TREE)/tools/sims
+SIMS_COMMIT = $(shell sed -n 's/^commit //p' oracle/sims.pin)
+ORACLE_SIMH = $(ORACLE_DIR)/sims/BIN/pdp10-ks
+oracle:
+	@test -f $(SIMS)/makefile || { echo "oracle: run git -C $(ITS_TREE) submodule update --init tools/sims" >&2; exit 2; }
+	@test "$$(git -C $(SIMS) rev-parse HEAD)" = "$(SIMS_COMMIT)" || { echo "oracle: tools/sims is not at the commit of oracle/sims.pin" >&2; exit 2; }
+	rm -rf $(ORACLE_DIR)/sims && mkdir -p $(ORACLE_DIR)/sims
+	git -C $(SIMS) archive HEAD | tar -x -C $(ORACLE_DIR)/sims
+	cd $(ORACLE_DIR)/sims && patch -p1 < $(CURDIR)/oracle/sims-trace.patch
+	$(NICE) $(MAKE) -C $(ORACLE_DIR)/sims pdp10-ks
 
 # Third-party files (third-party.lock) into references/, which git ignores.
 # bitsavers.org has an rsync server; pdp-10.trailing-edge.com is read with

@@ -653,8 +653,8 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
 
 ### Tests
 
-- Each instruction: differential runs against the instruction records of
-  the reference emulator, with a trace patch in `oracle/` (AGENTS.md).
+- Each instruction: random differential runs against the reference
+  emulator; see [Differential runs](#differential-runs).
 - The DEC KS10 diagnostics (`make diag`); see [Diagnostics](#diagnostics).
 - `make its-boot KS10_ITS_DISK=PATH`: PATH is `rp0.dsk` of the ITS build
   (`pdp10-ks`); `dskdmp.tape` and `minsys.tape` are in the same
@@ -670,6 +670,55 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
   **[measured]** 2026-11-27: 25 s on the x86-64 host. A script with an
   `expect` that fails makes the target fail.
 - `make its-build`: build ITS from source with the scripts of `its/`.
+
+### Differential runs
+
+The reference emulator is SIMH `pdp10-ks`, the submodule `tools/sims` of
+`3rdparty/its` at the commit of `oracle/sims.pin`. `make oracle` copies it
+into `build/oracle/`, applies `oracle/sims-trace.patch` and builds it. The
+patch adds one record for each instruction fetch outside an interrupt or a
+UUO cycle: the PC word and the 16 ACs. `KS10_TRACE` names the file.
+`KS10_TRACE_FROM` is the PC of the first record, because SIMH runs a loop
+at 100 at start-up to measure its speed.
+
+`emu/ks10/tests/oracle.rs` runs if `KS10_ORACLE` names the program.
+`make check` runs 2000 cases if `make oracle` was run, and says SKIPPED
+if not.
+
+1. A seed gives one case: one instruction at 1000, two HALTs, the 16 ACs,
+   and the words at E and E + 1. E is a direct address outside the code.
+2. Both emulators run the case from executive mode, with flags 0, no
+   paging and no interrupts. SIMH runs 500 cases in one process.
+3. The test compares the records before the instruction and before the
+   HALT, the record count, and the words at E and E + 1.
+4. A case that found a difference goes into `tests/oracle/cases` as
+   words, so that it does not depend on the generator.
+
+The instructions come from `spec/` (`pdp10::instructions`). These are not
+in the cases:
+
+- Jumps, XCT, EXTEND, the stack and byte instructions, BLT, the
+  instructions of the previous context and the I/O instructions.
+- CIRC, because SIMH does not have it on the KS10. FDV and its forms,
+  because SIMH fails a DSKCB test and differs in bit 35 for many
+  normalized operands; which side is right is open
+  (`docs/discrepancies.md`, `docs/unknowns.md`).
+- Some operands, from the inputs only (`skip`): ASH and ASHC left shifts
+  of many places, the shift count -256, IMUL products of magnitude
+  2^35 + 1 to 2^36 - 1 with a negative sign, IDIV of -2^35 by 1 or -1,
+  DIV of -2^70 by 0 (`docs/discrepancies.md`).
+- Unnormalized floating point operands. The operands of FAD, FSB, FMP,
+  FIX, FSC and of the double forms are normalized, with exponents that
+  differ by 60 or less (`docs/unknowns.md`).
+
+Paging, traps and interrupts are not compared. The diagnostics, the ITS
+boot and the unit tests check them.
+
+**[measured]** 2026-11-27, x86-64 host: 97646 cases, 0 differences, 226
+s; 2000 cases take 5 s. `KS10_ORACLE_NOSKIP` also runs the cases of
+`skip`: then 807 of 100001 cases differ, 744 of them FDV. The run found one fault of `emu/ks10`: IMUL of
+-2^35 by -2^35 gave 0, not 400000,,0 (`muldiv.rs`). Without the Overflow
+flag of an addition, 11 of 1958 cases differ.
 
 ### Diagnostics
 
@@ -868,6 +917,12 @@ Open:
   speed in `normal`, they are shorter in wall time than on a KS10. A
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
+
+- A model of the 2901 data path and the microcode steps of the KS10. It
+  can run a sequence of the microcode (for example FDV to SNORM in
+  `flt.5`) on given operands, and so decide a case where `emu/ks10` and
+  SIMH differ and no DEC vector exists. The first case is FDV with
+  normalized operands (`docs/unknowns.md`).
 
 ## Open items
 

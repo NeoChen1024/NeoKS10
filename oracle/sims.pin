@@ -1,0 +1,6 @@
+# The reference emulator: SIMH for the PDP-10 family, target pdp10-ks.
+# It is the submodule tools/sims of the ITS tree (3rdparty/its), at the
+# commit that the ITS tree pins. `make oracle` checks the commit, applies
+# sims-trace.patch to a copy in the build output and builds the copy.
+url https://github.com/larsbrinkhoff/ka10-simh
+commit 9556eca00a4edece9133c0d9d2b45c3090c02cfd

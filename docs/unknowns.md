@@ -53,6 +53,22 @@ tapes"). Not known yet:
   `emu/ks10/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
   at 1 µs for each instruction).
 
+## Instructions that the differential run does not check
+
+The differential run (docs/emulator.md, "Differential runs") does not
+compare these with SIMH. For each one, the result of `emu/ks10` has no
+second implementation yet:
+
+- Floating point instructions with unnormalized operands, and FAD with an
+  exponent difference of 61 or more. The KS10 microcode handles them in
+  its own way (`flt.5`), and SIMH follows the KL10.
+- FDV and its forms: with normalized operands, `emu/ks10` and SIMH differ
+  in bit 35 of 744 of 2075 quotients (docs/discrepancies.md, "FDV: the
+  quotient"). Which side follows `flt.5` (FDV6 to SNORM) is not known.
+  DSKCB checks some quotients; its test that SIMH fails has an
+  unnormalized divisor.
+- CIRC: only one unit test, with a value from `simple.42`.
+
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 
 **[measured]** 2026-11-26, Linux 6.18.64-pynq-z2, memprobe build a4249ad7 at

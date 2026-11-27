@@ -1,0 +1,79 @@
+diff -ruN a/PDP10/kx10_cpu.c b/PDP10/kx10_cpu.c
+--- a/PDP10/kx10_cpu.c
++++ b/PDP10/kx10_cpu.c
+@@ -4444,6 +4444,8 @@
+     return n;
+ }
+ 
++#include "kx10_trace.h"
++
+ t_stat sim_instr (void)
+ {
+ t_stat reason;
+@@ -4605,6 +4607,8 @@
+            }
+         }
+ #endif
++        if (pi_cycle == 0 && uuo_cycle == 0)
++            ks10_trace();
+ #if KS
+         if (fe_xct != 0) {
+            AB = (t_addr)fe_xct;
+diff -ruN a/PDP10/kx10_trace.h b/PDP10/kx10_trace.h
+--- a/PDP10/kx10_trace.h
++++ b/PDP10/kx10_trace.h
+@@ -0,0 +1,54 @@
++/* The trace hook of NeoKS10 (oracle/sims-trace.patch in NeoKS10).
++
++   At each instruction fetch outside an interrupt cycle and a UUO cycle,
++   one line: the PC word (flags in bits 0 to 12, PC in bits 18 to 35)
++   and the 16 ACs of the current context, in octal.
++
++   KS10_TRACE names the file; without it, nothing is written.
++   KS10_TRACE_FROM (octal) is a PC: the trace starts at the first fetch
++   from it. So the loop that SIMH runs at 100 at start-up to measure its
++   speed (sim_timer_precalibrate_execution_rate) is not in the trace.
++
++   kx10_cpu.c includes this file just before sim_instr, where FM,
++   fm_sel, FLAGS, PC and get_reg exist. */
++
++#ifndef KX10_TRACE_H
++#define KX10_TRACE_H
++
++#include <stdio.h>
++#include <stdlib.h>
++
++static FILE *ks10_trace_file;
++static int ks10_trace_open;
++static int ks10_trace_on;
++static long ks10_trace_from = -1;
++
++static void ks10_trace(void)
++{
++    int k;
++
++    if (!ks10_trace_open) {
++        const char *name = getenv("KS10_TRACE");
++        const char *from = getenv("KS10_TRACE_FROM");
++        ks10_trace_open = 1;
++        if (from != NULL)
++            ks10_trace_from = strtol(from, NULL, 8);
++        if (name != NULL)
++            ks10_trace_file = fopen(name, "w");
++    }
++    if (ks10_trace_file == NULL)
++        return;
++    if (!ks10_trace_on) {
++        if (ks10_trace_from >= 0 && (long)(PC & RMASK) != ks10_trace_from)
++            return;
++        ks10_trace_on = 1;
++    }
++    fprintf(ks10_trace_file, "%012llo",
++            (unsigned long long)((((uint64)FLAGS << 23) & LMASK) | (PC & RMASK)));
++    for (k = 0; k < 16; k++)
++        fprintf(ks10_trace_file, " %012llo", (unsigned long long)get_reg(k));
++    fputc('\n', ks10_trace_file);
++    fflush(ks10_trace_file);
++}
++
++#endif

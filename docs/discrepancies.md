@@ -92,3 +92,104 @@ before the count ends sets FCE (`emu/ks10/src/tm03.rs`).
 The ITS source does not decide the case. The project uses KLH10, which
 agrees with the ITS comment: a read of a tape mark gives TM without an
 error.
+
+## ASH and ASHC: a left shift of many places
+
+- **[microcode]** `src/kshack/simple.42`, ASHL and ASHC: the shift goes
+  one place for each step of SC, for the full count (up to 255 places).
+  Overflow is set if a bit that leaves bit 1 differs from the sign.
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`, ASH (240): the result is
+  `AR << SC` in a 64-bit integer. For ASH, if 36 + SC > 64, the overflow
+  test loses bits; if SC ≥ 64, the C shift is undefined. ASHC (244) does
+  the same with 35 + SC > 64. **[measured]** 2026-11-27, `oracle.rs`:
+  ASH 13,160614 (140 places) of 717711,,575334 gives 515753,,340000 in
+  SIMH. That word is the shift by 140 mod 64 = 12 places.
+
+The project uses the microcode. The differential run does not compare
+ASH left shifts of more than 28 places, or ASHC left shifts of more than
+29 places (`emu/ks10/tests/oracle.rs`, `skip`).
+
+## Shift count -256
+
+- **[microcode]** `src/kshack/ks10.47`, SCADB SHIFT: the count is bits 18
+  and 28 to 35 of E. So E with bit 18 set and bits 28 to 35 clear is -256
+  places.
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`, ASH, LSH, ASHC and LSHC:
+  `SC = ((0377 ^ AB) + 1) & 0377` is 0 for this E, so nothing shifts. ROT
+  and ROTC use 0400 for this case.
+
+The project uses the microcode (`emu/ks10/src/shift.rs`, `count`). The
+differential run does not compare this count.
+
+## CIRC
+
+- **[microcode]** `src/kshack/its.15` sets `CIRC=1`, and
+  `src/kshack/simple.42`, CIRC, assembles the instruction (opcode 247).
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`: the CIRC code of case 0247
+  is in a part of the file that the KS10 build does not compile. In
+  `pdp10-ks`, opcode 247 changes nothing. **[measured]** 2026-11-27: CIRC
+  3,3 with AC 3 = 1 left AC 3 and AC 4 unchanged.
+
+The project uses the microcode. SIMH cannot check CIRC. The unit test
+`circ_step` (`emu/ks10/src/shift.rs`) checks one case.
+
+## FDV: the quotient
+
+- **[manual]** DSKCB (DECSYSTEM 2020 advanced instruction diagnostic 2),
+  `DSKCB.SEQ` page 32, test P7700: FDV of 377400,,777777 by
+  577400,,777777 must give 777375,,773771. The divisor is not normalized
+  (its magnitude is 200377,,000001; bit 9 is 0).
+- **[measured]** 2026-11-27: sims 9556eca0 `pdp10-ks` gives
+  777375,,773772 for this test and prints "C(AC) FAILED" at 032610. It
+  passes the other FDV tests of DSKCB. `emu/ks10` passes DSKCB (`make
+  diag`).
+- **[measured]** 2026-11-27, `oracle.rs` without `skip`: with normalized
+  operands, 744 of 2075 FDV cases (all forms) differ in bit 35 of the
+  quotient. No DEC vector with normalized operands separates the two
+  emulators. Which one does what the microcode does is open
+  (`docs/unknowns.md`).
+- **[microcode]** `src/kshack/flt.5`, DCODE of FDVB and FDVRB (FL-BOTH):
+  the quotient goes to AC and to E. **[measured]** 2026-11-27: FDVRB with
+  a dividend of 0 stores 0 in the AC, but SIMH leaves E unchanged.
+
+The project uses the diagnostic for P7700 and the microcode for the store.
+The differential run does not compare FDV.
+
+## IMUL: a negative product that does not fit
+
+- **[microcode]** `src/kshack/simple.42`, IMUL to IMUL3: if the high word
+  of the product is neither 0 nor all sign bits, Overflow is set.
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`, IMUL (220): Overflow is set
+  if the high part of the magnitude is more than 1 for a negative
+  product. So a negative product of magnitude 2^35 + 1 to 2^36 - 1 does
+  not set Overflow. **[measured]** 2026-11-27: IMULB 5,2 of 17 by
+  750330,,434634 (product -47466848220) sets no flag in SIMH.
+
+The project uses the microcode. The differential run does not compare
+these products.
+
+## IDIV of -2^35 by 1 or -1
+
+- **[microcode]** `src/kshack/simple.42`, IDIV and DIV1: the only test
+  before DIVSUB is the test for a divisor of 0.
+- **[manual]** PRM 1982, page 2-14: on the KS10, -2^35 divided by -1
+  gives -2^35 without an error.
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`, IDIV (230): a dividend of
+  -2^35 and a divisor of magnitude 1 set No Divide.
+
+The project uses the microcode and the PRM. The differential run does not
+compare these cases.
+
+## DIV of -2^70 by 0
+
+- **[microcode]** `src/kshack/simple.42`, DIV1: a divisor of 0 sets No
+  Divide ("DIVIDE BY ZERO"), and nothing is stored.
+- **[emulator]** sims 9556eca0, `kx10_cpu.c`, DIV (234): the magnitude of
+  -2^70 (AC 400000,,0, bits 1 to 35 of AC + 1 clear) is again 400000,,0,
+  so the test for no divide passes for a divisor of 0. For a divisor that
+  is not 0, the test gives No Divide. **[measured]** 2026-11-27: DIVB
+  14,2044 with AC 14 = 400000,,0, AC 15 = 0 and a divisor of 0 sets no
+  flag and stores 400000,,1.
+
+The project uses the microcode. The differential run does not compare
+this case.
