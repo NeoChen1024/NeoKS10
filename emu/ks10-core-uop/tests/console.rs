@@ -9,9 +9,6 @@
 //!
 //! A second test runs the ITS I/O instructions on the Unibus adapters and
 //! compares the ACs with `ks10-core-soft`.
-//!
-//! The tests need the listing of the ITS build: `KS10_MCR_LISTING` (`make
-//! microcode` sets it). Without it the tests print SKIPPED.
 
 mod common;
 
@@ -30,12 +27,9 @@ fn run_to_halt(m: &mut Machine, haltlp: u16) -> Result<bool, Stop> {
 
 #[test]
 fn start_runs_the_program_at_the_address() {
-    let Some(text) = common::listing_text("console start") else {
-        return;
-    };
-    let haltlp = label(&text, "HALTLP");
+    let haltlp = label("HALTLP");
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         m.master_reset();
         assert_eq!(m.pending_stop, None);
         // MOVEI 1,123 at 1000 and HALT 1002 (JRST 4,1002) at 1001.
@@ -78,10 +72,7 @@ fn io_program() -> Vec<u64> {
 
 #[test]
 fn io_instructions_agree_with_the_software_processor() {
-    let Some(text) = common::listing_text("I/O instructions") else {
-        return;
-    };
-    let haltlp = label(&text, "HALTLP");
+    let haltlp = label("HALTLP");
     let program = io_program();
     let mut s = ks10_core_soft::Machine::new();
     for (k, w) in program.iter().enumerate() {
@@ -94,7 +85,7 @@ fn io_instructions_agree_with_the_software_processor() {
         "{r:?}"
     );
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         m.master_reset();
         for (k, w) in program.iter().enumerate() {
             m.memory[0o1000 + k] = W36::wrap(*w);
@@ -125,12 +116,9 @@ fn io_instructions_agree_with_the_software_processor() {
 /// microcode decodes WRUBR as 701 with AC 3 (inout, dispatch 1723).
 #[test]
 fn wrubr_invalidates_the_page_table_and_the_cache_directory() {
-    let Some(text) = common::listing_text("sweep") else {
-        return;
-    };
-    let haltlp = label(&text, "HALTLP");
+    let haltlp = label("HALTLP");
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         m.master_reset();
         // WRUBR 1010 with 0 in 1010 (no AC blocks, no base address), then
         // HALT.
@@ -174,10 +162,7 @@ fn wrubr_invalidates_the_page_table_and_the_cache_directory() {
 /// inout, `WRAPR1`). The fetch of 1004 then page-fails.
 #[test]
 fn an_apr_interrupt_agrees_with_the_software_processor() {
-    let Some(text) = common::listing_text("APR interrupt") else {
-        return;
-    };
-    let haltlp = label(&text, "HALTLP");
+    let haltlp = label("HALTLP");
     let i = |op: u64, ac: u64, e: u64| op << 27 | ac << 23 | e;
     let program: Vec<(usize, u64)> = vec![
         (0o1000, i(0o700, 0o14, 0o2377)),  // WRPI 2377: on, levels on
@@ -205,7 +190,7 @@ fn an_apr_interrupt_agrees_with_the_software_processor() {
     assert_eq!(s.mem[0o1100].get() & 0o777777, 0o1003, "ks10-core-soft");
     let want = [0o1200, 0o1201].map(|a| s.mem[a].get());
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         m.master_reset();
         for &(a, w) in &program {
             m.memory[a] = W36::wrap(w);

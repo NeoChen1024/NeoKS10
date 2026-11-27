@@ -15,8 +15,8 @@ use pdp10::W36;
 
 use crate::alu::{self, Alu, Controls, Outputs, W40};
 use crate::cram::Microword;
+use crate::drom::DROM_WORDS;
 use crate::fields::{Field, u};
-use crate::listing::DROM_WORDS;
 
 /// The number of words of the RAM file (DPE7, DPE8).
 pub const RAM_FILE_WORDS: usize = 1024;
@@ -813,7 +813,7 @@ impl Machine {
         let nb = |k: u32| (num >> (17 - k)) & 1 != 0;
         let mem = get(mw, u::MEM) != 0;
         let dw = self.drom_word();
-        let drom_bit = |f| crate::listing::drom_field(dw, f) != 0;
+        let drom_bit = |f| crate::drom::drom_field(dw, f) != 0;
         use crate::fields::d;
         // DPM5 E118, E8.
         let mem_en = mem && (nb(16) || (nb(17) && drom_bit(d::COND_FUNC)));
@@ -1897,8 +1897,8 @@ impl Machine {
         out: &Outputs,
         jfcl: [bool; 4],
     ) -> Result<u16, Stop> {
+        use crate::drom::drom_field;
         use crate::fields::d;
-        use crate::listing::drom_field;
         let dw = self.drom_word();
         let dr = |f| drom_field(dw, f) as u16;
         let ad_zero = out.adl_zero() && out.adr_zero();

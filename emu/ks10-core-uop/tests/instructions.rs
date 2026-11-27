@@ -78,18 +78,18 @@ fn reference(c: &Case) -> Result<State, String> {
 }
 
 /// The model in the halt loop after power-up.
-fn halted(text: &str, fill: alu::W40) -> Machine {
-    let haltlp = label(text, "HALTLP");
-    let mut m = machine(text, fill);
+fn halted(fill: alu::W40) -> Machine {
+    let haltlp = label("HALTLP");
+    let mut m = machine(fill);
     run_until(&mut m, 100_000, |m| m.upc == haltlp && m.csl.halt_loop).unwrap();
     m
 }
 
-fn model(text: &str, fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Result<State, String> {
-    let haltlp = label(text, "HALTLP");
+fn model(fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Result<State, String> {
+    let haltlp = label("HALTLP");
     // A machine has its own bus with the devices, so each case runs the
     // power-up sequence (about 640 microcycles).
-    let mut m = halted(text, fill);
+    let mut m = halted(fill);
     for (k, &a) in c.ac.iter().enumerate() {
         m.ram_file[k] = W36::wrap(a);
     }
@@ -99,7 +99,7 @@ fn model(text: &str, fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Resul
     // Design decision 2026-11-27: the test sets PC in the 2901 register.
     // The console starts a program with EXECUTE of a JRST (cmds.m80,
     // STCMD, EXINT), which reads the console register with an I/O cycle.
-    m.alu.reg[symbol(text, "PC")] = alu::d_input(W36::wrap(CODE as u64));
+    m.alu.reg[symbol("A", "PC")] = alu::d_input(W36::wrap(CODE as u64));
     // One tick of the 1 ms timer with 1 MSEC EN clear clears its flag.
     m.millisecond();
     m.flags = common::pc_flags(c.flags);
@@ -788,16 +788,13 @@ fn all_cases() -> Vec<Case> {
 
 #[test]
 fn single_instructions_agree_with_the_software_processor() {
-    let Some(text) = common::listing_text("instructions") else {
-        return;
-    };
     let mut stops = Vec::new();
     let mut differences = Vec::new();
     let mut coverage = Coverage::default();
     for fill in FILLS {
         for c in all_cases() {
             let want = reference(&c).expect(&c.name);
-            let got = model(&text, fill, &c, &mut coverage);
+            let got = model(fill, &c, &mut coverage);
             match got {
                 Ok(got) if got == want => {}
                 Ok(got) => differences.push(format!(

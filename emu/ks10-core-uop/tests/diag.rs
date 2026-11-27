@@ -14,7 +14,7 @@
 //! that the model does not have is PENDING: the test prints it and does
 //! not count it as a pass or a failure. A halt, an error message or a
 //! wrong pass count fails the test. The test needs `KS10_DIAG_DIR` (the
-//! .SAV files, `make diag`) and `KS10_MCR_LISTING` (`make microcode`).
+//! .SAV files, `make diag`).
 
 mod common;
 
@@ -95,8 +95,8 @@ fn run(
 
 /// A model after the power-up sequence and the master reset, with the
 /// programs loaded and started at 30000.
-fn started(text: &str, d: &Path, programs: &[&str]) -> Machine {
-    let mut m = machine(text, FILLS[0]);
+fn started(d: &Path, programs: &[&str]) -> Machine {
+    let mut m = machine(FILLS[0]);
     m.master_reset();
     for p in programs {
         load(&mut m, d, p);
@@ -151,20 +151,13 @@ fn run_file(d: &Path) -> Vec<(String, String, u64)> {
     list
 }
 
-fn one(
-    text: &str,
-    d: &Path,
-    name: &str,
-    how: &How,
-    rh: &str,
-    iterations: u64,
-) -> Result<String, String> {
-    let haltlp = label(text, "HALTLP");
+fn one(d: &Path, name: &str, how: &How, rh: &str, iterations: u64) -> Result<String, String> {
+    let haltlp = label("HALTLP");
     let lower = name.to_lowercase();
     match how {
         How::Skip(why) => Ok(format!("{name}: not run, it tests {why}")),
         How::Alone => {
-            let mut m = started(text, d, &[&lower]);
+            let mut m = started(d, &[&lower]);
             let pascnt = |m: &Machine| m.memory[0o30047];
             let end = run(&mut m, haltlp, 200_000_000, &mut Script::default(), |m| {
                 pascnt(m).get() >= iterations && !pascnt(m).bit(0)
@@ -182,9 +175,9 @@ fn one(
             // The fixture and the end of `emu/ks10-core-soft/tests/diag.rs`
             // (`How::Dskcg`): the ITS form of the UBR of SUBSM at 7103, and
             // the run ends at the first PAGSET (35223), after tests 1 to 8.
-            let mut m = started(text, d, &["subsm", &lower]);
+            let mut m = started(d, &["subsm", &lower]);
             m.memory[0o7103] = pdp10::W36::wrap(0o100000_000000);
-            let pc = symbol(text, "PC");
+            let pc = symbol("A", "PC");
             let mut script = subsm_script("000100", rh);
             let end = run(&mut m, haltlp, 50_000_000, &mut script, |m| {
                 alu::word(m.alu.reg[pc]).get() & 0o777777 == 0o35223
@@ -203,7 +196,7 @@ fn one(
         }
         How::Subsm(lh) => {
             let want = format!("END PASS {iterations}.");
-            let mut m = started(text, d, &["subsm", &lower]);
+            let mut m = started(d, &["subsm", &lower]);
             let mut script = subsm_script(lh, rh);
             // The text comes one character at a time: look at the end.
             let end = run(&mut m, haltlp, 1_000_000_000, &mut script, |m| {
@@ -245,9 +238,6 @@ fn pending(name: &str, r: &Result<String, String>) -> Option<String> {
 
 #[test]
 fn smcpu_run_file() {
-    let Some(text) = common::listing_text("diagnostics") else {
-        return;
-    };
     let Some(d) = dir() else {
         println!("SKIPPED: diagnostics: KS10_DIAG_DIR is not set");
         return;
@@ -264,8 +254,8 @@ fn smcpu_run_file() {
         let hs: Vec<_> = jobs
             .iter()
             .map(|(n, h, rh, i)| {
-                let (text, d) = (&text, &d);
-                s.spawn(move || one(text, d, n, h, rh, *i))
+                let d = &d;
+                s.spawn(move || one(d, n, h, rh, *i))
             })
             .collect();
         hs.into_iter()

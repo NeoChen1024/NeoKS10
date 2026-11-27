@@ -127,11 +127,12 @@ fails.
   SKIPPED for it: a skip is not a pass.
 - `make microcode KS10_ITS_DISK=<rp0.dsk>` extracts the listing of the
   microcode from the dump tape of the ITS build (`output.tape`, next to
-  `rp0.dsk`), compares it with the assembly of `spec/micro.py` and with
-  the RAM file on the disk, and runs the
-  tests of `emu/ks10-core-uop` that need it (the power-up sequence and the
-  single instructions). Run it when `emu/ks10-core-uop` or the microcode
-  changes. It extracts the listing again only if `output.tape` is newer.
+  `rp0.dsk`) and compares it with the assembly of `spec/micro.py`. It also
+  runs the tests of `emu/ks10-core-uop` that need the disk: the RAM file on
+  the disk and the boot of ITS. The other tests of the model use the
+  generated microcode (`ucode.rs`) and are part of `make check`. Run it
+  when `emu/ks10-core-uop` or the microcode changes. It extracts the
+  listing again only if `output.tape` is newer.
 - `make -j verify KS10_ITS_DISK=<rp0.dsk>` runs `make check`, `make
   microcode`, `make diag` and `make its-boot` as parallel jobs, after one
   build of the test programs. It continues after a failure and prints the

@@ -4,25 +4,19 @@
 //! the RAM file and checks 10^21 itself before it enters the halt loop
 //! (simple, "POWER UP SEQUENCE"). The test compares the table with powers
 //! of ten that it computes itself.
-//!
-//! The test needs the listing of the ITS build: `KS10_MCR_LISTING` (`make
-//! microcode` sets it). Without it the test prints SKIPPED.
 
 mod common;
 
-use common::{FILLS, label, machine, run_until, symbol as work};
+use common::{FILLS, label, machine, run_until, symbol};
 use ks10_core_uop::alu::W40;
 use pdp10::W36;
 
 #[test]
 fn the_power_up_sequence_computes_the_powers_of_ten() {
-    let Some(text) = common::listing_text("power up") else {
-        return;
-    };
-    let pwron = label(&text, "PWRON");
-    let (declo, dechi) = (work(&text, "DECLO"), work(&text, "DECHI"));
+    let pwron = label("PWRON");
+    let (declo, dechi) = (symbol("WORK", "DECLO"), symbol("WORK", "DECHI"));
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         let r = run_until(&mut m, 100_000, |m| m.upc == pwron);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         println!("{}", m.coverage);
@@ -45,8 +39,8 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
         // The constants (simple, "POWER UP SEQUENCE"): MASK has "A ONE IN
         // 36-BITS AND 0 IN BITS -2,-1,36,37"; XWD1 has "1 IN EACH HALF
         // WORD"; ONE is "THE CONSTANT 1". The register numbers are the
-        // values of the A field in the listing.
-        let reg = |name: &str| m.alu.reg[work(&text, name)];
+        // values of the A field.
+        let reg = |name: &str| m.alu.reg[symbol("A", name)];
         assert_eq!(reg("MASK").get(), 0o777777_777777 << 2);
         assert_eq!(
             ks10_core_uop::alu::word(reg("XWD1")),
@@ -73,12 +67,9 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
 /// fill with all ones has READ and WRITE in E33.
 #[test]
 fn power_up_ends_in_the_halt_loop() {
-    let Some(text) = common::listing_text("halt loop") else {
-        return;
-    };
-    let haltlp = label(&text, "HALTLP");
+    let haltlp = label("HALTLP");
     for fill in FILLS {
-        let mut m = machine(&text, fill);
+        let mut m = machine(fill);
         let r = run_until(&mut m, 100_000, |m| m.upc == haltlp && m.csl.halt_loop);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         assert_eq!(r, Ok(()));

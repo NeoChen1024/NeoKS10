@@ -18,8 +18,7 @@
 //! 500 (simple, power-up: "ITS makes it 500"). `ks10-core-soft` does not
 //! run that halt, so these words are known differences.
 //!
-//! The test needs `KS10_ITS_DISK` and `KS10_MCR_LISTING` (`make microcode`
-//! sets both).
+//! The test needs `KS10_ITS_DISK` (`make microcode` sets it).
 
 mod common;
 
@@ -82,22 +81,19 @@ fn copy_image(src: &Path, name: &str) -> (PathBuf, std::fs::File) {
 
 #[test]
 fn boot_from_disk_in_step_with_the_software_processor() {
-    let Some(text) = common::listing_text("ITS boot") else {
-        return;
-    };
     let Some(src) = std::env::var_os("KS10_ITS_DISK") else {
         println!("SKIPPED: ITS boot: KS10_ITS_DISK is not set");
         return;
     };
     let (copy_m, fm) = copy_image(Path::new(&src), "uop-boot-model.dsk");
     let (copy_s, fs) = copy_image(Path::new(&src), "uop-boot-soft.dsk");
-    let mut m = machine(&text, FILLS[0]);
+    let mut m = machine(FILLS[0]);
     m.io.disk.attach(0, fm, false);
     boot::boot_disk(&mut m, 0).expect("BT on the model");
     let mut s = ks10_core_soft::Machine::new();
     s.io.disk.attach(0, fs, false);
     boot::boot_disk(&mut s, 0).expect("BT on ks10-core-soft");
-    let pc_reg = symbol(&text, "PC");
+    let pc_reg = symbol("A", "PC");
     // The power-up sequence leaves values in the ACs (it uses them for the
     // table of powers of ten); no program can depend on them. Both
     // processors start with the ACs of the model.
@@ -106,7 +102,7 @@ fn boot_from_disk_in_step_with_the_software_processor() {
         s.ac[k] = m.ram_file[block + k];
     }
 
-    let pi_label = label(&text, "PI");
+    let pi_label = label("PI");
     s.hold_interrupts = true;
     let mut release = None;
     let mut waiting = 0;
@@ -123,8 +119,8 @@ fn boot_from_disk_in_step_with_the_software_processor() {
     // (docs/microcode-model.md, "The lockstep run and time").
     let mut samples = std::collections::BTreeSet::new();
     let mut synced = 0;
-    let pcst_work = symbol(&text, "PCST");
-    let (time1_work, quan_work) = (symbol(&text, "TIME1"), symbol(&text, "QUAN"));
+    let pcst_work = symbol("WORK", "PCST");
+    let (time1_work, quan_work) = (symbol("WORK", "TIME1"), symbol("WORK", "QUAN"));
     let mut model_time1 = m.ram_file[time1_work];
     let mut quan_copies = 0;
     let mut model_pcst = m.ram_file[pcst_work];

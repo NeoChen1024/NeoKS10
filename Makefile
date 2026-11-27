@@ -11,7 +11,7 @@ NICE      ?= nice -n 19
 # The targets that need these give them to cargo themselves. Without this,
 # a variable on the command line reaches every recipe, and `cargo test` of
 # check-rust also runs the tests of the disk image.
-unexport KS10_ITS_DISK KS10_DIAG_DIR KS10_MCR_LISTING KS10_ORACLE KS10_ORACLE_KLH10
+unexport KS10_ITS_DISK KS10_DIAG_DIR KS10_ORACLE KS10_ORACLE_KLH10
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -184,8 +184,9 @@ its-boot-neoks10:
 # there) extracts the listing KSHACK; MCR 262 into the build output.
 # spec/micro.py compares its assembly with the listing, line by line. The
 # test emu/ks10-core-uop/tests/ram_file.rs reads the RAM file from the disk as
-# the 8080 does and compares it with the listing. The listing is extracted
-# again only if output.tape is newer.
+# the 8080 does and compares it with the assembly (ucode.rs), and
+# its_boot.rs boots ITS from the disk on the model. The listing is
+# extracted again only if output.tape is newer.
 MICROCODE_DIR = $(abspath $(BUILD_DIR))/microcode
 MICROCODE_LISTING = $(MICROCODE_DIR)/mcr.262
 ITSTAR = $(ITS_TREE)/tools/itstar
@@ -205,7 +206,7 @@ $(MICROCODE_LISTING): $(wildcard $(ITS_TAPE))
 microcode-test: $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
 	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	$(PYTHON) spec/micro.py --its $(ITS_TREE) --compare $(MICROCODE_LISTING)
-	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
+	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" \
 	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --tests -- --nocapture
 
 # The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
@@ -213,7 +214,7 @@ microcode-test: $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
 # submodule tools/tapeutils of 3rdparty/its, pinned there) extracts the
 # files into the build output. The test emu/ks10-core-soft/tests/diag.rs runs the
 # programs of the run file SMCPU.CMD. emu/ks10-core-uop/tests/diag.rs runs
-# them on the microcode-level model, if `make microcode` made the listing.
+# them on the microcode-level model.
 # The files are extracted again only if the tape is newer than the stamp.
 DIAG_DIR = $(abspath $(BUILD_DIR))/diag
 DIAG_TAPE = references/trailing-edge/tapes/ks_diag_gs.tap.bz2
@@ -234,13 +235,9 @@ diag-soft: $(DIAG_STAMP)
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test diag -- --nocapture
 
-# With KS10_ITS_DISK, the listing comes first (make -j verify).
-diag-uop: $(DIAG_STAMP) $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
-	@test -f $(MICROCODE_LISTING) || echo "diag: microcode-level model SKIPPED, $(MICROCODE_LISTING) is missing (make microcode)"
-	if [ -f $(MICROCODE_LISTING) ]; then \
-	    cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files KS10_MCR_LISTING=$(MICROCODE_LISTING) \
-	        $(NICE) $(CARGO) test --locked --release -p ks10-core-uop --test diag -- --nocapture; \
-	fi
+diag-uop: $(DIAG_STAMP)
+	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-uop \
+	    --test diag -- --nocapture
 
 # The rows of AGENTS.md for a change of the software processor or a
 # device, and before a merge: check, microcode, diag and its-boot. Run it

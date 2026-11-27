@@ -103,15 +103,15 @@ the comment of `.RAMFILE` ("Parity is even parity"). `EVEN PARITY` gives
 the complement. The ranges are bits of the RAM file entry, not of the
 microword.
 
-**Check of the RAM file [measured]** 2026-11-27 (`make microcode`, test
+**Check of the RAM file [measured]** 2026-11-28 (`make microcode`, test
 `emu/ks10-core-uop/tests/ram_file.rs`). The RAM file was read from `rp0.dsk` of
 the ITS build of 2026-11-26 as the 8080 reads it:
 
 - All 4000 entries have the right parity bits and zero pads.
-- The 1980 (decimal) U words of the listing agree with the decoded
+- The 1980 (decimal) U words of `ucode.rs` agree with the decoded
   entries in all fields of the RAM file. The other 68 (decimal) entries
   are 0.
-- No listing bit is outside the fields of the RAM file.
+- No bit of a U word is outside the fields of the RAM file.
 - The SHA-256 of the RAM file is in the test.
 
 If a field position or the parity rule is wrong, the test fails: a test
@@ -127,11 +127,12 @@ address and eight 12-bit segments for each word **[manual]** (section
 5.4.6) **[its]** (`cmds.m80`, DMEM2CR). The contents of the dispatch ROM
 are the D words of the assembly (`ucode.rs`).
 
-**Check of the dispatch ROM [measured]** 2026-11-27 (the same test). The
-fields `A`, `B`, `ACDISP`, `I`, `READ`, `TEST`, `COND FUNC`, `VMA` and
-`WRITE` of all 512 D words agree with `spec/instructions.toml`. That
-table comes from the source text of the microcode, not from the listing.
-A test with `B` moved by one bit failed.
+**Check of the dispatch ROM [measured]** 2026-11-28 (the same test file,
+without the disk). The fields `A`, `B`, `ACDISP`, `I`, `READ`, `TEST`,
+`COND FUNC`, `VMA` and `WRITE` of all 512 D words of `ucode.rs` agree
+with `spec/instructions.toml`. That table comes from the source text of
+the microcode, not from the assembly. A test with `B` moved by one bit
+failed (2026-11-27).
 
 The 512 D words of the ITS listing 262 are the same as those of the DEC
 microcode 130 **[measured]** (2026-11-27, a comparison of the D lines with
@@ -1235,10 +1236,9 @@ and time").
 model, with the switches and pass criteria of `emu/ks10-core-soft`
 ([`emulator.md`](emulator.md), "Diagnostics"). The diagnostics are
 recorded data of the machine (rank 2), so they check the microcode paths
-and the data path without `emu/ks10-core-soft`. `make diag` runs them if
-`make microcode` made the listing. A program that reaches a function
-that the model does not have is PENDING: it is neither a pass nor a
-failure.
+and the data path without `emu/ks10-core-soft`. `make diag` runs them.
+A program that reaches a function that the model does not have is
+PENDING: it is neither a pass nor a failure.
 
 **[measured]** 2026-11-27, the ITS listing 262:
 
