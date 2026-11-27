@@ -45,7 +45,7 @@ fn run(name: &str, limit: u64) {
 #[test]
 fn basic_instruction_diagnostics() {
     for name in [
-        "dskaa", "dskab", "dskac", "dskad", "dskae", "dskaf", "dskag",
+        "dskaa", "dskab", "dskac", "dskad", "dskae", "dskaf", "dskag", "dskah",
     ] {
         run(name, 5_000_000);
     }

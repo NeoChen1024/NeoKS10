@@ -86,7 +86,7 @@ fn main() {
         m.flags.0,
         pascnt.halves_text()
     );
-    if let Stop::Halt { pc } | Stop::Unimplemented { pc, .. } | Stop::Nxm { pc, .. } = stop {
+    if let Stop::Halt { pc, .. } | Stop::Unimplemented { pc, .. } | Stop::Nxm { pc, .. } = stop {
         let a = pc.get() as usize;
         for k in a.saturating_sub(3)..(a + 3).min(m.mem.len()) {
             let w: W36 = m.mem[k];

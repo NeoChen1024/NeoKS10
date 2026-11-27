@@ -17,9 +17,10 @@ pub const MEMORY_WORDS: usize = 512 * 1024;
 /// Why the processor stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stop {
-    /// A HALT instruction in executive mode, at `pc` (the PC is the
-    /// effective address of the HALT).
-    Halt { pc: Half },
+    /// The processor halted with a halt code (ksdefs.194, "Halt Codes"):
+    /// 1 for a HALT instruction in executive mode (the PC is then its
+    /// effective address), 101 for an illegal interrupt instruction.
+    Halt { pc: Half, code: u32 },
     /// An instruction that this version does not implement.
     Unimplemented { pc: Half, word: W36 },
     /// A reference to memory above the installed memory.
@@ -39,6 +40,12 @@ pub struct Machine {
     pub pi: Pi,
     /// Completed instructions (the virtual time, docs/emulator.md).
     pub count: u64,
+    /// Physical address of the executive process table (EPT). WREBR sets
+    /// it; 0 until then.
+    pub ept: u32,
+    /// Physical address of the user process table (UPT), from WRUBR; 0
+    /// until then.
+    pub ubr: u32,
 }
 
 impl Default for Machine {
@@ -97,6 +104,8 @@ impl Machine {
             apr: Apr::default(),
             pi: Pi::default(),
             count: 0,
+            ept: 0,
+            ubr: 0,
         }
     }
 
@@ -151,8 +160,61 @@ impl Machine {
         Ok(None)
     }
 
-    /// Do one instruction. `Ok(())` if the processor can continue.
+    /// The interrupt requests of the APR (and later the devices) as a
+    /// mask of levels.
+    fn requests(&self) -> u8 {
+        if self.apr.requesting() && self.apr.level != 0 {
+            Pi::level_bit(self.apr.level)
+        } else {
+            0
+        }
+    }
+
+    /// Take an interrupt on level n **[microcode]** (inout.50, PI to PI50,
+    /// PIJSR, PIXPCW; PRM 4.1): hold the level, then execute the
+    /// instruction at EPT + 40 + 2n. It must be JSR or XPCW (JRST 7,);
+    /// else the processor halts with code 101 (ILLII). A JSR stores the PC
+    /// word of the interrupted program at E, clears all flags (executive
+    /// mode) and continues at E+1. Unibus vectors come with the devices.
+    fn interrupt(&mut self, n: u8) -> Result<(), Stop> {
+        let pc = self.pc;
+        self.pi.in_progress |= Pi::level_bit(n);
+        let loc = self.ept + 0o40 + 2 * u32::from(n);
+        let word = *self
+            .mem
+            .get(loc as usize)
+            .ok_or(Stop::Nxm { pc, address: loc })?;
+        let Some((e, _)) = self.ea(word).map_err(|a| Stop::Nxm { pc, address: a })? else {
+            return Ok(());
+        };
+        let nxm = |a| Stop::Nxm { pc, address: a };
+        if word.field(0, 8) == 0o264 {
+            self.write(e, self.flags.pc_word(pc)).map_err(nxm)?;
+            self.flags = Flags(0);
+            self.pc = Half::wrap(e.get() + 1);
+            Ok(())
+        } else if word.field(0, 12) == 0o254 << 4 | 7 {
+            let (f, p) = ops::xpcw(self, e, pc).map_err(|f| match f {
+                Fault::Nxm(a) => nxm(a),
+                Fault::Unimplemented | Fault::Uuo => Stop::Unimplemented { pc, word },
+            })?;
+            self.flags = f;
+            self.pc = p;
+            Ok(())
+        } else {
+            self.deposit(0, W36::wrap(0o101)).map_err(nxm)?;
+            self.deposit(1, W36::from_halves(Half::ZERO, pc))
+                .map_err(nxm)?;
+            Err(Stop::Halt { pc, code: 0o101 })
+        }
+    }
+
+    /// Do one instruction, or take an interrupt. `Ok(())` if the processor
+    /// can continue.
     pub fn step(&mut self) -> Result<(), Stop> {
+        if let Some(n) = self.pi.accept(self.requests()) {
+            return self.interrupt(n);
+        }
         let pc = self.pc;
         let mut word = self.read(pc).map_err(|a| Stop::Nxm { pc, address: a })?;
         // XCT executes the word at E; a chain of XCTs stays in this step.
@@ -192,14 +254,21 @@ impl Machine {
 
     fn execute(&mut self, inst: Inst, e: Half, last: W36) -> Next {
         let op = &ins::OPS[usize::from(inst.op)];
+        let ac_uuo = op.class == Class::AcDisp
+            && ins::ac_op(inst.op, inst.ac as u8).is_some_and(|a| a.class == Class::Uuo);
         let r = match op.class {
+            _ if ac_uuo => Err(Fault::Uuo),
             Class::Luuo => ops::luuo(self, inst, e),
             Class::Inst | Class::AcDisp => ops::execute(self, inst, e, last),
-            Class::Muuo | Class::Uuo => Err(Fault::Unimplemented),
+            Class::Muuo | Class::Uuo => Err(Fault::Uuo),
+        };
+        let r = match r {
+            Err(Fault::Uuo) => ops::muuo(self, inst, e).map(|()| Next::Jump(self.pc)),
+            r => r,
         };
         match r {
             Ok(n) => n,
-            Err(Fault::Unimplemented) => Next::Stop(Stop::Unimplemented {
+            Err(Fault::Unimplemented | Fault::Uuo) => Next::Stop(Stop::Unimplemented {
                 pc: self.pc,
                 word: inst.word,
             }),
@@ -211,11 +280,21 @@ impl Machine {
     }
 }
 
-/// An instruction that cannot complete in this version.
+/// An instruction that does not complete normally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
+    /// The emulator does not have this instruction yet.
     Unimplemented,
+    /// The microcode does a monitor UUO (an illegal or monitor call).
+    Uuo,
     Nxm(u32),
+}
+
+/// The process context word, as RDUBR gives it (ksdefs.194, WRUBR and
+/// RDUBR): bits 0 and 2 set, the current and previous AC blocks (one block
+/// in this version), the UBR address in bits 16 to 35.
+pub fn context_word(m: &Machine) -> W36 {
+    W36::wrap((0o500000u64 << 18) | u64::from(m.ubr))
 }
 
 impl From<u32> for Fault {

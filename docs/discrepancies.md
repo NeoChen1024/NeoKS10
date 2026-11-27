@@ -15,3 +15,16 @@ case gives both statements and the source that the project uses.
   (docs/emulator.md, section "Diagnostics").
 
 The project uses the microcode: `APRID` gives 020406,,003301.
+
+## Program interrupt requests on levels that are off
+
+- **[manual]** PRM 1982, 4.1, WRPI bit 24: request interrupts on the
+  selected levels "and force the processor to recognize them even on
+  levels that are off". Bit 26: turned-off levels do not recognize
+  requests "unless made by a WRPI with a 1 in bit 24".
+- **[microcode]** `src/kshack/inout.50`, LOADPI: the program requests go
+  to the PI hardware only on levels that are on ("ONLY REQUEST CHANS THAT
+  ARE ON").
+
+The project uses the microcode: a program request counts on an active
+level only (`emu/ks10/src/apr.rs`, `Pi::accept`).

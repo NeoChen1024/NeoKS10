@@ -102,17 +102,30 @@ impl Pi {
     /// WRPI with E: 2.5 drop requests, 2.4 clear the PI system, 2.3
     /// request interrupts, 2.2 turn on levels, 2.1 turn off levels (word
     /// bits 22 to 26), 1.9 turn off the system, 1.8 turn it on (27, 28), on
-    /// the levels selected by 1.7 to 1.1.
-    pub fn write(&mut self, e: Half) {
+    /// the levels selected by 1.7 to 1.1. The order of the functions is the
+    /// one of the microcode **[microcode]** (inout.50, WRPI): clear, drop,
+    /// request, system on, system off, levels on, levels off. Returns false
+    /// if one of word bits 18 to 21 is set (PI.MBZ, ks10.47): the
+    /// microcode then does a UUO after the clear.
+    pub fn write(&mut self, e: Half) -> bool {
         let sel = e.field(11, 17) as u8;
-        if e.bit(4) {
-            self.requested &= !sel;
-        }
         if e.bit(5) {
             *self = Pi::default();
         }
+        if e.field(0, 3) != 0 {
+            return false;
+        }
+        if e.bit(4) {
+            self.requested &= !sel;
+        }
         if e.bit(6) {
             self.requested |= sel;
+        }
+        if e.bit(10) {
+            self.on = true;
+        }
+        if e.bit(9) {
+            self.on = false;
         }
         if e.bit(7) {
             self.active |= sel;
@@ -120,20 +133,50 @@ impl Pi {
         if e.bit(8) {
             self.active &= !sel;
         }
-        if e.bit(9) {
-            self.on = false;
+        true
+    }
+
+    /// The mask bit of level n (1 to 7).
+    pub fn level_bit(n: u8) -> u8 {
+        1 << (7 - n)
+    }
+
+    /// The level that the processor accepts now, if any (PRM 4.1,
+    /// "Processing an Interrupt"): the system is on, and the highest
+    /// priority level with a recognized request is above every level in
+    /// progress. A request is recognized on an active level only; for the
+    /// program requests this is the rule of the microcode
+    /// **[microcode]** (inout.50, LOADPI: "ONLY REQUEST CHANS THAT ARE ON";
+    /// docs/discrepancies.md). `other` holds the requests of the APR and
+    /// the devices.
+    pub fn accept(&self, other: u8) -> Option<u8> {
+        if !self.on {
+            return None;
         }
-        if e.bit(10) {
-            self.on = true;
+        let recognized = (self.requested | other) & self.active;
+        let n = (1..=7).find(|&n| recognized & Self::level_bit(n) != 0)?;
+        let busy = (1..=7).find(|&k| self.in_progress & Self::level_bit(k) != 0);
+        match busy {
+            Some(k) if k <= n => None,
+            _ => Some(n),
+        }
+    }
+
+    /// Dismiss the highest priority interrupt in progress (inout.50,
+    /// DISMISS).
+    pub fn dismiss(&mut self) {
+        if let Some(k) = (1..=7).find(|&k| self.in_progress & Self::level_bit(k) != 0) {
+            self.in_progress &= !Self::level_bit(k);
         }
     }
 }
 
 /// Opcode 700 by AC (spec/instructions.toml, acdisp 700).
 pub fn op700(m: &mut Machine, i: Inst, e: Half) -> R {
-    if m.flags.is_user() {
-        // IOT: I/O is illegal in user mode without User In-out (later).
-        return Err(Fault::Unimplemented);
+    if m.flags.is_user() && !m.flags.has(crate::flags::Flags::USERIO) {
+        // IOT: I/O in user mode needs User In-out (ks10.47, "SKIP IO
+        // LEGAL"; A/IOT in the DRAM entry); else a monitor UUO.
+        return Err(Fault::Uuo);
     }
     match i.ac {
         0 => m.write(e, APRID)?,
@@ -142,7 +185,11 @@ pub fn op700(m: &mut Machine, i: Inst, e: Half) -> R {
         // CONSZ, CONSO APR: [microcode] inout.50, APRSZ and APRSO test the
         // right half of the APR word with the mask 7770.
         6 | 7 => return Ok(test(m.apr.word().rh().get() & 0o7770, e, i.ac == 7)),
-        0o14 => m.pi.write(e),
+        0o14 => {
+            if !m.pi.write(e) {
+                return Err(Fault::Uuo);
+            }
+        }
         0o15 => m.write(e, m.pi.word())?,
         // CONSZ, CONSO PI: the RDPI word (inout.50, [BR]_[PI]).
         0o16 | 0o17 => return Ok(test(m.pi.word().get(), e, i.ac == 0o17)),
@@ -187,11 +234,47 @@ mod tests {
     #[test]
     fn pi_on() {
         let mut p = Pi::default();
-        p.write(Half::wrap(0o002377));
+        assert!(p.write(Half::wrap(0o002377)));
         assert!(p.on);
         assert_eq!(p.active, 0o177);
         assert_eq!(p.word().rh().get(), 0o000377);
-        p.write(Half::wrap(0o010000)); // clear the PI system
+        assert!(p.write(Half::wrap(0o010000))); // clear the PI system
+        assert_eq!(p, Pi::default());
+    }
+
+    // PRM 4.1: the highest priority recognized request is accepted if it is
+    // above every level in progress; requests count on active levels only.
+    #[test]
+    fn pi_accept() {
+        let mut p = Pi {
+            on: true,
+            active: 0o177,
+            ..Pi::default()
+        };
+        assert_eq!(p.accept(Pi::level_bit(3) | Pi::level_bit(5)), Some(3));
+        p.in_progress = Pi::level_bit(3);
+        assert_eq!(p.accept(Pi::level_bit(5)), None);
+        assert_eq!(p.accept(Pi::level_bit(2)), Some(2));
+        p.active = 0o177 & !Pi::level_bit(2);
+        assert_eq!(p.accept(Pi::level_bit(2)), None);
+        p.on = false;
+        p.active = 0o177;
+        assert_eq!(p.accept(Pi::level_bit(1)), None);
+        p.on = true;
+        p.in_progress = Pi::level_bit(2) | Pi::level_bit(6);
+        p.dismiss();
+        assert_eq!(p.in_progress, Pi::level_bit(6));
+    }
+
+    // Both "system on" and "system off" in one WRPI: off wins, as in the
+    // order of inout.50. A bit in 18 to 21 makes WRPI fail after the clear.
+    #[test]
+    fn wrpi_order() {
+        let mut p = Pi::default();
+        assert!(p.write(Half::wrap(0o000600)));
+        assert!(!p.on);
+        p.on = true;
+        assert!(!p.write(Half::wrap(0o210000)));
         assert_eq!(p, Pi::default());
     }
 }

@@ -387,25 +387,19 @@ fn calls(m: &mut Machine, i: Inst, e: Half) -> R {
 /// JRST (PRM 2.9, "The JRST Instruction"); the variants by AC from the
 /// dispatch of the ITS microcode (spec/instructions.toml, acdisp 254).
 fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
+    let user = m.flags.is_user();
+    let io_legal = !user || m.flags.has(Flags::USERIO);
     match i.ac {
         0 | 1 => Ok(Next::Jump(e)),
         2 => {
-            // JRSTF: restore the flags from bits 0 to 12 of the last word
-            // of the address calculation (C(X) if indexed). In user mode
-            // the User flag stays set, and User In-out cannot be set.
-            let mut f = (last.lh().get() as u32) & Flags::ALL;
-            if m.flags.is_user() {
-                f |= Flags::USER;
-                if !m.flags.has(Flags::USERIO) {
-                    f &= !Flags::USERIO;
-                }
-            }
-            m.flags = Flags(f);
+            // JRSTF: the flags from bits 0 to 12 of the last word of the
+            // address calculation (C(X) if indexed).
+            m.flags = restore_flags(m.flags, last);
             Ok(Next::Jump(e))
         }
         4 => {
-            if m.flags.is_user() {
-                return Err(Fault::Unimplemented); // a monitor UUO (later)
+            if user {
+                return Err(Fault::Uuo);
             }
             // [microcode] simple.42, HALT: PC <- E; inout.50, HALTED: halt
             // code 1 to physical location 0, the PC to location 1. The halt
@@ -413,10 +407,89 @@ fn jrst(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
             m.pc = e;
             m.deposit(0, ONE)?;
             m.deposit(1, W36::from_halves(Half::ZERO, e))?;
-            Ok(Next::Stop(crate::machine::Stop::Halt { pc: e }))
+            Ok(Next::Stop(crate::machine::Stop::Halt { pc: e, code: 1 }))
+        }
+        5 => {
+            // XJRSTF (simple.42, XJRSTF): the flags from C(E), the PC from
+            // the right half of C(E+1).
+            let (f, pc) = xjrstf(m, e)?;
+            m.flags = f;
+            Ok(Next::Jump(pc))
+        }
+        6 => {
+            // XJEN: executive mode only; dismiss, then XJRSTF.
+            if user {
+                return Err(Fault::Uuo);
+            }
+            m.pi.dismiss();
+            let (f, pc) = xjrstf(m, e)?;
+            m.flags = f;
+            Ok(Next::Jump(pc))
+        }
+        7 => {
+            // XPCW: executive mode only.
+            if user {
+                return Err(Fault::Uuo);
+            }
+            let (f, pc) = xpcw(m, e, Half::wrap(m.pc.get() + 1))?;
+            m.flags = f;
+            Ok(Next::Jump(pc))
+        }
+        0o10 | 0o12 => {
+            // JRST 10, (dismiss and jump) and JEN (dismiss, restore the
+            // flags as JRSTF, jump): I/O must be legal (simple.42, JRST10,
+            // JEN; dispatch "SKIP IO LEGAL").
+            if !io_legal {
+                return Err(Fault::Uuo);
+            }
+            m.pi.dismiss();
+            if i.ac == 0o12 {
+                m.flags = restore_flags(m.flags, last);
+            }
+            Ok(Next::Jump(e))
+        }
+        0o14 => {
+            // SFM: executive mode only; the flags to C(E).
+            if user {
+                return Err(Fault::Uuo);
+            }
+            m.write(e, m.flags.pc_word(Half::ZERO))?;
+            Ok(Next::Step)
         }
         _ => Err(Fault::Unimplemented),
     }
+}
+
+/// New flags from bits 0 to 12 of `w`. In user mode the User flag stays
+/// set and User In-out cannot be set (ks10.47, "HOLD USER": "PREVENTS
+/// SETTING USER IOT IN USER MODE"; XJRSTF: "SET BUT DON'T CLEAR USER FLAG").
+fn restore_flags(old: Flags, w: W36) -> Flags {
+    let mut f = (w.lh().get() as u32) & Flags::ALL;
+    if old.is_user() {
+        f |= Flags::USER;
+        if !old.has(Flags::USERIO) {
+            f &= !Flags::USERIO;
+        }
+    }
+    Flags(f)
+}
+
+/// The flags of C(E) and the PC of the right half of C(E+1) (XJRSTF).
+fn xjrstf(m: &Machine, e: Half) -> Result<(Flags, Half), Fault> {
+    let f = restore_flags(m.flags, m.read(e)?);
+    let pc = m.read(Half::wrap(e.get() + 1))?.rh();
+    Ok((f, pc))
+}
+
+/// XPCW: the flags to C(E), the PC `ret` to C(E+1), then the new flags
+/// and PC from E+2 and E+3 as XJRSTF does, in executive mode
+/// **[microcode]** (simple.42, XPCW and PIXPCW). For an interrupt, `ret`
+/// is the PC of the interrupted program.
+pub fn xpcw(m: &mut Machine, e: Half, ret: Half) -> Result<(Flags, Half), Fault> {
+    m.write(e, m.flags.pc_word(Half::ZERO))?;
+    m.write(Half::wrap(e.get() + 1), W36::from_halves(Half::ZERO, ret))?;
+    m.flags = Flags(0);
+    xjrstf(m, Half::wrap(e.get() + 2))
 }
 
 /// JFCL (PRM 2.9): AC bits 9 to 12 select Overflow, Carry 0, Carry 1 and
@@ -448,6 +521,38 @@ pub fn luuo(m: &mut Machine, i: Inst, e: Half) -> R {
     let w = W36::from_halves(Half::wrap(i.word.lh().get() & 0o777740), e);
     m.write(Half::wrap(0o40), w)?;
     Ok(Next::Execute(m.read(Half::wrap(0o41))?))
+}
+
+/// A monitor UUO, also the trap of an illegal instruction **[microcode]**
+/// (simple.42, MUUO, UUOGO and KIMUUO, the style with EBR bit 2.6 off,
+/// which ITS uses; ksdefs.194, UPT offsets): in the user process table
+/// (UPT, at the address of UBR) store opcode, A and E in 424, the PC word
+/// (PC of the next instruction, trap flags cleared) in 425 and the process
+/// context word (as RDUBR gives it) in 426. Then load flags and PC from
+/// 430, plus 1 if a trap flag is set, plus 4 in user mode.
+pub fn muuo(m: &mut Machine, i: Inst, e: Half) -> Result<(), Fault> {
+    let upt = m.ubr;
+    let nxm = Fault::Nxm;
+    let inst = W36::from_halves(Half::wrap(i.word.lh().get() & 0o777740), e);
+    let ret = Half::wrap(m.pc.get() + 1);
+    let traps = Flags::TRAP1 | Flags::TRAP2;
+    let pcw = Flags(m.flags.0 & !traps).pc_word(ret);
+    m.deposit(upt + 0o424, inst).map_err(nxm)?;
+    m.deposit(upt + 0o425, pcw).map_err(nxm)?;
+    m.deposit(upt + 0o426, crate::machine::context_word(m))
+        .map_err(nxm)?;
+    let mut loc = upt + 0o430;
+    if m.flags.0 & traps != 0 {
+        loc += 1;
+    }
+    if m.flags.is_user() {
+        loc += 4;
+    }
+    let new = *m.mem.get(loc as usize).ok_or(Fault::Nxm(loc))?;
+    // GOEXEC: LOAD FLAGS with LEAVE USER: the new word may clear User.
+    m.flags = Flags((new.lh().get() as u32) & Flags::ALL);
+    m.pc = new.rh();
+    Ok(())
 }
 
 #[cfg(test)]
