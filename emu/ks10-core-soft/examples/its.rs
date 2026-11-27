@@ -13,8 +13,9 @@
 
 use std::io::Write;
 
-use ks10_core_soft::console::Script;
-use ks10_core_soft::{Machine, Stop, boot};
+use ks10_core_soft::{Machine, Stop};
+use ks10_machine::boot;
+use ks10_machine::console::Script;
 
 /// Text with \\r, \\n, \\e and \\xHH escapes.
 fn unescape(x: &str) -> String {

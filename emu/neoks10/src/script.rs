@@ -5,7 +5,7 @@
 //! The machine thread runs the script (`engine.rs`), so that the
 //! instruction count of each step depends only on the guest: an `expect`
 //! matches at the instruction that prints the text, and a `send` comes
-//! `ks10_core_soft::console::ANSWER_DELAY` instructions after the previous step of
+//! `ks10_machine::console::ANSWER_DELAY` instructions after the previous step of
 //! the script.
 
 use std::collections::VecDeque;

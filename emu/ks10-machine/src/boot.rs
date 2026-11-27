@@ -11,8 +11,9 @@
 //! 3. Word 103 of the home block points to the page of file pointers; read
 //!    it to 1000 (GOODPK, BLKRDR).
 //! 4. Word 2 points to the microcode (MICROP, DMEM2CRAM). `BT` does not
-//!    load it; [`read_microcode`] reads it for `ks10-core-uop`. Word 4 points to the monitor pre-boot; read its
-//!    first page to 1000 (LBINT with RM100 = 4).
+//!    load it; [`read_microcode`] reads it for `ks10-core-uop`. Word 4
+//!    points to the monitor pre-boot; read its first page to 1000 (LBINT
+//!    with RM100 = 4).
 //! 5. Words 36 to 40: the RH11 base address with the adapter number, the
 //!    unit, the density and slave (PASSSRC). Start at 1000.
 //!
@@ -25,10 +26,22 @@
 //! preset, the address, word count -2000 (512 words), Unibus address
 //! 4000, read.
 
-use pdp10::{Half, W36};
+use pdp10::W36;
 
 use crate::devregs::{self, rh11 as r, tm03 as t, uba};
-use crate::machine::Machine;
+use crate::unibus::{Io, Reply};
+
+/// What the boot commands need from a processor. The 8080 does a master
+/// reset, moves pages through the I/O bus into memory, and starts the
+/// processor at an address **[its]** (cmds.m80: MRCMD, BTINT, LBINT).
+pub trait Processor {
+    /// The memory, the I/O bus and the time of the bus, at once.
+    fn bus(&mut self) -> (&mut [W36], &mut Io, u64);
+    /// The master reset (MRCMD): the processor and the devices.
+    fn master_reset(&mut self);
+    /// The program starts at `addr` when the processor runs.
+    fn start_at(&mut self, addr: u32);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootError {
@@ -50,38 +63,39 @@ pub enum BootError {
 const HOM: u64 = 0o505755_000000;
 
 /// Write a disk RH11 register through the I/O bus, as the 8080 does.
-fn wr(m: &mut Machine, off: u32, v: u16) {
+fn wr(m: &mut impl Processor, off: u32, v: u16) {
     let d = devregs::DISK;
     let a = (d.adapter << 18) | (d.base + off);
-    let Machine { io, mem, count, .. } = m;
-    io.write(mem, *count, a, u64::from(v), 0o177777);
+    let (mem, io, now) = m.bus();
+    io.write(mem, now, a, u64::from(v), 0o177777);
 }
 
-fn rd(m: &mut Machine, off: u32) -> u16 {
+fn rd(m: &mut impl Processor, off: u32) -> u16 {
     let d = devregs::DISK;
     let a = (d.adapter << 18) | (d.base + off);
-    match m.io.read(a, m.count) {
-        crate::unibus::Reply::Value(v) => v as u16,
-        crate::unibus::Reply::NoDevice => 0,
+    let (_, io, now) = m.bus();
+    match io.read(a, now) {
+        Reply::Value(v) => v as u16,
+        Reply::NoDevice => 0,
     }
 }
 
 /// Finish all device work (the 8080 waits for ready).
-fn wait(m: &mut Machine) {
-    let Machine { io, mem, .. } = m;
+fn wait(m: &mut impl Processor) {
+    let (mem, io, _) = m.bus();
     io.run_events(mem, u64::MAX);
 }
 
 /// Read one page (512 words) from cylinder `cyl`, track and sector `da`
 /// of drive `unit` to memory 1000 to 1777 (DSKSEQ).
-fn read_page(m: &mut Machine, unit: u16, cyl: u16, da: u16) -> Result<(), BootError> {
+fn read_page(m: &mut impl Processor, unit: u16, cyl: u16, da: u16) -> Result<(), BootError> {
     let d = devregs::DISK;
     let page1 = (d.adapter << 18) | (uba::PAGE + 1);
     {
-        let Machine { io, mem, count, .. } = m;
+        let (mem, io, now) = m.bus();
         io.write(
             mem,
-            *count,
+            now,
             page1,
             uba::page::W_VAL | uba::page::W_FST | 1,
             0o177777,
@@ -114,8 +128,8 @@ fn read_page(m: &mut Machine, unit: u16, cyl: u16, da: u16) -> Result<(), BootEr
 }
 
 /// Read the page that the pointer word at `loc` gives.
-fn read_pointer(m: &mut Machine, unit: u16, loc: u32) -> Result<(), BootError> {
-    let p = m.mem[loc as usize].get();
+fn read_pointer(m: &mut impl Processor, unit: u16, loc: u32) -> Result<(), BootError> {
+    let p = m.bus().0[loc as usize].get();
     if p == 0 {
         return Err(BootError::NoFile(loc));
     }
@@ -132,7 +146,7 @@ pub const RAM_FILE_WORDS: usize = 3 * 0o4000;
 /// Read the next page from the address where the drive stopped, to memory
 /// 1000 to 1777 (dr.m80, QXFR: word count, Unibus address and read; no
 /// drive address).
-fn read_next_page(m: &mut Machine) -> Result<(), BootError> {
+fn read_next_page(m: &mut impl Processor) -> Result<(), BootError> {
     wr(m, r::WC, 0o176000);
     wr(m, r::BA, 0o4000);
     wr(m, r::CS1, r::cs1_cmd::READ as u16);
@@ -149,12 +163,12 @@ fn read_next_page(m: &mut Machine) -> Result<(), BootError> {
 /// FILEINIT read the home block, the page of file pointers, and the page
 /// that pointer word 2 gives; DMEM2CR and NEXTCR read the next pages with
 /// QXFR). The pages go through memory 1000 to 1777, as on the KS10.
-pub fn read_microcode(m: &mut Machine, unit: u16) -> Result<Vec<W36>, BootError> {
-    m.reset();
+pub fn read_microcode(m: &mut impl Processor, unit: u16) -> Result<Vec<W36>, BootError> {
+    m.master_reset();
     read_page(m, unit, 0, 1)?;
-    if m.mem[0o1000].get() != HOM {
+    if m.bus().0[0o1000].get() != HOM {
         read_page(m, unit, 0, 0o10)?;
-        if m.mem[0o1000].get() != HOM {
+        if m.bus().0[0o1000].get() != HOM {
             return Err(BootError::NoHomeBlock);
         }
     }
@@ -162,7 +176,7 @@ pub fn read_microcode(m: &mut Machine, unit: u16) -> Result<Vec<W36>, BootError>
     read_pointer(m, unit, 0o1002)?;
     let mut words = Vec::with_capacity(RAM_FILE_WORDS);
     loop {
-        words.extend_from_slice(&m.mem[0o1000..0o2000]);
+        words.extend_from_slice(&m.bus().0[0o1000..0o2000]);
         if words.len() >= RAM_FILE_WORDS {
             words.truncate(RAM_FILE_WORDS);
             return Ok(words);
@@ -172,39 +186,40 @@ pub fn read_microcode(m: &mut Machine, unit: u16) -> Result<Vec<W36>, BootError>
 }
 
 /// The `BT` command for disk unit `unit`.
-pub fn boot_disk(m: &mut Machine, unit: u16) -> Result<(), BootError> {
-    m.reset();
+pub fn boot_disk(m: &mut impl Processor, unit: u16) -> Result<(), BootError> {
+    m.master_reset();
     read_page(m, unit, 0, 1)?;
-    if m.mem[0o1000].get() != HOM {
+    if m.bus().0[0o1000].get() != HOM {
         read_page(m, unit, 0, 0o10)?;
-        if m.mem[0o1000].get() != HOM {
+        if m.bus().0[0o1000].get() != HOM {
             return Err(BootError::NoHomeBlock);
         }
     }
     read_pointer(m, unit, 0o1103)?;
     read_pointer(m, unit, 0o1004)?;
     let d = devregs::DISK;
-    m.mem[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
-    m.mem[0o37] = W36::wrap(u64::from(unit));
-    m.mem[0o40] = W36::ZERO;
-    m.pc = Half::wrap(0o1000);
+    m.bus().0[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
+    m.bus().0[0o37] = W36::wrap(u64::from(unit));
+    m.bus().0[0o40] = W36::ZERO;
+    m.start_at(0o1000);
     Ok(())
 }
 
 /// Write a tape RH11 register through the I/O bus.
-fn twr(m: &mut Machine, off: u32, v: u16) {
+fn twr(m: &mut impl Processor, off: u32, v: u16) {
     let d = devregs::TAPE;
     let a = (d.adapter << 18) | (d.base + off);
-    let Machine { io, mem, count, .. } = m;
-    io.write(mem, *count, a, u64::from(v), 0o177777);
+    let (mem, io, now) = m.bus();
+    io.write(mem, now, a, u64::from(v), 0o177777);
 }
 
-fn trd(m: &mut Machine, off: u32) -> u16 {
+fn trd(m: &mut impl Processor, off: u32) -> u16 {
     let d = devregs::TAPE;
     let a = (d.adapter << 18) | (d.base + off);
-    match m.io.read(a, m.count) {
-        crate::unibus::Reply::Value(v) => v as u16,
-        crate::unibus::Reply::NoDevice => 0,
+    let (_, io, now) = m.bus();
+    match io.read(a, now) {
+        Reply::Value(v) => v as u16,
+        Reply::NoDevice => 0,
     }
 }
 
@@ -217,7 +232,7 @@ fn den_slv(slave: u16) -> u16 {
 /// One tape command of QTXFR: Unibus address 4000, word count -2000
 /// (one page of 512 words), frame count 0, the function, then wait for
 /// the formatter. The result has the error registers.
-fn tape_op(m: &mut Machine, f: u64) -> (u16, u16, u16) {
+fn tape_op(m: &mut impl Processor, f: u64) -> (u16, u16, u16) {
     twr(m, t::BA, 0o4000);
     twr(m, t::WC, 0o176000);
     twr(m, t::FC, 0);
@@ -229,12 +244,12 @@ fn tape_op(m: &mut Machine, f: u64) -> (u16, u16, u16) {
 /// MTASEQ up to the rewind: map Unibus page 1 to memory page 1, clear the
 /// controller, select formatter 0 and the transport, check that it is
 /// there, rewind.
-fn tape_setup(m: &mut Machine, slave: u16) -> Result<(), BootError> {
+fn tape_setup(m: &mut impl Processor, slave: u16) -> Result<(), BootError> {
     let d = devregs::TAPE;
     {
-        let Machine { io, mem, count, .. } = m;
+        let (mem, io, now) = m.bus();
         let page1 = (d.adapter << 18) | (uba::PAGE + 1);
-        io.write(mem, *count, page1, uba::page::W_VAL | 1, 0o177777);
+        io.write(mem, now, page1, uba::page::W_VAL | 1, 0o177777);
     }
     twr(m, t::CS2, t::cs2::CLR as u16);
     twr(m, t::CS2, 0);
@@ -250,7 +265,7 @@ fn tape_setup(m: &mut Machine, slave: u16) -> Result<(), BootError> {
 }
 
 /// MTARST: controller clear, formatter 0, address and frame count.
-fn tape_reset(m: &mut Machine) {
+fn tape_reset(m: &mut impl Processor) {
     twr(m, t::CS2, t::cs2::CLR as u16);
     twr(m, t::CS2, 0);
     twr(m, t::BA, 0o4000);
@@ -263,8 +278,8 @@ fn tape_reset(m: &mut Machine) {
 /// controller, the formatter and DEN.SLV in words 36 to 40 (PASSSRC),
 /// and start at 1000. `MT` also loads the microcode from the first file;
 /// this emulator does not need it.
-pub fn boot_tape(m: &mut Machine, slave: u16) -> Result<(), BootError> {
-    m.reset();
+pub fn boot_tape(m: &mut impl Processor, slave: u16) -> Result<(), BootError> {
+    m.master_reset();
     tape_setup(m, slave)?;
     let (cs1, fs, er) = tape_op(m, t::cs1_cmd::SPACEF);
     if er & !(t::er::FCE as u16) != 0 || cs1 & t::cs1::MCPE as u16 != 0 {
@@ -279,9 +294,9 @@ pub fn boot_tape(m: &mut Machine, slave: u16) -> Result<(), BootError> {
         return Err(BootError::Tape { cs1, fs, er });
     }
     let d = devregs::TAPE;
-    m.mem[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
-    m.mem[0o37] = W36::ZERO;
-    m.mem[0o40] = W36::wrap(u64::from(den_slv(slave)));
-    m.pc = Half::wrap(0o1000);
+    m.bus().0[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
+    m.bus().0[0o37] = W36::ZERO;
+    m.bus().0[0o40] = W36::wrap(u64::from(den_slv(slave)));
+    m.start_at(0o1000);
     Ok(())
 }

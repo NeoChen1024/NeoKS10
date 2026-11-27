@@ -1,7 +1,7 @@
 //! The control RAM and the dispatch ROM of the ITS build.
 //!
 //! The RAM file comes from the disk of the ITS build, read as the 8080 reads
-//! it before it starts the microcode (`ks10_core_soft::boot::read_microcode`). The
+//! it before it starts the microcode (`ks10_machine::boot::read_microcode`). The
 //! listing `KSHACK; MCR 262` comes from the dump tape of the same build
 //! (`make microcode`). Both are third-party files and are not in git: the
 //! test runs only if KS10_ITS_DISK names `rp0.dsk` and KS10_MCR_LISTING
@@ -15,10 +15,11 @@
 //! makes the test fail. It also compares the D words with the instruction
 //! table, which comes from the source text of the microcode.
 
-use ks10_core_soft::{Machine, boot};
+use ks10_core_soft::Machine;
 use ks10_core_uop::cram::{self, CRAM_WORDS, Microword};
 use ks10_core_uop::fields::d;
 use ks10_core_uop::listing::{self, DROM_WORDS, drom_field};
+use ks10_machine::boot;
 use pdp10::W36;
 
 /// The SHA-256 of the RAM file of microcode 262, as 8-byte little-endian

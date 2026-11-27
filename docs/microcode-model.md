@@ -10,7 +10,7 @@ The work has three stages:
 
 1. The data path and the microsequencer on a flat memory, without paging
    and I/O. Random instructions compare it with `emu/ks10-core-soft`.
-2. ITS paging, the I/O cycles to the devices of `emu/ks10-core-soft`, interrupts,
+2. ITS paging, the I/O cycles to the devices of `emu/ks10-machine`, interrupts,
    page fail. Then the diagnostics and an ITS boot.
 3. A model of the 8080 runs the real console program.
 
@@ -43,7 +43,7 @@ The 8080 loads it from the RAM file before it starts the microcode
 3. The pages after the first come from the next sectors: the transfer
    list `QXFR` (`dr.m80`) sets no disk address.
 
-`ks10_core_soft::boot::read_microcode` does these steps on the emulated RH11 and
+`ks10_machine::boot::read_microcode` does these steps on the emulated RH11 and
 RP06.
 
 `.RAMFILE` in `ks10` gives the layout of an entry **[microcode]**: 108

@@ -10,8 +10,9 @@
 //! listing shows the free blocks.
 //! [measured] 2026-11-27: about 140 million steps, 6 s in a release build.
 
-use ks10_core_soft::console::Script;
-use ks10_core_soft::{Machine, boot};
+use ks10_core_soft::Machine;
+use ks10_machine::boot;
+use ks10_machine::console::Script;
 
 #[test]
 fn boot_its_and_list_sys() {

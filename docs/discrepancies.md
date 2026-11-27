@@ -77,7 +77,7 @@ The project uses the microcode (`emu/ks10-core-soft/src/float.rs`, `fad`).
   accepts FCE after a space.
 
 The project uses the 8080 source: a space that stops at a tape mark
-before the count ends sets FCE (`emu/ks10-core-soft/src/tm03.rs`).
+before the count ends sets FCE (`emu/ks10-machine/src/tm03.rs`).
 
 ## TM03: a read of a tape mark
 

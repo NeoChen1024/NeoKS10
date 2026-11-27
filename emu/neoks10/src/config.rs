@@ -62,7 +62,7 @@ pub struct MachineCfg {
 }
 
 fn default_memory() -> usize {
-    ks10_core_soft::machine::MEMORY_WORDS / 1024
+    ks10_machine::MEMORY_WORDS / 1024
 }
 
 fn default_ns() -> u64 {

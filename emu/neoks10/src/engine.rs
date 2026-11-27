@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use ks10_core_soft::{Machine, Stop, boot};
+use ks10_core_soft::{Machine, Stop};
+use ks10_machine::boot;
 use pdp10::{Half, W36};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1074,7 +1075,7 @@ impl Engine {
                     }
                 }
                 Command::CtySend(b) => {
-                    if self.m.count < r.at + ks10_core_soft::console::ANSWER_DELAY {
+                    if self.m.count < r.at + ks10_machine::console::ANSWER_DELAY {
                         return;
                     }
                     r.s.steps.pop_front();
@@ -1129,7 +1130,7 @@ impl Engine {
             match (&r.wait, r.s.steps.front()) {
                 (Some((_, until, _)), _) => end = end.min(*until),
                 (None, Some((_, Command::CtySend(_)))) => {
-                    end = end.min(r.at + ks10_core_soft::console::ANSWER_DELAY);
+                    end = end.min(r.at + ks10_machine::console::ANSWER_DELAY);
                 }
                 _ => {}
             }

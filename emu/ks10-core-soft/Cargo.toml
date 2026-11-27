@@ -1,7 +1,7 @@
 [package]
 name = "ks10-core-soft"
 version = "0.1.0"
-description = "The KS10 machine with the ITS microcode behaviour: processor, memory, console, devices"
+description = "The software processor of the KS10, with the behaviour of the ITS microcode"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,4 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+ks10-machine = { path = "../ks10-machine" }
 pdp10 = { path = "../pdp10" }

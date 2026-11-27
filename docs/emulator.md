@@ -181,7 +181,7 @@ the files with a Python script):
 The emulator implements the microcode behaviour in software, so it skips
 the microcode file.
 
-### Device model in `emu/ks10-core-soft`
+### Device model in `emu/ks10-machine`
 
 - The adapters: the paging RAM, the status register with the PI levels
   of the two request groups, Unibus init, and DMA through the map.
@@ -200,7 +200,7 @@ the microcode file.
   and the IMP comes later.
 - The 8080 `BT` command runs the channel command list `DSKSEQ`
   (`dr.m80`) on the emulated RH11. The `MB` command runs `MTASEQ` and
-  `QTXFR` on the emulated TM03 (`emu/ks10-core-soft/src/boot.rs`). `MT` gives the
+  `QTXFR` on the emulated TM03 (`emu/ks10-machine/src/boot.rs`). `MT` gives the
   same result in the emulator, because the emulator does not load
   microcode.
 
@@ -260,7 +260,9 @@ The crates of `emu/`:
 | Crate | Contents |
 |---|---|
 | `pdp10` | `Word`, octal text, instruction decode generated from `spec/instructions.*` |
-| `ks10-core-soft` | `Machine`: the processor (interpreter), memory, paging, APR, PI, timers, 8080 console, Unibus adapters, devices, the host layer. The C interface |
+| `ks10-machine` | The machine around the processor: the Unibus adapters and the devices, the device registers from `spec/devices.*`, the 8080 console words, the 8080 boot commands, the SAV loader, the size of the memory |
+| `ks10-core-soft` | `Machine`: the software processor (interpreter), memory, paging, APR, PI, timers, the host layer. The C interface |
+| `ks10-core-uop` | The microcode-level model ([`microcode-model.md`](microcode-model.md)) |
 | `neoks10` (the binary `neoks10`) | Command line, configuration, operator console, control socket, scripts, image tools |
 | `plio` | Access to the PL (exists) |
 
@@ -556,9 +558,9 @@ guest:
 
 - While an `expect` waits, the thread looks at the CTY output after each
   instruction that prints. The match has the count of that instruction.
-- A `send` comes 100000 instructions (`ks10_core_soft::console::ANSWER_DELAY`)
+- A `send` comes 100000 instructions (`ks10_machine::console::ANSWER_DELAY`)
   after the previous step of the script. The DEC diagnostic monitor
-  loses characters that come while it prints (`console.rs`).
+  loses characters that come while it prints (`ks10-machine`, `console.rs`).
 - Other commands run at once, at the count of the previous step.
 - If a step of a `run --script` script fails, `run` ends with exit
   status 1 and names the file and the line. If a step of a `script run`

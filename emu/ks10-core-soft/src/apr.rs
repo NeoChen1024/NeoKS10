@@ -136,9 +136,10 @@ impl Pi {
         true
     }
 
-    /// The mask bit of level n (1 to 7).
+    /// The mask bit of level n (1 to 7), as the I/O bus gives its
+    /// requests.
     pub fn level_bit(n: u8) -> u8 {
-        1 << (7 - n)
+        ks10_machine::unibus::level_bit(n)
     }
 
     /// The level that the processor accepts now, if any (PRM 4.1,

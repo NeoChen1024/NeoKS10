@@ -16,16 +16,15 @@
 use pdp10::instructions::{self as ins, Class};
 use pdp10::{Half, W36};
 
+use ks10_machine::MEMORY_WORDS;
+use ks10_machine::console::Console;
+use ks10_machine::unibus::Io;
+
 use crate::apr::{Apr, Pi, flag};
-use crate::console::Console;
 use crate::flags::Flags;
 use crate::ops;
 use crate::pager::{self, Pager, pfw};
 use crate::timer::{self, Timer};
-use crate::unibus::Io;
-
-/// Words of memory: 512 Ki (docs/emulator.md, configuration DB, `TSYSM`).
-pub const MEMORY_WORDS: usize = 512 * 1024;
 
 /// Halt codes (ks10.47, HALT field).
 pub mod halt {
@@ -128,6 +127,21 @@ pub struct Machine {
 impl Default for Machine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The 8080 boot commands (`ks10_machine::boot`) on this processor.
+impl ks10_machine::boot::Processor for Machine {
+    fn bus(&mut self) -> (&mut [W36], &mut Io, u64) {
+        (&mut self.mem, &mut self.io, self.count)
+    }
+
+    fn master_reset(&mut self) {
+        self.reset();
+    }
+
+    fn start_at(&mut self, addr: u32) {
+        self.pc = Half::wrap(u64::from(addr));
     }
 }
 
@@ -668,7 +682,7 @@ impl Machine {
             self.mem[a as usize] = W36::ZERO;
         }
         if let Some(w) = e.input {
-            self.mem[crate::console::CTYIN as usize] = w;
+            self.mem[ks10_machine::console::CTYIN as usize] = w;
         }
         if e.interrupt {
             self.apr.flags |= flag::FROM_8080;
@@ -836,7 +850,7 @@ impl Machine {
             .min(tick)
             .min(
                 self.console
-                    .deadline(self.mem[crate::console::CTYIN as usize]),
+                    .deadline(self.mem[ks10_machine::console::CTYIN as usize]),
             )
             .min(self.io.deadline());
         let to_flag = |top: u64| top.wrapping_sub(x.get()) & W36::MASK;
@@ -1202,7 +1216,7 @@ mod tests {
             m.timer,
             m.io.events,
             m.console,
-            m.mem[crate::console::CTYIN as usize],
+            m.mem[ks10_machine::console::CTYIN as usize],
             z.csr,
             z.tcr,
             z.silo,
@@ -1219,7 +1233,7 @@ mod tests {
     /// 1000 k, the DZ11 polls at 1000 k (line 4 has input), the transmitter
     /// of line 2 is busy to 3500, and a tape event is at 2650.
     fn idle_machine() -> Machine {
-        use crate::devregs::dz11 as d;
+        use ks10_machine::devregs::dz11 as d;
         let mut m = Machine::new();
         m.ac[0o17] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o17));
         m.ac[0] = W36::wrap(W36::SIGN - 40_000);
@@ -1227,7 +1241,8 @@ mod tests {
         m.timer.period = W36::wrap(5 << 12);
         m.timer.ttg = m.timer.period;
         m.timer.last_tick = 300;
-        m.io.events.push((2650, crate::unibus::Event::Tape(999)));
+        m.io.events
+            .push((2650, ks10_machine::unibus::Event::Tape(999)));
         let z = &mut m.io.dz;
         z.csr = d::csr::MSE as u16;
         z.tcr = 1 << 2;
@@ -1251,7 +1266,7 @@ mod tests {
         let mut limit = 700;
         let mut printed = 0;
         let mut bell = 2450;
-        let ctyin = crate::console::CTYIN as usize;
+        let ctyin = ks10_machine::console::CTYIN as usize;
         while b.count < 60_000 {
             let n = b.step_idle(limit).unwrap();
             skipped += n;
@@ -1274,7 +1289,7 @@ mod tests {
             if b.count >= bell {
                 bell = b.count + 5000;
                 for m in [&mut a, &mut b] {
-                    m.mem[crate::console::CTYOT as usize] = W36::wrap(1 << 8 | 0o101);
+                    m.mem[ks10_machine::console::CTYOT as usize] = W36::wrap(1 << 8 | 0o101);
                     m.console.doorbell(m.count);
                 }
             }

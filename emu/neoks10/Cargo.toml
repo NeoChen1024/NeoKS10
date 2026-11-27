@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 ks10-core-soft = { path = "../ks10-core-soft" }
+ks10-machine = { path = "../ks10-machine" }
 pdp10 = { path = "../pdp10" }
 crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
 reedline = "0.53.0"

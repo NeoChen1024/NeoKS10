@@ -5,8 +5,9 @@
 //! image is a third-party file and is not in git: the test runs only if
 //! KS10_ITS_DISK names it.
 
-use ks10_core_soft::console::Script;
-use ks10_core_soft::{Machine, boot};
+use ks10_core_soft::Machine;
+use ks10_machine::boot;
+use ks10_machine::console::Script;
 
 fn machine(src: &std::ffi::OsStr, name: &str) -> (Machine, std::path::PathBuf) {
     let copy = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);

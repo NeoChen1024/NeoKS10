@@ -94,6 +94,12 @@ pub enum Event {
     Rewind(u8, u32),
 }
 
+/// The mask bit of PI level n (1 to 7): level 1 is the left bit of 8.
+/// The processor takes the requests of the bus in this form.
+pub fn level_bit(n: u8) -> u8 {
+    1 << (7 - n)
+}
+
 /// The I/O bus: adapters 1 and 3 (index 0 and 2 are not present).
 pub struct Io {
     pub uba: [Uba; 4],
@@ -150,14 +156,14 @@ impl Io {
         ]
     }
 
-    /// The PI levels that the adapters request, as a mask (`Pi::level_bit`).
+    /// The PI levels that the adapters request, as a mask ([`level_bit`]).
     pub fn requests(&self) -> u8 {
         let mut m = 0;
         for (on, inst, _, _) in self.sources() {
             if on {
                 let l = self.uba[inst.adapter as usize].level(inst.br);
                 if l != 0 {
-                    m |= crate::apr::Pi::level_bit(l);
+                    m |= level_bit(l);
                 }
             }
         }

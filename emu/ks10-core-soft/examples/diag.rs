@@ -13,8 +13,8 @@
 //! order, each one `console::ANSWER_DELAY` instructions after its prompt.
 //! The CTY output is printed at the end.
 
-use ks10_core_soft::sav::{self, Packing};
 use ks10_core_soft::{Machine, Stop};
+use ks10_machine::sav::{self, Packing};
 use pdp10::{Half, W36};
 
 fn main() {
@@ -23,7 +23,7 @@ fn main() {
     let mut limit = 10_000_000u64;
     let mut trace = 0usize;
     let mut files = Vec::new();
-    let mut script = ks10_core_soft::console::Script::default();
+    let mut script = ks10_machine::console::Script::default();
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut deposits: Vec<(u32, W36)> = Vec::new();
     while let Some(a) = args.next() {

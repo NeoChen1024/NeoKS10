@@ -15,4 +15,5 @@ pdp10 = { path = "../pdp10" }
 
 [dev-dependencies]
 ks10-core-soft = { path = "../ks10-core-soft" }
+ks10-machine = { path = "../ks10-machine" }
 sha2 = { version = "0.11.2", default-features = false }

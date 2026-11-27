@@ -18,7 +18,7 @@ use pdp10::{Half, W36};
 
 use crate::machine::{Fault, Inst, Machine, Next};
 use crate::pager::pfw;
-use crate::unibus::Reply;
+use ks10_machine::unibus::Reply;
 
 type R = Result<Next, Fault>;
 
