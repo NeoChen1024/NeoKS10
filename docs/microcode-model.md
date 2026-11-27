@@ -597,8 +597,8 @@ Stage 1 runs single instructions in the state after power-up: PAGE EN,
 TRAP EN and the APR enables are 0, so there is no paging, no cache and
 no trap. The model is `emu/ks10-core-uop/src/alu.rs` and `machine.rs`.
 Stage 2 adds the I/O cycles and the console ("Stage 2: I/O and the
-console").
-
+console"). Stage 3 adds the page table and the cache directory ("Stage
+3: the page table and the cache directory").
 
 A function is either modelled or a stop with "unmodelled". The model
 does not guess a value. A shift line that nothing drives is undefined; a
@@ -649,8 +649,8 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
   on the DBus where DP depends on D;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
-- `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2, 3 and 4
-  (`APR FLAGS`, `CLRCSH`, `SWEEP`); group 10 code 4 (`LDPAGE`);
+- `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2 and 3
+  (code 2 has no name in ks10; `APR FLAGS`);
 - the dispatches DIAG ADR, PAGE FAIL and BYTE, and `DISP/MUL` with `J`
   bit 10 clear;
 - `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
@@ -856,11 +856,9 @@ register (8080 registers 102 to 112) and the data cycle bit of register
   and the ACs after each instruction, and main memory at the stop. Both
   start with the ACs that the power-up sequence leaves. Locations 0 and 1
   and the halt status block are known differences: the console halt of
-  ST writes them in the model only. The model agrees for 5 instructions,
-  about 1.05 million microcycles: most are a BLT that clears memory. It
-  then stops at `SWEEP` (word 2277, `SPEC` group 20 code 4) in `WRUBR`:
-  the page table and the cache are the next stage. The test fails if the
-  model stops earlier.
+  ST writes them in the model only. The result of the boot is in "Stage
+  3: the page table and the cache directory". The test fails if the
+  model stops earlier than its last result.
 
 Mutants of the I/O model: no I/O BUSY on a read or a write, and an I/O
 LATCH without the BUSY term, each give differences in the ACs; a byte
@@ -870,6 +868,59 @@ instructions cannot show them. A skip from I/O LATCH without E98 only
 changes the number of loops in IOWAIT. A byte read as a word read reads
 the same register, because the RH11 of `emu/ks10-machine` ignores the
 low bit of the register address.
+
+## Stage 3: the page table and the cache directory
+
+Stage 3 writes the page table and the cache directory. The model does
+not translate an address yet, and has no cache hit. A memory cycle with
+PAGE EN and a virtual VMA stops the model.
+
+### The tables
+
+From M8621-0-DPM6 rev C, M8621-0-DPM7 rev B, M8621-0-DPMA rev B and
+M8621-0-DPMC rev D **[manual]**:
+
+- **Page table** (DPM6). It has 512 entries, by VMA 18–26. Each RAM pair
+  has the address VMA 19–26. NOT VMA 18 enables the left half, and VMA
+  18 OR VMA SWEEP the right half. An entry takes VALID from DP 18,
+  WRITEABLE from DP 21, CACHEABLE from DP 22, USER from VMA USER, and
+  the physical page 16–26 from DP 25–35.
+- **Page write.** `SPEC/PAGE WRITE` (group 10 code 4) sets PAGE WRITE
+  EN (DPMC E3). The write takes place in the next word, with the DP of
+  that word and the VMA before it loads (DPMA E119, E134). The microcode
+  agrees **[microcode]** (itspag: "Load page table on next
+  instruction").
+- **Cache directory** (DPM7). It has 512 entries, by VMA 27–35, in two
+  halves by VMA 27, or both halves with VMA SWEEP. An entry takes VALID
+  from NOT VMA PHYSICAL, USER from VMA USER, and the page from VMA
+  18–26. The cached words are in the RAM file at 1000–1777.
+- **Cache write** (DPMA E22, E110, E134). The directory writes at the
+  end of a memory cycle that is not an AC reference and that main memory
+  does not stop, and at each word while VMA SWEEP is set.
+- **Sweep.** `SPEC/SWEEP` (34) is SET SWEEP (group 20 code 4) and PAGE
+  WRITE. SET SWEEP also loads VMA (DPE5 E205, E601), and sets VMA SWEEP
+  with it (DPM4 E189). `SPEC/CLRCSH` (24) is SET SWEEP only, and
+  `SPEC/LDPAGE` (14) is PAGE WRITE only. With DP 18 = 0 and a physical
+  VMA, one sweep word thus clears two entries of each table.
+
+### Results
+
+**[measured]** 2026-11-27, the ITS listing 262:
+
+- `emu/ks10-core-uop/tests/console.rs`: `WRUBR` of a zero word ends with
+  `SWEEP` (inout, `WRUBR`), and leaves all 512 entries of both tables
+  written and not valid. Both fills. The mutants "PAGE WRITE in the same
+  word", "SET SWEEP without the VMA load" and "VMA SWEEP without the
+  right half" each fail the test.
+- `emu/ks10-core-uop/tests/its_boot.rs`: the model and
+  `emu/ks10-core-soft` agree for 773 instructions of the boot loader,
+  about 1.06 million microcycles, and in main memory. The model then
+  stops at word 2203 in `WRAPR`: `[BRX]_APR` reads the APR flags on DBM
+  input 0.
+- On the way, the lockstep run found a difference of Trap 1 after an
+  ADD. The microcode and DPE9 decide it
+  ([`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag
+  word loads them").
 
 ## Field tables
 

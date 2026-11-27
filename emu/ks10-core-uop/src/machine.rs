@@ -117,6 +117,30 @@ pub struct Pxct {
     pub bits: u8,
 }
 
+/// An entry of the page table **[manual]** (M8621-0-DPM6 rev C, E130 to
+/// E192). The model keeps no parity bits: a written entry has correct
+/// parity. An entry that nothing wrote is `None` (docs/unknowns.md, "The
+/// microcode-level model").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PageEntry {
+    pub valid: bool,
+    pub writeable: bool,
+    pub cacheable: bool,
+    pub user: bool,
+    /// Physical page bits 16–26.
+    pub page: u16,
+}
+
+/// An entry of the cache directory **[manual]** (M8621-0-DPM7 rev B, E148
+/// to E193): VALID, USER and the virtual page VMA 18–26 of the word in the
+/// RAM file at 1000 + VMA 27–35.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheTag {
+    pub valid: bool,
+    pub user: bool,
+    pub page: u16,
+}
+
 /// The console board: its inputs to the processor and the HALT LOOP flag
 /// (M8616-0-CSL4 rev C). The 8080 sets RUN, CONTINUE and EXECUTE through
 /// register 212, TRAP EN through register 205 and 1 MSEC EN and CACHE EN
@@ -251,6 +275,16 @@ pub struct Machine {
     /// register.
     pub vma: W36,
     pub vma_flags: VmaFlags,
+    /// VMA SWEEP **[manual]** (DPM4 E189 R1): SET SWEEP of the word that
+    /// loaded VMA.
+    pub vma_sweep: bool,
+    /// The page table by VMA 18–26 and the cache directory by VMA 27–35;
+    /// `None` for an entry that nothing has written since power on.
+    pub page_table: Vec<Option<PageEntry>>,
+    pub cache_dir: Vec<Option<CacheTag>>,
+    /// PAGE WRITE EN **[manual]** (DPMC E3 R0): `SPEC/PAGE WRITE` of the
+    /// last word.
+    pub page_write_en: bool,
     /// The DPE copy of VMA bits 26–35 (DPE5 E318, E324).
     pub vma_ram: u16,
     /// The cycle type (DPM5 E33) and MEMORY CYCLE (DPM6 E16 R0).
@@ -366,6 +400,10 @@ impl Machine {
             xr_prev: p,
             vma: pw,
             vma_flags,
+            vma_sweep: p,
+            page_table: vec![None; 512],
+            cache_dir: vec![None; 512],
+            page_write_en: p,
             vma_ram: if p { 0o1777 } else { 0 },
             cycle: Cycle {
                 read: p,
@@ -729,6 +767,10 @@ impl Machine {
         // cycle: an AC write, or a memory cycle (the cache data).
         let ramfile_write =
             self.memory_cycle && mem_wait && (if ac_ref { !self.cycle.read } else { true });
+        // CACHE WRITE at the end of a cycle that is not an AC reference, or
+        // while VMA SWEEP **[manual]** (M8621-0-DPMA rev B, E22, E110).
+        let cache_write =
+            self.vma_sweep || (self.memory_cycle && mem_wait && !ac_ref && !stop_main_memory);
 
         let fmwrite = get(mw, u::FMWRITE) != 0;
         let ir_load = spec_en & 4 != 0 && spec_low == 1;
@@ -770,7 +812,9 @@ impl Machine {
         } else {
             None
         };
-        let vma_en = mem && (get(mw, u::LDVMA) != 0 || (nb(12) && drom_bit(d::VMA)));
+        // SET SWEEP also loads VMA **[manual]** (DPE5 VMA EN, E205, E601).
+        let set_sweep = spec_en & 2 != 0 && spec_low == 4;
+        let vma_en = (mem && (get(mw, u::LDVMA) != 0 || (nb(12) && drom_bit(d::VMA)))) || set_sweep;
         let previous_en = self.previous_en(mw);
 
         // The clock. The skip and dispatch conditions see F and DP of this
@@ -857,8 +901,18 @@ impl Machine {
             self.int_latched = self.interrupt_req;
             self.one_ms_latched = self.one_ms_sync;
         }
+        // The page table and the cache directory take the VMA of the
+        // cycle, before VMA loads.
+        if self.page_write_en {
+            self.write_page_table(dp);
+        }
+        if cache_write {
+            self.write_cache_dir();
+        }
+        self.page_write_en = spec_en & 1 != 0 && spec_low == 4;
         if vma_en {
             self.load_vma(dp, nb, previous_en, spec_en, spec_low);
+            self.vma_sweep = set_sweep;
         }
         // The bus in this microcycle, then the cycles that start in it.
         let group_10 = |code: u32| spec_en & 1 != 0 && spec_low == code;
@@ -888,6 +942,47 @@ impl Machine {
         self.ticks += 2 + u64::from(get(mw, u::T));
         self.upc = next;
         Ok(())
+    }
+
+    /// The entries that VMA selects in a table of two halves: the left half
+    /// if `bit` is 0, the right half if `bit` is 1 or VMA SWEEP **[manual]**
+    /// (DPM6 and DPM7: the chip selects of the RAM pairs).
+    fn halves(&self, bit: bool, index: usize) -> impl Iterator<Item = usize> {
+        let left = (!bit).then_some(index);
+        let right = (bit || self.vma_sweep).then_some(256 | index);
+        left.into_iter().chain(right)
+    }
+
+    /// PAGE WRITE **[manual]** (DPMA E119, E134): the entry by VMA 18–26
+    /// takes DP 18, 21, 22, VMA USER and DP 25–35 (DPM6). The write takes
+    /// place in the next word **[microcode]** (itspag: "Load page table on
+    /// next instruction").
+    fn write_page_table(&mut self, dp: W36) {
+        let e = PageEntry {
+            valid: dp.bit(18),
+            writeable: dp.bit(21),
+            cacheable: dp.bit(22),
+            user: self.vma_flags.user,
+            page: dp.field(25, 35) as u16,
+        };
+        let index = self.vma.field(19, 26) as usize;
+        for k in self.halves(self.vma.bit(18), index).collect::<Vec<_>>() {
+            self.page_table[k] = Some(e);
+        }
+    }
+
+    /// CACHE WRITE **[manual]** (DPMA E110, E134): the entry by VMA 27–35
+    /// takes NOT VMA PHYSICAL as VALID, VMA USER and VMA 18–26 (DPM7).
+    fn write_cache_dir(&mut self) {
+        let t = CacheTag {
+            valid: !self.vma_flags.physical,
+            user: self.vma_flags.user,
+            page: self.vma.field(18, 26) as u16,
+        };
+        let index = self.vma.field(28, 35) as usize;
+        for k in self.halves(self.vma.bit(27), index).collect::<Vec<_>>() {
+            self.cache_dir[k] = Some(t);
+        }
     }
 
     /// Load VMA and the VMA flags (DPM4 E55, E54, E74, E82, E90, E189).
@@ -1073,16 +1168,14 @@ impl Machine {
         if en & 4 != 0 && !matches!(low, 0 | 1 | 3 | 4 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 40, code {low}")));
         }
-        // Group 20 (DPMA E78): 0 PREVIOUS, 1 XR LOAD, 5 APR EN, 6 PXCT OFF,
-        // 7 MEM CLR.
-        if en & 2 != 0 && !matches!(low, 0 | 1 | 5 | 6 | 7) {
+        // Group 20 (DPMA E78): 0 PREVIOUS, 1 XR LOAD, 4 SET SWEEP, 5 APR EN,
+        // 6 PXCT OFF, 7 MEM CLR.
+        if en & 2 != 0 && !matches!(low, 0 | 1 | 4 | 5 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 20, code {low}")));
         }
         // Group 10 (CRA2 E97, DPMA E2): 0 CONSOLE, 1 CLR 1 MSEC, 2 CLR IO
-        // LATCH, 3 CLR IO BUSY, 5 NICOND, 6 PXCT EN, 7 MEM WAIT.
-        if en & 1 != 0 && !matches!(low, 0 | 1 | 2 | 3 | 5 | 6 | 7) {
-            return Err(self.unmodelled(format!("SPEC group 10, code {low}")));
-        }
+        // LATCH, 3 CLR IO BUSY, 4 PAGE WRITE, 5 NICOND, 6 PXCT EN, 7 MEM
+        // WAIT: all are modelled.
         Ok(())
     }
 

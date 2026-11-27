@@ -118,3 +118,39 @@ fn io_instructions_agree_with_the_software_processor() {
     let got: Vec<u64> = [4, 6, 7, 8].iter().map(|&k| s.ac[k].get()).collect();
     assert_eq!(got, [0o123456, 0o201 << 8 | 0o056, 0o201, 0o056]);
 }
+
+/// WRUBR ends with SWEEP, which invalidates the whole page table and the
+/// cache directory: SET SWEEP and PAGE WRITE with DP 18 0, for two entries
+/// at a time (EK-OKS10-TM-002 5.6.3; inout, `WRUBR`, `SWEEP`). The ITS
+/// microcode decodes WRUBR as 701 with AC 3 (inout, dispatch 1723).
+#[test]
+fn wrubr_invalidates_the_page_table_and_the_cache_directory() {
+    let Some(text) = common::listing_text("sweep") else {
+        return;
+    };
+    let haltlp = label(&text, "HALTLP");
+    for fill in FILLS {
+        let mut m = machine(&text, fill);
+        m.master_reset();
+        // WRUBR 1010 with 0 in 1010 (no AC blocks, no base address), then
+        // HALT.
+        m.memory[0o1000] = W36::wrap(0o701_140_001_010);
+        m.memory[0o1001] = W36::wrap(0o254_200_001_002);
+        m.memory[0o1010] = W36::ZERO;
+        m.start_at(0o1000);
+        assert_eq!(
+            run_to_halt(&mut m, haltlp),
+            Ok(true),
+            "fill {:o}",
+            fill.get()
+        );
+        assert_eq!(m.memory[0], W36::wrap(1), "halt code");
+        let pages: Vec<usize> = (0..512)
+            .filter(|&k| m.page_table[k].is_none_or(|e| e.valid))
+            .collect();
+        let tags: Vec<usize> = (0..512)
+            .filter(|&k| m.cache_dir[k].is_none_or(|t| t.valid))
+            .collect();
+        assert_eq!((pages, tags), (vec![], vec![]), "fill {:o}", fill.get());
+    }
+}

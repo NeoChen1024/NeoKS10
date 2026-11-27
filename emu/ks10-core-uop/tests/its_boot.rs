@@ -33,9 +33,9 @@ use ks10_machine::boot;
 const LIMIT: u64 = 10_000_000;
 
 /// The instructions that the model runs before its first stop
-/// (docs/microcode-model.md, "Results"). A change that stops the model
-/// earlier fails the test.
-const PROGRESS: u64 = 5;
+/// (docs/microcode-model.md, "Stage 3", "Results"). A change that stops
+/// the model earlier fails the test.
+const PROGRESS: u64 = 773;
 
 /// The words that the console halt writes (see above): the halt code,
 /// PC, and the halt status block of 16 registers and the VMA (inout,
