@@ -414,10 +414,51 @@ type from the dispatch ROM. `DP FUNC` takes it from DP bits 0–13 instead
 of the number field **[manual]** (5.6, 5.6.1) **[microcode]** (ks10,
 "# REDEFINED WHEN USED AS MEMORY CYCLE CONTROL").
 
+### Memory functions in the schematics
+
+From M8621-0-DPM4 rev B and M8621-0-DPM5 rev B (MP00540 PDF pages 144
+and 145) **[manual]**:
+
+- **VMA load.** VMA 18–35 load from DP 18–35, and VMA 14–17 with VMA
+  EXTENDED (`EXT ADR`) from DP 14–17, when DPE5 VMA EN is true: `MEM`
+  with `LDVMA`, or `MEM` with `AREAD` and the DROM `VMA` bit, or SET SWEEP
+  (DPE5 E205, E601).
+- **VMA flags** (DPM4 E55, E54, E74, E82, E90). If `DP FUNC` is 1, USER,
+  PREVIOUS, PHYSICAL and FETCH load from DP 00, 09, 08 and 02, and the
+  I/O flags (WRU, VECTOR, I/O BYTE, VMA I/O) from DP 11, 10, 13 and 12.
+  Otherwise PHYSICAL and FETCH come from the number field, the I/O flags
+  are 0, PREVIOUS is DPMA PREVIOUS EN OR `SPEC/PREV`, and USER is
+  (NOT `FORCE EXEC` AND NOT console EXECUTE AND USER) OR (`FETCH` AND
+  USER) OR `FORCE USER` OR (PREVIOUS AND PCU).
+- **AC reference.** VMA AC REF is NOT VMA PHYSICAL AND VMA 18–31 all 0
+  (DPM4 E160, E191, E168).
+- **Cycle type** (DPM5 E48, E66, E33). READ, WRITE, WRITE TEST and CACHE
+  INHIBIT come from the number field (`READ CYCLE`, `WRITE CYCLE`, `WRITE
+  TEST`, `DONT CACHE`), from DP 03, 05, 04 and 07 if `DP FUNC` is 1, or
+  from the DROM if `AREAD` is 1. They load only on MEM EN: `MEM` with
+  `WAIT`, or `MEM` with `BWRITE` and the DROM `COND FUNC` bit (E118).
+- **Stop.** STOP MAIN MEMORY is AC REF OR PAGE FAIL OR CACHE HIT (E47):
+  then no bus cycle takes place. For a read, FORCE RAMFILE makes the
+  DBus take the RAM file in place of DBM MEM (E14).
+
+The microcode uses two microinstructions for each cycle: `START READ`
+or `START WRITE` set up the cycle, and `MEM WAIT` (`MEM/1, WAIT/1`)
+completes it. A read gives the word through `DBM/MEM`; a write takes the
+DBus of the `MEM WAIT` word (`MEM_[]` is `DBUS/DP, RAMADR/VMA`)
+**[microcode]** (ks10, the macros after `MEM CYCLE`).
+
+**Paging.** The ITS microcode has no mode without paging. A virtual
+reference goes through the page table of DPM7 and DPM8. A page fail
+jumps to 3777 (`PAGE-FAIL`), and the microcode fills the entry from the
+page tables in memory that `WORK[DBR1]` to `WORK[DBR4]` point to
+**[microcode]** (itspag, `PAGE-FAIL`, `PFMAP`, `GOTDBR`). Stage 1 thus
+needs the page table of DPM7 and DPM8, the page fail logic, and a page
+table in memory, as ITS sets one up.
+
 ## Stage 1
 
-Stage 1 runs the instructions that need no paging and no I/O: a flat
-memory of 512 Ki words, physical addresses, no cache. A test runs one
+Stage 1 runs the instructions that need no I/O: a memory of 512 Ki words,
+no cache, and exec page tables in memory that map each page to itself. A test runs one
 instruction from a state and compares the result with `emu/ks10` for the
 same state. The model is `emu/ks10uop/src/alu.rs` and `machine.rs`.
 
