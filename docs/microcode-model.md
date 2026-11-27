@@ -758,6 +758,14 @@ instruction, finds RUN 0 at NICOND (code 5), and halts with the halt code
 at 500 (`WRTHSB`, `DUMP`). The test checks PC, ONE, MASK, XWD1 and the
 halt code there.
 
+**Known differences.** Design decision 2026-11-28: the two processors
+can differ by a decision ("Time and the boot of ITS"). Each such case is
+an entry of the table `KNOWN` of the test, with its section of
+[`emulator.md`](emulator.md), "Differences from the microcode". For a
+case of the table, the test leaves out the parts of the state that the
+entry names; the other parts must agree. The table has no entry: all
+712 runs agree **[measured]** 2026-11-28.
+
 **Result [measured]** 2026-11-27 (`emu/ks10-core-uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
 and the words at 2000 and 2001 with `emu/ks10-core-soft`. All 42 cases agree,
@@ -870,8 +878,8 @@ time in microcycles.
   `PF-INT`) passes `SPEC/NICOND` again and counts twice. The 1 ms page
   fail does not: `PF-INT` updates the time and continues the instruction
   (`PAGE-CONTINUE`) **[microcode]**. The instruction count is the time
-  base of the devices by design ("Stage 4", "The lockstep run and
-  time").
+  base of the devices by design ("Stage 4", "Time and the boot of
+  ITS").
 
 The controllers:
 
@@ -926,14 +934,9 @@ register (8080 registers 102 to 112) and the data cycle bit of register
   RH11 gives the ACs of `emu/ks10-core-soft` and the values that the
   test computes. Both fills.
 - `emu/ks10-core-uop/tests/its_boot.rs`: BT loads the boot loader from
-  the disk image of the ITS build and starts it at 1000. The model runs
-  in step with `emu/ks10-core-soft`, and compares PC, the program flags
-  and the ACs after each instruction, and main memory at the stop. Both
-  start with the ACs that the power-up sequence leaves. Locations 0 and 1
-  and the halt status block are known differences: the console halt of
-  ST writes them in the model only. The result of the boot is in "Stage
-  3: the page table and the cache directory". The test fails if the
-  model stops earlier than its last result.
+  the disk image of the ITS build and starts it at 1000. The test gives
+  "its" and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`).
+  It passes when ITS prints "IN OPERATION" on the CTY ("Stage 5").
 
 Mutants of the I/O model: no I/O BUSY on a read or a write, and an I/O
 LATCH without the BUSY term, each give differences in the ACs; a byte
@@ -1078,7 +1081,7 @@ insertion of DBM and the byte dispatch. All come from the schematics
   24–33, and bits 34–35 are 0. The MSEC counter (DPMC E181, E189, E180)
   counts 4.1 MHz in 12 bits and wraps about each millisecond, as the 2^12
   units of `TOCK`. Its two low bits do not reach DBM. The model counts it
-  on the time base of the devices ("The lockstep run and time").
+  on the time base of the devices ("Time and the boot of ITS").
 - **Byte insertion.** DPM1 E94 decodes `SPEC` 1 to 5 while DBM SEL 4 is 0
   and DBM SEL 1 is 1, and clears SEL 2 of that byte (E72, E86). With
   `DBM/DP`, byte n (bits 00–06, 07–13, 14–20, 21–27, 28–35) then takes
@@ -1094,46 +1097,32 @@ insertion of DBM and the byte dispatch. All come from the schematics
   02 and NOT DP 04; else 0. The codes agree with the dispatch table of
   the microcode **[microcode]** (simple, `LDB1`).
 
-### The lockstep run and time
+### Time and the boot of ITS
 
-Design decision 2026-11-27. The lockstep run of
-`emu/ks10-core-uop/tests/its_boot.rs` is a regression test of the
-instruction semantics. After each instruction it compares PC, the
-program flags, the ACs and, at the stop, main memory. It does not check
-the timing of the bus or of interrupts, for these reasons:
+Design decision 2026-11-28: the model and `emu/ks10-core-soft` do not
+run in step. `emu/ks10-core-soft` does not run the microcode, and the
+microcode can have behaviour that is not intended. So the instruction
+semantics of `emu/ks10-core-soft` do not follow each detail of the model.
+Each processor boots ITS in its own test. The single-instruction test
+compares them, with a table of known differences ("Single
+instructions").
+
+The time base:
 
 - The devices run on the instruction count (`INSTRUCTIONS_PER_MS`, at
   `SPEC/NICOND`). This time base is a convention of the emulators, not
-  of the hardware. The model uses it so that both processors see the
-  same device events.
+  of the hardware.
 - The timing values of the I/O model are estimates
-  ([`unknowns.md`](unknowns.md)). Agreement with `emu/ks10-core-soft` does
-  not show that they are correct.
+  ([`unknowns.md`](unknowns.md)).
 - **Interrupt timing.** The microcode takes a request some clocks after
   it comes, at the page fail of the next instruction fetch. The
   instruction at which it takes the interrupt thus depends on the
   microcycles of the instructions. `emu/ks10-core-soft` takes a request
-  at the next instruction boundary. The lockstep run holds the
-  interrupts of `emu/ks10-core-soft` (`hold_interrupts`) and lets one
-  through where the model starts one (label `PI`). There, both must
-  accept the same level.
-
-More values of the microcode depend on the microcycle of a tick or a
-request. The lockstep run takes them from the model, and prints how
-often:
-
-- The PC sample table ("Stage 5"): at each sample of the model, the
-  sampled word (WORK[PCST] adds 1,,1).
-- The quantum counter of ITS: `TOCK` adds a tick only if no PI level is
-  in progress (inout, `TOCK`). After each `TOCK` of the model (WORK[TIME1]
-  changes), the counter of the model. In the boot this happens once: at
-  that `TOCK` of the model, level 7 is in progress **[measured]**
-  2026-11-27.
-
-The model runs the devices at `SPEC/NICOND`. `emu/ks10-core-soft` runs
-them at the start of its next step (`run_devices`). At an interrupt of
-the model and at the end, the run calls it first, so both see the same
-instant.
+  at the next instruction boundary.
+- More values of the microcode depend on the microcycle of a tick or a
+  request: the PC sample table ("Stage 5"), and the quantum counter of
+  ITS (`TOCK` adds a tick only if no PI level is in progress: inout,
+  `TOCK`).
 
 The bus semantics come from the microcode and the schematics, and the
 DEC diagnostics check them. The timing in microcycles is for the
@@ -1197,9 +1186,8 @@ Stage 3. All come from the schematics **[manual]** (MP00540).
 millisecond in a table (itspag, `PF-INT`, `.IF/PCST`). It takes the
 sample in the 1 ms page fail, and backs up the PC if that cycle is not
 an instruction fetch. `emu/ks10-core-soft` samples at the instruction
-boundary. The PC word thus depends on the microcycle of the tick, and
-the lockstep run takes it from the model ("Stage 4", "The lockstep run
-and time").
+boundary. The PC word thus depends on the microcycle of the tick
+("Stage 4", "Time and the boot of ITS").
 
 ### Results
 

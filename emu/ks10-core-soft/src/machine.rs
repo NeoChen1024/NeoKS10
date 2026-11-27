@@ -115,13 +115,6 @@ pub struct Machine {
     /// The PXCT bits of the XCTR in progress (0 if none).
     pub pxct: u8,
     pub oneproc: OneProc,
-    /// Do not take an interrupt at the next steps. A test that runs this
-    /// processor in step with the microcode-level model sets it, and lets
-    /// an interrupt through where the model takes one: the microcode takes
-    /// a request some microcycles after it comes, so the instruction at
-    /// which it takes it depends on the microcycles of the instructions
-    /// (docs/microcode-model.md, "Interrupt timing"). False in normal use.
-    pub hold_interrupts: bool,
     /// The I/O bus: adapters and devices.
     pub io: Io,
     /// The timer ticks come from [`Machine::tick`], which the host calls
@@ -228,7 +221,6 @@ impl Machine {
             hsb: W36::wrap(0o500),
             pxct: 0,
             oneproc: OneProc::Off,
-            hold_interrupts: false,
             io: Io::default(),
             wall_clock: false,
         }
@@ -439,11 +431,9 @@ impl Machine {
     }
 
     /// The work between two instructions, at the instruction count: the
-    /// 1 ms clock, the 8080 and the devices. A second call at the same
-    /// count does nothing more. [`Machine::step`] starts with it; a test
-    /// that runs in step with the microcode-level model calls it to see
-    /// the requests of this instant.
-    pub fn run_devices(&mut self) {
+    /// 1 ms clock, the 8080 and the devices. [`Machine::step`] starts with
+    /// it.
+    fn run_devices(&mut self) {
         timer::run(self);
         self.console();
         self.io.poll(self.count);
@@ -454,15 +444,6 @@ impl Machine {
 
     /// The level of the interrupt that the next step takes, if any.
     fn pending_interrupt(&self) -> Option<u8> {
-        if self.hold_interrupts {
-            return None;
-        }
-        self.acceptable_interrupt()
-    }
-
-    /// The level of the interrupt that the PI system accepts now, if any,
-    /// also while [`Machine::hold_interrupts`] is set.
-    pub fn acceptable_interrupt(&self) -> Option<u8> {
         self.pi.accept(self.requests())
     }
 

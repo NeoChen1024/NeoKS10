@@ -865,7 +865,13 @@ parts are modelled as hardware state, not as microcode steps:
 - The I/O instructions reach the I/O address space. With no devices, each
   reference is a page failure with "no IO register".
 
-Differences from the microcode:
+Differences from the microcode. Design decision 2026-11-28:
+`emu/ks10-core-soft` does not copy the microcode-level model. Its sources
+are the manuals, the DEC diagnostics and the needs of ITS. A difference
+from the model is an entry here, and in the table of known differences
+of `emu/ks10-core-uop/tests/instructions.rs` if that test shows it. The
+reason: this processor does not run the microcode, and the microcode can
+have behaviour that is not intended.
 
 - EXTEND runs to the end in one step. After a page failure inside it,
   the ACs go back to their values at the start. The microcode keeps the

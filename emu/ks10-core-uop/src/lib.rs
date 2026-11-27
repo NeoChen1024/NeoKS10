@@ -1,7 +1,9 @@
 //! The KS10 at the level of the microcode (docs/architecture.md, the
 //! microcode-level model). A model of the KS10 data path runs the
-//! microcode that the ITS build assembles. Where the sources disagree about
-//! an instruction, this model decides (AGENTS.md, "Sources of truth").
+//! microcode that the ITS build assembles. It is the executable form of
+//! the first source of AGENTS.md ("Sources of truth") for the data path
+//! and the microcode. `ks10-core-soft` is compared with it, but does not
+//! copy its internal state.
 //!
 //! - [`fields`]: the fields of the microword and of the dispatch ROM word,
 //!   and the layout of the RAM file, generated from the ITS microcode

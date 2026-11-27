@@ -48,7 +48,11 @@ source.
    - `spec/devices.*` is the only definition of the I/O device registers.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
    - The microcode-level model in `emu/` is the model for the logic in
-     `rtl/`. The instruction-level software processor is compared with it.
+     `rtl/`. The instruction-level software processor is compared with it
+     one instruction at a time, but it does not copy the internal state
+     of the microcode. A difference is a recorded difference with a
+     reason (`docs/emulator.md`, "Differences from the microcode"), or an
+     error of one of the two. The two do not run in step.
 
 The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. The
 submodule `3rdparty/PYNQ-Z2` pins the commit that this repository uses. Do not

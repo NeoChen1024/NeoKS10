@@ -9,8 +9,13 @@
 //! in location 1 (inout, HALTLP, CONT, NICOND code 5, HALTED, PWRON).
 //!
 //! `ks10-core-soft` runs the same instruction from the same state. The test compares
-//! the ACs, PC, the program flags and the words at 2000 and 2001. A
-//! difference is a finding for docs/discrepancies.md, not a value to
+//! the ACs, PC, the program flags and the words at 2000 and 2001.
+//!
+//! `ks10-core-soft` does not copy the microcode: the two can differ by a
+//! decision. Each such difference is an entry of [`KNOWN`], with the
+//! section of docs/emulator.md ("Differences from the microcode") that
+//! gives the reason. A new difference is a finding: record it there and
+//! here, or correct the model or `ks10-core-soft`. It is not a value to
 //! adjust (AGENTS.md, "Tests").
 
 mod common;
@@ -777,6 +782,32 @@ fn flag_cases() -> Vec<Case> {
     v
 }
 
+/// A known difference between the model and `ks10-core-soft`. For a case
+/// where `applies` is true, `normalize` takes the different parts out of
+/// both states before the comparison; the other parts must agree.
+struct Known {
+    /// The section of docs/emulator.md, "Differences from the microcode".
+    why: &'static str,
+    applies: fn(&Case) -> bool,
+    normalize: fn(&mut State),
+}
+
+/// The known differences. There is none: all cases agree (2026-11-28).
+const KNOWN: &[Known] = &[];
+
+/// Do the two states agree, after the normalization of the known
+/// differences that apply to the case? The second value names them.
+fn agree(known: &[Known], c: &Case, got: &State, want: &State) -> (bool, Vec<&'static str>) {
+    let (mut got, mut want) = (got.clone(), want.clone());
+    let mut used = Vec::new();
+    for k in known.iter().filter(|k| (k.applies)(c)) {
+        (k.normalize)(&mut got);
+        (k.normalize)(&mut want);
+        used.push(k.why);
+    }
+    (got == want, used)
+}
+
 fn all_cases() -> Vec<Case> {
     let mut v = cases();
     v.extend(random_shifts());
@@ -790,6 +821,7 @@ fn all_cases() -> Vec<Case> {
 fn single_instructions_agree_with_the_software_processor() {
     let mut stops = Vec::new();
     let mut differences = Vec::new();
+    let mut known = std::collections::BTreeMap::new();
     let mut coverage = Coverage::default();
     for fill in FILLS {
         for c in all_cases() {
@@ -797,6 +829,11 @@ fn single_instructions_agree_with_the_software_processor() {
             let got = model(fill, &c, &mut coverage);
             match got {
                 Ok(got) if got == want => {}
+                Ok(got) if agree(KNOWN, &c, &got, &want).0 => {
+                    for why in agree(KNOWN, &c, &got, &want).1 {
+                        *known.entry(why).or_insert(0) += 1;
+                    }
+                }
                 Ok(got) => differences.push(format!(
                     "{} (fill {:o}):\n  model {got}\n  ks10  {want}",
                     c.name,
@@ -807,13 +844,17 @@ fn single_instructions_agree_with_the_software_processor() {
         }
     }
     let n = 2 * all_cases().len();
+    let k: usize = known.values().sum();
     println!(
-        "{} cases: {} agree, {} differ, {} stop",
+        "{} cases: {} agree, {k} known differences, {} differ, {} stop",
         n,
-        n - differences.len() - stops.len(),
+        n - k - differences.len() - stops.len(),
         differences.len(),
         stops.len()
     );
+    for (why, count) in &known {
+        println!("KNOWN {count}: {why}");
+    }
     println!("{coverage}");
     for s in &stops {
         println!("STOP {s}");
@@ -822,4 +863,38 @@ fn single_instructions_agree_with_the_software_processor() {
         println!("DIFF {d}");
     }
     assert!(differences.is_empty() && stops.is_empty());
+}
+
+/// A known difference takes out only its own part of the states.
+#[test]
+fn a_known_difference_hides_only_its_part() {
+    let known = [Known {
+        why: "test",
+        applies: |c| c.name == "x",
+        normalize: |s| s.flags = 0,
+    }];
+    let c = |name: &str| Case {
+        name: name.into(),
+        inst: 0,
+        ac: [0; 16],
+        mem: [0; 2],
+        flags: 0,
+    };
+    let want = State {
+        pc: 0o1001,
+        flags: 0,
+        ac: [0; 16],
+        mem: [0; 2],
+    };
+    let flags = State {
+        flags: 0o400000,
+        ..want.clone()
+    };
+    let pc = State {
+        pc: 0o1002,
+        ..flags.clone()
+    };
+    assert_eq!(agree(&known, &c("x"), &flags, &want), (true, vec!["test"]));
+    assert_eq!(agree(&known, &c("y"), &flags, &want), (false, vec![]));
+    assert!(!agree(&known, &c("x"), &pc, &want).0);
 }

@@ -86,9 +86,10 @@ schematics (MP00540):
   Unibus adapter asserts I/O BUSY before its data cycle, and after a
   write. The model uses 4 microcycles **[estimate]**. This value and the
   other timing estimates here are verification targets: the DEC
-  diagnostics and the co-simulation with `rtl/` can check them, and the
-  lockstep run cannot ([`microcode-model.md`](microcode-model.md), "The
-  lockstep run and time").
+  diagnostics and the co-simulation with `rtl/` can check them, and a
+  comparison with `emu/ks10-core-soft` cannot
+  ([`microcode-model.md`](microcode-model.md), "Time and the boot of
+  ITS").
 - What a Unibus adapter does on a read or a write of an address with no
   device. The model gives no I/O BUSY and no data cycle, so IOWAIT ends
   in the page fail "nonexistent I/O register" (inout, IOW5; ksdefs,
