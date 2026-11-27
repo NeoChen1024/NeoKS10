@@ -1285,9 +1285,10 @@ impl Machine {
     /// The page fail dispatch PF DISP 10, 04, 02, 01 **[manual]**
     /// (M8621-0-DPM6 rev C, E116, E115, E9, E47, E124, E41). PAGING OK
     /// enables the 74148 E116; the drawing names its inputs from D0 (the
-    /// highest) to D7, so D4 to D6 are its inputs 3 to 1: page not valid,
-    /// USER of the page and of VMA differ, a write test of a page that is
-    /// not writeable. Its outputs are active low. The codes agree with the
+    /// highest) to D7, so D4 to D7 are its inputs 3 to 0: page not valid,
+    /// USER of the page and of VMA differ, and on D6 and D7 (one line) a
+    /// write test of a page that is not writeable. Its outputs are active
+    /// low. The codes agree with the
     /// dispatch of the microcode **[microcode]** (itspag, `PFD`: 12
     /// nonexistent page, 13 exec/user mismatch, 10 read-only page, 11 the
     /// 1 ms timer). NXM ERR and BAD DATA ERR are 0: the model stops on

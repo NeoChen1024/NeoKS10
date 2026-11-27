@@ -1066,6 +1066,31 @@ co-simulation of the model with the logic in `rtl/`.
   model stays in the halt loop after 1 002 instructions. The test stops
   a run that has no instruction for 10 million microcycles.
 
+## DEC diagnostics on the model
+
+`emu/ks10-core-uop/tests/diag.rs` runs the programs of SMCPU.CMD on the
+model, with the switches and pass criteria of `emu/ks10-core-soft`
+([`emulator.md`](emulator.md), "Diagnostics"). The diagnostics are
+recorded data of the machine (rank 2), so they check the microcode paths
+and the data path without `emu/ks10-core-soft`. `make diag` runs them if
+`make microcode` made the listing. A program that reaches a function
+that the model does not have is PENDING: it is neither a pass nor a
+failure.
+
+**[measured]** 2026-11-27, the ITS listing 262:
+
+- Pass: DSKAA to DSKAH (PASCNT), DSKAI to DSKAL and DSKCF ("END PASS
+  64."). Under SUBSM, the instruction counts equal those of
+  `emu/ks10-core-soft`.
+- PENDING: DSKCA to DSKCE stop at `DBM/EXP` with `SPEC/EXPTST` (DBM
+  input 2 and the FXU gate of DPE9 E206, [`unknowns.md`](unknowns.md)).
+  DSKAM and DSKBA stop at 0121, `[AR]_FE` (simple, JFFO): DBM inserts
+  SCAD into byte 5 of DP, and DP is `AD/D` of the DBus. The other bits of
+  that loop have no defined value; the next word masks them.
+- Not run: DSKCG, DSKEA, DSKEB and DSKEC, for the reasons of
+  `emu/ks10-core-soft`, and because the model has no paging and no cache
+  hit yet.
+
 ## Field tables
 
 `spec/gen_microcode.py` reads from the ITS microcode sources:

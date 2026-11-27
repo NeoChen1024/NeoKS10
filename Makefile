@@ -193,7 +193,8 @@ microcode:
 # The tape comes from `make references`. t10backup of tapeutils (the
 # submodule tools/tapeutils of 3rdparty/its, pinned there) extracts the
 # files into the build output. The test emu/ks10-core-soft/tests/diag.rs runs the
-# programs of the run file SMCPU.CMD.
+# programs of the run file SMCPU.CMD. emu/ks10-core-uop/tests/diag.rs runs
+# them on the microcode-level model, if `make microcode` made the listing.
 DIAG_DIR = $(abspath $(BUILD_DIR))/diag
 DIAG_TAPE = references/trailing-edge/tapes/ks_diag_gs.tap.bz2
 TAPEUTILS = $(ITS_TREE)/tools/tapeutils
@@ -206,6 +207,11 @@ diag:
 	cd $(DIAG_DIR)/files && ../t10backup -x -f ../ks_diag_gs.tap '*' > ../t10backup.log
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test diag -- --nocapture
+	@test -f $(MICROCODE_LISTING) || echo "diag: microcode-level model SKIPPED, $(MICROCODE_LISTING) is missing (make microcode)"
+	if [ -f $(MICROCODE_LISTING) ]; then \
+	    cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files KS10_MCR_LISTING=$(MICROCODE_LISTING) \
+	        $(NICE) $(CARGO) test --locked --release -p ks10-core-uop --test diag -- --nocapture; \
+	fi
 
 # The reference emulators with their trace hooks (oracle/). Each source is
 # a submodule of 3rdparty/its, which must be at the commit of its pin
