@@ -231,3 +231,26 @@ HLLE, HLLEM and HLLES of a positive source with a bit of 1 to 3 set.
 The project uses the microcode and the PRM. The differential run does
 not compare DIV when the high word of the magnitude of the dividend
 equals the magnitude of the divisor.
+
+## SCAD: seven or eight functions
+
+- **[manual]** EK-OKS10-TM-002, 5.5.4: the SCAD ALUs "are limited to the
+  seven functions listed in the table at the upper left [of DPM3] because
+  selection is made by only three bits".
+- **[microcode]** `src/kshack/ks10.47`, field `SCAD`: eight codes, 0 to 7
+  (`A*2`, `A.OR.B`, `A-B-1`, `A-B`, `A+B`, `A.AND.B`, `A-1`, `A`).
+
+The project uses the microcode: eight codes. The DPM3 table can show if
+two codes give the same function.
+
+## Dispatch: the address bits of each group
+
+- **[microcode]** `src/kshack/ks10.47`, "MICROCODE FIELDS -- DISPATCH":
+  DISP EN 40 and DISP EN 10 control the low 4 bits of the jump address,
+  DISP EN 20 controls "THE HI 7 BITS", and all 11 bits need two groups.
+- **[manual]** EK-OKS10-TM-002, 5.4.1, bits 57–62: the dispatch is ORed
+  with `J` bits 0–7 or 8–11 or both.
+
+The control RAM has 4000 (octal) words, which is 11 address bits. `J` has
+12 bits (0–11). The project uses the microcode: group 20 acts on `J` bits
+1–7. The CRA1 schematic can show the use of `J` bit 0.

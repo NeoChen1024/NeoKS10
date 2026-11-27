@@ -71,9 +71,20 @@ disagree:
 
 ## The microcode-level model
 
-- The data path details that the microcode sources do not give: the
-  width of the 2901 slices and their extra bits, the meaning of `DP0` and
-  of the special functions (MUL, DIV, ASHC, NORM DISP), and their timing.
+[`microcode-model.md`](microcode-model.md), "The data path", gives what
+the manual and the field definitions give. These connections need the
+schematics (MP00540):
+
+- The skip condition `DP0` ("AD SIGN" in the `SKIP` values, "ADL SIGN" in
+  the table): DP SIGN (bit −2 of the 40 bits) or DP bit 0 (DPEA).
+- The bits that `AD=0`, `ADL=0` and `ADR=0` test: 36 or 40 (DPEA).
+- How `MULTI SHIFT` repeats a step, and what changes FE at each repeat
+  (CSL5, DPM4).
+- The conditions of the dispatch inputs `MUL`, `NORM`, `BYTE`, `EAMODE`
+  and `PAGE FAIL` bit by bit (CRA1, DPEA, DPE3).
+- The shift connections bit by bit for each `SHSTYLE` (DPE1), and the
+  DIVIDE and MULTI PREC flags (DPE5).
+- The program flag logic (DPE9), and the SCAD mixers (DPM3).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 
