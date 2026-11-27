@@ -67,6 +67,7 @@ differential run), `make diag` (the DEC diagnostics), `make oracle`
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Parts, reasons, verification and plan |
 | [`docs/emulator.md`](docs/emulator.md) | The design of `neoks10`, the device model, the diagnostics and the differential runs |
+| [`docs/microcode-model.md`](docs/microcode-model.md) | The microcode-level model: the microcode of the ITS build, the data path |
 | [`docs/mem-path-experiment.md`](docs/mem-path-experiment.md) | The PS/PL memory path: plan and measurements |
 | [`docs/discrepancies.md`](docs/discrepancies.md) | Cases where two sources disagree, and the decision |
 | [`docs/unknowns.md`](docs/unknowns.md) | Values that no source gives yet |

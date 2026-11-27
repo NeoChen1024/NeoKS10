@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot diag oracle oracle-sims oracle-klh10
+.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot microcode diag oracle oracle-sims oracle-klh10
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -22,6 +22,7 @@ gen:
 	$(PYTHON) spec/gen_regmap.py
 	$(PYTHON) spec/gen_instructions.py
 	$(PYTHON) spec/gen_devices.py
+	$(PYTHON) spec/gen_microcode.py --its $(ITS_TREE)
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown > ../docs/console.md
 
 # Format, lint, unit tests, a check that the generated files are current,
@@ -35,6 +36,7 @@ check-gen:
 	$(PYTHON) spec/gen_regmap.py --check
 	$(PYTHON) spec/gen_instructions.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_devices.py --check --its $(ITS_TREE)
+	$(PYTHON) spec/gen_microcode.py --check --its $(ITS_TREE)
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown | diff -u ../docs/console.md -
 
 check-py:
@@ -165,6 +167,27 @@ its-boot:
 	cmp $(ITS_BOOT_DIR)/boot.out $(ITS_BOOT_DIR)/replay.out
 	rm -f $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
 	@echo "its-boot: ITS booted, listed SYS;, and the replay gave the same output"
+
+# The microcode of the ITS build (emu/ks10uop). KS10_ITS_DISK names rp0.dsk
+# of the ITS build; output.tape, the dump tape of the build, is in the same
+# directory. itstar (the submodule tools/itstar of 3rdparty/its, pinned
+# there) extracts the listing KSHACK; MCR 262 into the build output. The
+# test emu/ks10uop/tests/ram_file.rs reads the RAM file from the disk as
+# the 8080 does and compares it with the listing.
+MICROCODE_DIR = $(abspath $(BUILD_DIR))/microcode
+MICROCODE_LISTING = $(MICROCODE_DIR)/mcr.262
+ITSTAR = $(ITS_TREE)/tools/itstar
+microcode:
+	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
+	@test -f "$(dir $(KS10_ITS_DISK))output.tape" || { echo "microcode: output.tape is not next to $(KS10_ITS_DISK)" >&2; exit 2; }
+	@test -f $(ITSTAR)/itstar.c || { echo "microcode: run git -C $(ITS_TREE) submodule update --init tools/itstar" >&2; exit 2; }
+	rm -rf $(MICROCODE_DIR) && mkdir -p $(MICROCODE_DIR)/tape
+	$(CC) -O2 -o $(MICROCODE_DIR)/itstar $(addprefix $(ITSTAR)/,itstar.c dirlst.c pack.c tapeio.c tm03.c unpack.c zopen.c)
+	cd $(MICROCODE_DIR)/tape && $(NICE) ../itstar -xf "$(abspath $(dir $(KS10_ITS_DISK)))/output.tape" > ../itstar.log
+	cp $(MICROCODE_DIR)/tape/kshack/mcr.262 $(MICROCODE_LISTING)
+	rm -rf $(MICROCODE_DIR)/tape
+	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
+	    $(NICE) $(CARGO) test --locked -p ks10uop --test ram_file -- --nocapture
 
 # The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
 # The tape comes from `make references`. t10backup of tapeutils (the

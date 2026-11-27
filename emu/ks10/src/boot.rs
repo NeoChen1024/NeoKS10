@@ -10,8 +10,8 @@
 //!    check `SIXBIT /HOM/` in its word 0 (CHKHOM, HOMEWD).
 //! 3. Word 103 of the home block points to the page of file pointers; read
 //!    it to 1000 (GOODPK, BLKRDR).
-//! 4. Word 2 points to the microcode, which this emulator does not need
-//!    (MICROP, DMEM2CRAM). Word 4 points to the monitor pre-boot; read its
+//! 4. Word 2 points to the microcode (MICROP, DMEM2CRAM). `BT` does not
+//!    load it; [`read_microcode`] reads it for `ks10uop`. Word 4 points to the monitor pre-boot; read its
 //!    first page to 1000 (LBINT with RM100 = 4).
 //! 5. Words 36 to 40: the RH11 base address with the adapter number, the
 //!    unit, the density and slave (PASSSRC). Start at 1000.
@@ -122,6 +122,53 @@ fn read_pointer(m: &mut Machine, unit: u16, loc: u32) -> Result<(), BootError> {
     let cyl = ((p >> 24) & 0o7777) as u16;
     let da = (p & 0o177777) as u16;
     read_page(m, unit, cyl, da)
+}
+
+/// The words of the RAM file: three for each of the 4000 control RAM
+/// words **[its]** (cmds.m80, DMEM2CR: it stops at CRAM address 4000 and
+/// takes three memory words for each CRAM word).
+pub const RAM_FILE_WORDS: usize = 3 * 0o4000;
+
+/// Read the next page from the address where the drive stopped, to memory
+/// 1000 to 1777 (dr.m80, QXFR: word count, Unibus address and read; no
+/// drive address).
+fn read_next_page(m: &mut Machine) -> Result<(), BootError> {
+    wr(m, r::WC, 0o176000);
+    wr(m, r::BA, 0o4000);
+    wr(m, r::CS1, r::cs1_cmd::READ as u16);
+    wait(m);
+    let (cs1, ds, er1) = (rd(m, r::CS1), rd(m, r::DS), rd(m, r::ER1));
+    if ds & r::ds::ERR as u16 != 0 || cs1 & (r::cs1::TRE | r::cs1::MCPE) as u16 != 0 {
+        return Err(BootError::Disk { cs1, ds, er1 });
+    }
+    Ok(())
+}
+
+/// Read the RAM file of the microcode from disk unit `unit`, as the 8080
+/// does before `BT` starts the microcode **[its]** (cmds.m80: MICROP and
+/// FILEINIT read the home block, the page of file pointers, and the page
+/// that pointer word 2 gives; DMEM2CR and NEXTCR read the next pages with
+/// QXFR). The pages go through memory 1000 to 1777, as on the KS10.
+pub fn read_microcode(m: &mut Machine, unit: u16) -> Result<Vec<W36>, BootError> {
+    m.reset();
+    read_page(m, unit, 0, 1)?;
+    if m.mem[0o1000].get() != HOM {
+        read_page(m, unit, 0, 0o10)?;
+        if m.mem[0o1000].get() != HOM {
+            return Err(BootError::NoHomeBlock);
+        }
+    }
+    read_pointer(m, unit, 0o1103)?;
+    read_pointer(m, unit, 0o1002)?;
+    let mut words = Vec::with_capacity(RAM_FILE_WORDS);
+    loop {
+        words.extend_from_slice(&m.mem[0o1000..0o2000]);
+        if words.len() >= RAM_FILE_WORDS {
+            words.truncate(RAM_FILE_WORDS);
+            return Ok(words);
+        }
+        read_next_page(m)?;
+    }
 }
 
 /// The `BT` command for disk unit `unit`.

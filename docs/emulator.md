@@ -959,11 +959,12 @@ Open:
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
 
-- The microcode-level model (decision 17). Its first stage: the data path
-  and the microcode without paging and I/O, on a flat memory. It decides
-  the cases of `docs/unknowns.md` that no DEC vector decides; the first
-  one is FDV with normalized operands. The DEC KS10 hardware documents
-  for the data path must be found and put into `third-party.lock` first.
+- The microcode-level model (decision 17), `emu/ks10uop`
+  ([`microcode-model.md`](microcode-model.md)). The microcode of the ITS
+  build loads and is checked. Next is its first stage: the data path and
+  the microcode without paging and I/O, on a flat memory. It decides the
+  cases of `docs/unknowns.md` that no DEC vector decides; the first one is
+  FDV with normalized operands.
 
 ## Open items
 
