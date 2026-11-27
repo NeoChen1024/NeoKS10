@@ -26,7 +26,7 @@ const E: usize = 0o2000;
 /// A case: the instruction word (its E is 2000, 2001 or an AC), the ACs
 /// and the words at 2000 and 2001.
 struct Case {
-    name: &'static str,
+    name: String,
     inst: u64,
     ac: [u64; 16],
     mem: [u64; 2],
@@ -171,253 +171,253 @@ fn cases() -> Vec<Case> {
     let e = E as u64;
     vec![
         Case {
-            name: "MOVE",
+            name: "MOVE".into(),
             inst: i(0o200, 1, e),
             ac: acs(&[]),
             mem: [0o123456_654321, 0],
         },
         Case {
-            name: "MOVEI",
+            name: "MOVEI".into(),
             inst: i(0o201, 2, 0o1234),
             ac: acs(&[]),
             mem: [0, 0],
         },
         Case {
-            name: "MOVEM",
+            name: "MOVEM".into(),
             inst: i(0o202, 3, e),
             ac: acs(&[(3, 0o707070_070707)]),
             mem: [5, 0],
         },
         Case {
-            name: "MOVE from an AC",
+            name: "MOVE from an AC".into(),
             inst: i(0o200, 1, 4),
             ac: acs(&[(4, 0o4444)]),
             mem: [0, 0],
         },
         Case {
-            name: "MOVEM to an AC",
+            name: "MOVEM to an AC".into(),
             inst: i(0o202, 5, 6),
             ac: acs(&[(5, 0o5555)]),
             mem: [0, 0],
         },
         Case {
-            name: "ADD",
+            name: "ADD".into(),
             inst: i(0o270, 1, e),
             ac: acs(&[(1, 5)]),
             mem: [7, 0],
         },
         Case {
-            name: "ADD overflow",
+            name: "ADD overflow".into(),
             inst: i(0o270, 1, e),
             ac: acs(&[(1, MAX)]),
             mem: [1, 0],
         },
         Case {
-            name: "ADD carries",
+            name: "ADD carries".into(),
             inst: i(0o270, 1, e),
             ac: acs(&[(1, M1)]),
             mem: [M1, 0],
         },
         Case {
-            name: "SUB",
+            name: "SUB".into(),
             inst: i(0o274, 1, e),
             ac: acs(&[(1, 5)]),
             mem: [7, 0],
         },
         Case {
-            name: "SUB overflow",
+            name: "SUB overflow".into(),
             inst: i(0o274, 1, e),
             ac: acs(&[(1, MIN)]),
             mem: [1, 0],
         },
         Case {
-            name: "ADDB",
+            name: "ADDB".into(),
             inst: i(0o273, 7, e),
             ac: acs(&[(7, 0o100)]),
             mem: [0o23, 0],
         },
         Case {
-            name: "AND",
+            name: "AND".into(),
             inst: i(0o404, 2, e),
             ac: acs(&[(2, 0o707070_707070)]),
             mem: [0o777000_000777, 0],
         },
         Case {
-            name: "IOR",
+            name: "IOR".into(),
             inst: i(0o434, 2, e),
             ac: acs(&[(2, 0o700000_000007)]),
             mem: [0o000077_770000, 0],
         },
         Case {
-            name: "SETZM",
+            name: "SETZM".into(),
             inst: i(0o402, 0, e),
             ac: acs(&[]),
             mem: [M1, 0],
         },
         Case {
-            name: "AOS",
+            name: "AOS".into(),
             inst: i(0o350, 0, e),
             ac: acs(&[]),
             mem: [41, 0],
         },
         Case {
-            name: "AOS to an AC",
+            name: "AOS to an AC".into(),
             inst: i(0o350, 2, e),
             ac: acs(&[]),
             mem: [MAX, 0],
         },
         Case {
-            name: "AOS of an AC",
+            name: "AOS of an AC".into(),
             inst: i(0o350, 0, 6),
             ac: acs(&[(6, 0o17)]),
             mem: [0, 0],
         },
         Case {
-            name: "HRRZ",
+            name: "HRRZ".into(),
             inst: i(0o550, 1, e),
             ac: acs(&[(1, M1)]),
             mem: [0o123456_654321, 0],
         },
         Case {
-            name: "HLL",
+            name: "HLL".into(),
             inst: i(0o500, 1, e),
             ac: acs(&[(1, 0o111111_222222)]),
             mem: [0o333333_444444, 0],
         },
         Case {
-            name: "CAIE skip",
+            name: "CAIE skip".into(),
             inst: i(0o302, 1, 5),
             ac: acs(&[(1, 5)]),
             mem: [0, 0],
         },
         Case {
-            name: "CAIE no skip",
+            name: "CAIE no skip".into(),
             inst: i(0o302, 1, 5),
             ac: acs(&[(1, 6)]),
             mem: [0, 0],
         },
         Case {
-            name: "SKIPL",
+            name: "SKIPL".into(),
             inst: i(0o331, 0, e),
             ac: acs(&[]),
             mem: [MIN, 0],
         },
         Case {
-            name: "MOVE indexed",
+            name: "MOVE indexed".into(),
             inst: i(0o200, 1, e - 1) | (3 << 18),
             ac: acs(&[(3, 1)]),
             mem: [0o31, 0],
         },
         Case {
-            name: "MOVE indirect",
+            name: "MOVE indirect".into(),
             inst: i(0o200, 1, e + 1) | (1 << 22),
             ac: acs(&[]),
             mem: [0o42, e],
         },
         Case {
-            name: "IMUL",
+            name: "IMUL".into(),
             inst: i(0o220, 1, e),
             ac: acs(&[(1, M1 - 6)]),
             mem: [9, 0],
         },
         Case {
-            name: "MUL",
+            name: "MUL".into(),
             inst: i(0o224, 1, e),
             ac: acs(&[(1, MAX)]),
             mem: [M1 - 2, 0],
         },
         Case {
-            name: "IDIV",
+            name: "IDIV".into(),
             inst: i(0o230, 1, e),
             ac: acs(&[(1, M1 - 99)]),
             mem: [7, 0],
         },
         Case {
-            name: "DIV",
+            name: "DIV".into(),
             inst: i(0o234, 1, e),
             ac: acs(&[(1, 3), (2, 0o12345)]),
             mem: [0o1000, 0],
         },
         Case {
-            name: "ASH left",
+            name: "ASH left".into(),
             inst: i(0o240, 1, 3),
             ac: acs(&[(1, M1 - 4)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASH right",
+            name: "ASH right".into(),
             inst: i(0o240, 1, 0o777775),
             ac: acs(&[(1, M1 - 0o100)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASH overflow",
+            name: "ASH overflow".into(),
             inst: i(0o240, 1, 2),
             ac: acs(&[(1, 0o200000_000001)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASH overflow at the last step",
+            name: "ASH overflow at the last step".into(),
             inst: i(0o240, 1, 2),
             ac: acs(&[(1, 0o100000_000001)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASH overflow by one place",
+            name: "ASH overflow by one place".into(),
             inst: i(0o240, 1, 1),
             ac: acs(&[(1, 0o200000_000000)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASH by 0",
+            name: "ASH by 0".into(),
             inst: i(0o240, 1, 0),
             ac: acs(&[(1, 0o200000_000001)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASHC left",
+            name: "ASHC left".into(),
             inst: i(0o244, 1, 4),
             ac: acs(&[(1, 0o000001_234567), (2, 0o400000_000123)]),
             mem: [0, 0],
         },
         Case {
-            name: "LSH left",
+            name: "LSH left".into(),
             inst: i(0o242, 1, 3),
             ac: acs(&[(1, 0o700000_000007)]),
             mem: [0, 0],
         },
         Case {
-            name: "LSH by 40",
+            name: "LSH by 40".into(),
             inst: i(0o242, 1, 0o50),
             ac: acs(&[(1, M1)]),
             mem: [0, 0],
         },
         Case {
-            name: "LSH by -40",
+            name: "LSH by -40".into(),
             inst: i(0o242, 1, 0o777730),
             ac: acs(&[(1, M1)]),
             mem: [0, 0],
         },
         Case {
-            name: "ROT right",
+            name: "ROT right".into(),
             inst: i(0o241, 1, 0o777775),
             ac: acs(&[(1, 0o700000_000001)]),
             mem: [0, 0],
         },
         Case {
-            name: "ASHC",
+            name: "ASHC".into(),
             inst: i(0o244, 1, 0o777776),
             ac: acs(&[(1, M1), (2, 0o12)]),
             mem: [0, 0],
         },
         Case {
-            name: "LSH",
+            name: "LSH".into(),
             inst: i(0o242, 1, 0o777774),
             ac: acs(&[(1, M1)]),
             mem: [0, 0],
         },
         Case {
-            name: "ROT",
+            name: "ROT".into(),
             inst: i(0o241, 1, 5),
             ac: acs(&[(1, 0o700000_000001)]),
             mem: [0, 0],
@@ -425,17 +425,42 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-/// Cases that stop at a function the model does not have yet, with the
-/// text of the stop. They are not a pass: the test checks that they still
-/// stop there, so that each one moves to the compared cases when the
-/// function arrives.
-/// Cases with a known difference (docs/discrepancies.md): the name of the
-/// entry and the flags that may differ. All other state must agree.
-fn known(name: &str) -> Option<(&'static str, u32)> {
-    (name == "ASH overflow").then_some((
-        "ASH: TRAP 1 when an early step loses significance",
-        ks10::flags::Flags::TRAP1,
-    ))
+/// Left shifts with ASH and ASHC from a fixed seed: the count and the
+/// operands are random, and the top bits of the operand copy the sign for a
+/// random number of places, so that the last lost bit varies. Each step of
+/// the microcode tests the overflow (simple, `ASH36 LEFT`, `ASHCL`).
+fn random_shifts() -> Vec<Case> {
+    let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let word = |next: &mut dyn FnMut() -> u64| {
+        let w = next() & 0o777777_777777;
+        let keep = next() % 36;
+        let sign = w >> 35;
+        let top = !((1u64 << (35 - keep)) - 1) & 0o777777_777777;
+        if sign == 1 { w | top } else { w & !top }
+    };
+    let mut v = Vec::new();
+    for k in 0..48 {
+        let ashc = k % 2 == 1;
+        let n = 1 + next() % if ashc { 80 } else { 40 };
+        let (a, b) = (word(&mut next), next() & 0o777777_777777);
+        let op = if ashc { 0o244 } else { 0o240 };
+        v.push(Case {
+            name: format!(
+                "{} {a:012o} {b:012o} by {n}",
+                if ashc { "ASHC" } else { "ASH" }
+            ),
+            inst: i(op, 1, n),
+            ac: acs(&[(1, a), (2, b)]),
+            mem: [0, 0],
+        });
+    }
+    v
 }
 
 #[test]
@@ -445,27 +470,12 @@ fn single_instructions_agree_with_the_software_processor() {
     };
     let mut stops = Vec::new();
     let mut differences = Vec::new();
-    let mut known_diff = Vec::new();
     let mut coverage = Coverage::default();
     for fill in FILLS {
         let base = halted(&text, fill);
-        for c in cases() {
-            let want = reference(&c).expect(c.name);
+        for c in cases().into_iter().chain(random_shifts()) {
+            let want = reference(&c).expect(&c.name);
             let got = model(&text, &base, &c, &mut coverage);
-            if let Some((entry, flags)) = known(c.name) {
-                let got = got.unwrap_or_else(|e| panic!("{}: {e}", c.name));
-                let mut want = want;
-                assert_ne!(
-                    got.flags, want.flags,
-                    "{}: the known difference is gone",
-                    c.name
-                );
-                assert_eq!(got.flags ^ want.flags, flags, "{}", c.name);
-                want.flags = got.flags;
-                assert_eq!(got, want, "{}", c.name);
-                known_diff.push(format!("{} (fill {:o}): {entry}", c.name, fill.get()));
-                continue;
-            }
             match got {
                 Ok(got) if got == want => {}
                 Ok(got) => differences.push(format!(
@@ -477,18 +487,14 @@ fn single_instructions_agree_with_the_software_processor() {
             }
         }
     }
-    let n = 2 * cases().len();
+    let n = 2 * (cases().len() + random_shifts().len());
     println!(
-        "{} cases: {} agree, {} differ, {} stop, {} known difference",
+        "{} cases: {} agree, {} differ, {} stop",
         n,
-        n - differences.len() - stops.len() - known_diff.len(),
+        n - differences.len() - stops.len(),
         differences.len(),
-        stops.len(),
-        known_diff.len()
+        stops.len()
     );
-    for s in &known_diff {
-        println!("KNOWN {s}");
-    }
     println!("{coverage}");
     for s in &stops {
         println!("STOP {s}");

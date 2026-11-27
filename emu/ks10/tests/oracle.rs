@@ -176,6 +176,48 @@ fn skip(c: &Case, r: Ref) -> Option<&'static str> {
     }
 }
 
+/// "ASH: TRAP 1 when an early step loses significance"
+/// (docs/discrepancies.md): both emulators set Trap 1 for any overflow of
+/// ASH and ASHC, and the microcode sets it only for an overflow of the
+/// last step. For such a case the comparison takes Trap 1 (PC word bit 10)
+/// of the emulator as 0, and compares the rest.
+fn microcode_trap_1(c: &Case, mut b: Run) -> Run {
+    if early_overflow_only(c) {
+        for r in b.records.iter_mut().skip(1) {
+            r[0] &= !(1 << (35 - 10));
+        }
+    }
+    b
+}
+
+/// ASH or ASHC left: a step loses a bit that differs from the sign, but
+/// the last step does not. The bits that the steps lose are the magnitude
+/// from the top, then zeros.
+fn early_overflow_only(c: &Case) -> bool {
+    let op = &ins::OPS[(c.inst >> 27) as usize];
+    let a = ((c.inst >> 23) & 0o17) as usize;
+    let n = count((c.inst & 0o777777) as u32);
+    let (hi, lo) = (u128::from(c.ac[a]), u128::from(c.ac[(a + 1) & 0o17]));
+    let (mag, bits) = match op.dram.j {
+        "ASH" => (hi & ((1 << 35) - 1), 35),
+        "ASHC" => (((hi & ((1 << 35) - 1)) << 35) | (lo & ((1 << 35) - 1)), 70),
+        _ => return false,
+    };
+    if n <= 0 {
+        return false;
+    }
+    let sign = (hi >> 35) & 1;
+    let lost = |step: u32| {
+        if step > bits {
+            0
+        } else {
+            (mag >> (bits - step)) & 1
+        }
+    };
+    let k = n as u32;
+    (1..k).any(|s| lost(s) != sign) && lost(k) == sign
+}
+
 fn skip_klh10(c: &Case) -> Option<&'static str> {
     let op = &ins::OPS[(c.inst >> 27) as usize];
     let e = (c.inst & 0o777777) as u32;
@@ -747,6 +789,8 @@ fn random_instructions() {
         .filter(|c| !noskip && refs.iter().all(|(r, _)| skip(c, *r).is_some()))
         .count();
     let _ = writeln!(err, "cases that no emulator compares: {uncompared}");
+    let early = all.iter().filter(|c| early_overflow_only(c)).count();
+    let _ = writeln!(err, "cases with Trap 1 of the microcode: {early}");
     if refs.len() == Ref::ALL.len() {
         assert_eq!(uncompared, 0, "cases that no emulator compares");
     }
@@ -767,7 +811,8 @@ fn random_instructions() {
             let batch: Vec<Case> = chunk.iter().map(|c| (*c).clone()).collect();
             let theirs =
                 reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
-            for (c, b) in chunk.iter().zip(&theirs) {
+            for (c, b) in chunk.iter().zip(theirs) {
+                let b = &microcode_trap_1(c, b);
                 match ours(c) {
                     Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
                     Ok(a) => {

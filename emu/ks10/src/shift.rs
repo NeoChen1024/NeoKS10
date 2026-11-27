@@ -29,11 +29,9 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
     match i.op {
         0o240 => {
             // ASH
-            let (w, ovf) = ash(a, 36, n);
-            if ovf {
-                m.flags.set(Flags::AROV | Flags::TRAP1);
-            }
-            m.ac[i.ac] = W36::wrap(w as u64);
+            let r = ash(a, 36, n);
+            r.set_flags(&mut m.flags);
+            m.ac[i.ac] = W36::wrap(r.value as u64);
         }
         0o241 => m.ac[i.ac] = W36::wrap(rotate(a, 36, n) as u64),
         0o242 => m.ac[i.ac] = W36::wrap(lshift(a, 36, n) as u64),
@@ -56,10 +54,9 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
             }
             let sign = a >> 35;
             let mag = ((a & MASK35) << 35) | (b & MASK35);
-            let (w, ovf) = ash((sign << 70) | mag, 71, n);
-            if ovf {
-                m.flags.set(Flags::AROV | Flags::TRAP1);
-            }
+            let r = ash((sign << 70) | mag, 71, n);
+            r.set_flags(&mut m.flags);
+            let w = r.value;
             let hi = (sign << 35) | ((w >> 35) & MASK35);
             let lo = (sign << 35) | (w & MASK35);
             m.ac[i.ac] = W36::wrap(hi as u64);
@@ -125,24 +122,48 @@ fn rotate(x: u128, bits: u32, n: i32) -> u128 {
     }
 }
 
+/// The result of an arithmetic shift.
+#[derive(Debug, PartialEq, Eq)]
+struct Ash {
+    value: u128,
+    /// A step lost a bit that differs from the sign.
+    overflow: bool,
+    /// For a left shift, whether the last step lost such a bit.
+    last: Option<bool>,
+}
+
+impl Ash {
+    /// The microcode shifts left one place for each step and tests each
+    /// step with `ASH AROV` **[microcode]** (simple, `ASH36 LEFT`, `ASHCL`).
+    /// At each test, OV keeps its value or is set, but TRAP 1 takes the
+    /// result of the step (M8620-0-DPE9 rev B, E78, E85, E92; see
+    /// docs/discrepancies.md, "ASH: TRAP 1 when an early step loses
+    /// significance"). Thus TRAP 1 is the overflow of the last step.
+    fn set_flags(&self, f: &mut Flags) {
+        if self.overflow {
+            f.set(Flags::AROV);
+        }
+        match self.last {
+            Some(true) => f.set(Flags::TRAP1),
+            Some(false) => f.clear(Flags::TRAP1),
+            None => {}
+        }
+    }
+}
+
 /// Arithmetic shift of a `bits`-bit two's complement value (the sign is the
-/// top bit and does not move). Returns the result and whether a bit of
-/// significance was lost in a left shift (PRM 2.5, ASH).
-fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
+/// top bit and does not move) by `n` places, left if `n` is positive.
+fn ash(x: u128, bits: u32, n: i32) -> Ash {
     let sign = (x >> (bits - 1)) & 1;
     let mag_bits = bits - 1;
     let mag_mask = (1u128 << mag_bits) - 1;
     let mag = x & mag_mask;
     let k = n.unsigned_abs();
-    if n >= 0 {
+    if n > 0 {
         // The bits shifted out of the magnitude must all equal the sign
         // (simple.42, ASHL: one place for each step of SC, ASH AROV).
         let lost_bits = k.min(mag_bits);
-        let lost = if lost_bits == 0 {
-            0
-        } else {
-            mag >> (mag_bits - lost_bits)
-        };
+        let lost = mag >> (mag_bits - lost_bits);
         let all = if sign == 1 {
             (1u128 << lost_bits) - 1
         } else {
@@ -156,7 +177,13 @@ fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
         // After mag_bits places, the zeros that came in at the right leave
         // bit 1 too: they differ from the sign of a negative number.
         let zeros_lost = sign == 1 && k > mag_bits;
-        ((sign << mag_bits) | shifted, lost != all || zeros_lost)
+        // The bit that the last step loses.
+        let last = if k > mag_bits { 0 } else { lost & 1 };
+        Ash {
+            value: (sign << mag_bits) | shifted,
+            overflow: lost != all || zeros_lost,
+            last: Some(last != sign),
+        }
     } else {
         // Right: the sign comes in at bit 1.
         let fill = if sign == 1 { mag_mask } else { 0 };
@@ -165,7 +192,11 @@ fn ash(x: u128, bits: u32, n: i32) -> (u128, bool) {
         } else {
             (mag >> k) | (fill & !(mag_mask >> k))
         };
-        ((sign << mag_bits) | shifted, false)
+        Ash {
+            value: (sign << mag_bits) | shifted,
+            overflow: false,
+            last: None,
+        }
     }
 }
 
@@ -239,28 +270,49 @@ mod tests {
         assert_eq!(count(Half::wrap(0o001003)), 3);
     }
 
+    fn ash2(x: u128, bits: u32, n: i32) -> (u128, bool) {
+        let r = ash(x, bits, n);
+        (r.value, r.overflow)
+    }
+
     #[test]
     fn ash_cases() {
         // 1 shifted left 34 places: 200000000000, no overflow.
-        assert_eq!(ash(1, 36, 34), (0o200000000000, false));
+        assert_eq!(ash2(1, 36, 34), (0o200000000000, false));
         // 1 shifted left 35 places: the 1 is lost, overflow.
-        assert_eq!(ash(1, 36, 35), (0, true));
+        assert_eq!(ash2(1, 36, 35), (0, true));
         // -1 shifted left 1: 777777777776, no overflow.
-        assert_eq!(ash(0o777777777777, 36, 1), (0o777777777776, false));
+        assert_eq!(ash2(0o777777777777, 36, 1), (0o777777777776, false));
         // 400000000000 shifted left 1: a 0 is lost from a negative number.
-        assert_eq!(ash(0o400000000000, 36, 1), (0o400000000000, true));
+        assert_eq!(ash2(0o400000000000, 36, 1), (0o400000000000, true));
         // -1 shifted left 35 places is -2^35 and fits. Left 36 places: the
         // zeros that came in at bit 35 reach bit 1 and leave it, so a 0 is
         // lost from a negative number (simple.42, ASHL: one place for each
         // step, ASH AROV). KLH10 sets Overflow too.
-        assert_eq!(ash(0o777777777777, 36, 35), (0o400000000000, false));
-        assert_eq!(ash(0o777777777777, 36, 53), (0o400000000000, true));
+        assert_eq!(ash2(0o777777777777, 36, 35), (0o400000000000, false));
+        assert_eq!(ash2(0o777777777777, 36, 53), (0o400000000000, true));
         // ASHC: -1 (both words) left 71 places.
-        assert_eq!(ash((1 << 71) - 1, 71, 71), (1 << 70, true));
+        assert_eq!(ash2((1 << 71) - 1, 71, 71), (1 << 70, true));
         // Right shifts bring in the sign: -2 >> 1 = -1; -1 >> 100 = -1.
-        assert_eq!(ash(0o777777777776, 36, -1), (0o777777777777, false));
-        assert_eq!(ash(0o777777777777, 36, -100), (0o777777777777, false));
-        assert_eq!(ash(0o000000000100, 36, -3), (0o10, false));
+        assert_eq!(ash2(0o777777777776, 36, -1), (0o777777777777, false));
+        assert_eq!(ash2(0o777777777777, 36, -100), (0o777777777777, false));
+        assert_eq!(ash2(0o000000000100, 36, -3), (0o10, false));
+    }
+
+    #[test]
+    fn trap_1_is_the_overflow_of_the_last_step() {
+        // The first of two steps loses a 1, the second a 0.
+        assert_eq!(ash(0o200000_000001, 36, 2).last, Some(false));
+        assert_eq!(ash(0o100000_000001, 36, 2).last, Some(true));
+        // Past the magnitude, the steps lose zeros.
+        assert_eq!(ash(1, 36, 40).last, Some(false));
+        assert_eq!(ash(0o777777_777777, 36, 40).last, Some(true));
+        // A right shift or no shift does not test.
+        assert_eq!(ash(0o200000_000001, 36, -2).last, None);
+        assert_eq!(ash(0o200000_000001, 36, 0).last, None);
+        let mut f = Flags(Flags::TRAP1);
+        ash(0o200000_000001, 36, 2).set_flags(&mut f);
+        assert_eq!(f, Flags(Flags::AROV));
     }
 
     #[test]

@@ -694,19 +694,17 @@ halt code there.
 
 **Result [measured]** 2026-11-27 (`emu/ks10uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
-and the words at 2000 and 2001 with `emu/ks10`. 41 cases of 42 agree,
+and the words at 2000 and 2001 with `emu/ks10`. All 42 cases agree,
 from both fills: moves to and from memory and ACs, ADD and SUB with
 overflow and carries, ADDB, AND, IOR, SETZM, AOS (memory, AC
 destination, AC operand), HRRZ, HLL, CAIE, SKIPL, an indexed and an
 indirect MOVE, IMUL, MUL, IDIV, DIV, and the shifts: ASH left and right,
-by 0 and with overflow in the last step; ASHC both ways; LSH both ways
-and by 40 places; ROT both ways.
-
-In the case "ASH overflow", TRAP 1 differs, and all other state agrees.
-The microcode tests each step of the left shift, and a step without
-overflow clears TRAP 1 ([`discrepancies.md`](discrepancies.md), "ASH:
-TRAP 1 when an early step loses significance"). The test expects this
-difference in TRAP 1 only, and fails if it disappears.
+by 0 and with overflow in the first or the last step; ASHC both ways; LSH
+both ways and by 40 places; ROT both ways. 48 random left shifts with ASH
+and ASHC from a fixed seed also agree. TRAP 1 after ASH is the overflow
+of the last step ([`discrepancies.md`](discrepancies.md), "ASH: TRAP 1
+when an early step loses significance"). Without that rule in
+`emu/ks10`, 15 of the 90 cases differ, from both fills.
 
 The run executes these codes (both fills, with the halt path):
 

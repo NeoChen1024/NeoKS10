@@ -259,29 +259,44 @@ the control RAM.
 
 ## ASH: TRAP 1 when an early step loses significance
 
-- **[microcode]** **[manual]** The ITS microcode shifts ASH left one place
-  per step and tests each step with `ASH AROV` (`SPEC/ASHOV`) (simple,
-  `ASHL`, macro `ASH36 LEFT`). At each `SPEC/ASHOV`, DPE9 E78 loads OV and
-  TRAP 1. OV has a hold term: OV AND NOT JFCL 09 (E68). TRAP 1 has none:
-  P OR X OR (LOAD AND DP 10) OR (DBM 08 AND `SPEC/FLAGS`) (M8620-0-DPE9
-  rev B, E85, E92, E78). Rev A1 gives the same terms with other chip
-  numbers (E209; the table "Program flags" in
-  [`microcode-model.md`](microcode-model.md)). A step without overflow
-  thus clears TRAP 1.
-  **[measured]** 2026-11-27, the microcode-level model
+- **[microcode]** **[manual]** The ITS microcode shifts ASH and ASHC left
+  one place per step and tests each step with `ASH AROV` (`SPEC/ASHOV`)
+  (simple, `ASHL` with the macro `ASH36 LEFT`, and `ASHCL`). At each
+  `SPEC/ASHOV`, DPE9 E78 loads OV and TRAP 1. OV has a hold term: OV AND
+  NOT JFCL 09 (E68). TRAP 1 has none: P OR X OR (LOAD AND DP 10) OR (DBM
+  08 AND `SPEC/FLAGS`) (M8620-0-DPE9 rev B, E85, E92, E78). Rev A1 gives
+  the same terms with other chip numbers (E209; the table "Program flags"
+  in [`microcode-model.md`](microcode-model.md)). A step without overflow
+  thus clears TRAP 1, and TRAP 1 is the overflow of the last step.
+- **[microcode]** The DEC microcode has the same loops (KS10FPGA
+  5090e7a1, `microcode/V130R1/simple.mic`, `ASH36 LEFT`, `ASHL`). The DEC
+  KS10 thus behaves in the same way.
+- **[measured]** 2026-11-27, the microcode-level model
   (`emu/ks10uop/tests/instructions.rs`). ASH 1,2 with AC 1 =
   200000,,000001 gives AC 1 = 4, OV 1 and TRAP 1 0: the first step
-  overflows, the second does not. If the overflow is in the last step,
-  TRAP 1 is 1: ASH 1,2 of 100000,,000001 and ASH 1,1 of 200000,,000000
-  agree with `emu/ks10`.
-- `emu/ks10` (`shift.rs`, `execute`, 240) tests the whole shift once and
-  sets Overflow and Trap 1 together. **[emulator]** sims 9556eca0,
+  overflows, the second does not. Random left shifts with ASH and ASHC
+  agree with the rule "TRAP 1 is the overflow of the last step".
+- **[manual]** The PRM sets Overflow and Trap 1 if a left shift loses a
+  bit of significance (PRM 2.5, ASH). **[emulator]** sims 9556eca0,
   `kx10_cpu.c`, ASH (240), and KLH10 6d733f2, `kn10ops.c`, `x_ashflg`, do
-  the same.
+  this.
 - **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at ASH TEST, both OV and
-  TRAP 1 take the overflow of the step, with no hold.
+  TRAP 1 take the overflow of the step, with no hold. It runs the DEC
+  microcode, so its TRAP 1 agrees with the rule above. Its OV does not:
+  DPE9 E68 holds OV, so OV after ASH 1,2 of 200000,,000001 is 1, but
+  KS10FPGA gives 0. The model and `emu/ks10` keep OV.
+- No DEC KS10 diagnostic tests the case (a reading of the KLAD sources,
+  2026-11-27). DSKAJ tests AROV with ASH and ASHC by 1 place, and DSKEA
+  the trap with ASH by 1 place: there, the only step is the last step.
+  DSKDA compares random instructions with a simulator, but the case does
+  not show there. It clears TRAP 1 and TRAP 2 in the simulated flags
+  before the comparison (DSKDAM, `SENTRY`, `CHECK`). It enables the traps
+  with `WREBR` 020000 (`LTRPEN`), so a trap clears the flags of the
+  machine, and the arithmetic trap instruction in 421 is a JFCL (seen in
+  a run on `emu/ks10`, 2026-11-27).
 
-The project uses the microcode and the schematics (rank 1) in the
-microcode-level model. `emu/ks10` still sets Trap 1. A DEC diagnostic
-that tests Trap 1 after ASH (rank 2) can confirm the reading. The test of
-single instructions expects this difference and no other.
+The project uses the microcode and the schematics (rank 1). `emu/ks10`
+sets Trap 1 to the overflow of the last step (`shift.rs`, `Ash`). The
+differential run takes Trap 1 of SIMH and KLH10 as 0 for a case with an
+overflow only before the last step, and compares the rest
+(`emu/ks10/tests/oracle.rs`, `microcode_trap_1`).
