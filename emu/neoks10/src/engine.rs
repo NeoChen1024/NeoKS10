@@ -12,6 +12,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -82,6 +84,12 @@ pub enum Input {
     },
     /// The host of a DZ11 line is gone (carrier off).
     DzHangup(usize),
+    /// The client of a DZ11 line does not take the output fast enough
+    /// (`on`), or takes it again: the line holds its output.
+    DzHold {
+        line: usize,
+        on: bool,
+    },
     /// The end of the run (`quit`); a replay ends here.
     Quit,
 }
@@ -162,6 +170,8 @@ pub enum Request {
         line: usize,
         peer: SocketAddr,
         out: Sender<Vec<u8>>,
+        /// The writer subtracts what it has written.
+        pending: Arc<AtomicUsize>,
         reply: Sender<Result<u64, String>>,
     },
     DzInput {
@@ -181,8 +191,22 @@ struct DzLine {
     listener: Option<dz::Listener>,
     /// The connection: its number, the address of the host, the channel
     /// to its writer.
-    conn: Option<(u64, SocketAddr, Sender<Vec<u8>>)>,
+    conn: Option<Conn>,
 }
+
+struct Conn {
+    id: u64,
+    peer: SocketAddr,
+    out: Sender<Vec<u8>>,
+    /// The bytes that the writer has not yet given to the socket.
+    pending: Arc<AtomicUsize>,
+}
+
+/// The output that `neoks10` holds for a DZ11 client: above HOLD_HIGH
+/// bytes the line is held (`Input::DzHold`), at HOLD_LOW or less it goes
+/// on. The socket buffer of the host comes on top.
+pub const HOLD_HIGH: usize = 64 * 1024;
+pub const HOLD_LOW: usize = 32 * 1024;
 
 /// A running script.
 struct ScriptRun {
@@ -488,9 +512,17 @@ impl Engine {
             }
             Input::DzHangup(l) => {
                 self.m.io.dz.lines[l].carrier = false;
+                self.m.io.dz.lines[l].hold = false;
                 self.notice(format!("neoks10: dz line {l}: disconnected"));
                 Ok(format!("dz line {l}: disconnected"))
             }
+            Input::DzHold { line, on } => match self.m.io.dz.lines.get_mut(line) {
+                Some(l) => {
+                    l.hold = on;
+                    Ok(String::new())
+                }
+                None => Err(format!("dz line {line}: no such line")),
+            },
             Input::DzData { line, data } => match self.m.io.dz.lines.get_mut(line) {
                 Some(l) => {
                     l.input.extend(data);
@@ -828,6 +860,21 @@ impl Engine {
     }
 
     /// Send new CTY output to the subscribers.
+    /// Hold or release the output of each DZ11 line by the bytes that
+    /// its client has not taken.
+    fn dz_flow(&mut self) {
+        for k in 0..8 {
+            let Some(c) = &self.dz[k].conn else { continue };
+            let pending = c.pending.load(Ordering::SeqCst);
+            let held = self.m.io.dz.lines[k].hold;
+            if !held && pending > HOLD_HIGH {
+                let _ = self.input(Input::DzHold { line: k, on: true });
+            } else if held && pending <= HOLD_LOW {
+                let _ = self.input(Input::DzHold { line: k, on: false });
+            }
+        }
+    }
+
     fn distribute(&mut self) {
         for (k, l) in self.m.io.dz.lines.iter_mut().enumerate() {
             if l.output.is_empty() {
@@ -835,9 +882,13 @@ impl Engine {
             }
             let b = std::mem::take(&mut l.output);
             if let Some(c) = &self.dz[k].conn {
-                let _ = c.2.send(b);
+                c.pending.fetch_add(b.len(), Ordering::SeqCst);
+                if c.out.send(b).is_err() {
+                    c.pending.store(0, Ordering::SeqCst);
+                }
             }
         }
+        self.dz_flow();
         let out = &self.m.console.output;
         if out.len() > self.sent {
             let b = out[self.sent..].to_vec();
@@ -870,6 +921,7 @@ impl Engine {
                 line,
                 peer,
                 out,
+                pending,
                 reply,
             } => {
                 let r = if self.replaying() {
@@ -879,19 +931,24 @@ impl Engine {
                 } else {
                     self.input(Input::DzConnect(line)).map(|_| {
                         self.dz_next += 1;
-                        self.dz[line].conn = Some((self.dz_next, peer, out));
+                        self.dz[line].conn = Some(Conn {
+                            id: self.dz_next,
+                            peer,
+                            out,
+                            pending,
+                        });
                         self.dz_next
                     })
                 };
                 let _ = reply.send(r);
             }
             Request::DzInput { line, id, data } => {
-                if self.dz[line].conn.as_ref().is_some_and(|c| c.0 == id) {
+                if self.dz[line].conn.as_ref().is_some_and(|c| c.id == id) {
                     let _ = self.input(Input::DzData { line, data });
                 }
             }
             Request::DzHangup { line, id } => {
-                if self.dz[line].conn.as_ref().is_some_and(|c| c.0 == id) {
+                if self.dz[line].conn.as_ref().is_some_and(|c| c.id == id) {
                     self.dz[line].conn = None;
                     let _ = self.input(Input::DzHangup(line));
                 }
@@ -926,7 +983,7 @@ impl Engine {
         let mut list = Vec::new();
         for (k, d) in self.dz.iter().enumerate() {
             let listen = d.listener.as_ref().map(|l| l.addr.to_string());
-            let peer = d.conn.as_ref().map(|c| c.1.to_string());
+            let peer = d.conn.as_ref().map(|c| c.peer.to_string());
             text += &format!(
                 "dz line {k}: {}, {}\n",
                 listen
@@ -1572,6 +1629,55 @@ mod tests {
         assert!(text.contains("{\"dz_connect\":3}"), "{text}");
         assert!(
             text.contains("\"dz_data\":{\"line\":3,\"data\":[97,98,13]}"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A client that does not read: above HOLD_HIGH bytes the line holds
+    // its output, at HOLD_LOW or less it goes on; the record has both.
+    #[test]
+    fn dz_hold() {
+        let dir = std::env::temp_dir().join(format!("neoks10-hold-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = dir.join("run.rec");
+        let mut e = Engine::new(options(Some(rec.clone()), None)).unwrap();
+        let (out, orx) = std::sync::mpsc::channel();
+        let (reply, rrx) = std::sync::mpsc::channel();
+        let pending = Arc::new(AtomicUsize::new(0));
+        e.request(Request::DzConnect {
+            line: 2,
+            peer: "127.0.0.1:1".parse().unwrap(),
+            out,
+            pending: pending.clone(),
+            reply,
+        });
+        assert!(rrx.recv().unwrap().is_ok());
+        e.m.io.dz.lines[2].output = vec![b'x'; HOLD_HIGH];
+        e.distribute();
+        assert!(!e.m.io.dz.lines[2].hold, "at HOLD_HIGH the line goes on");
+        e.m.io.dz.lines[2].output = vec![b'y'; 10];
+        e.distribute();
+        assert!(e.m.io.dz.lines[2].hold);
+        // The writer has written all but HOLD_LOW + 1 bytes.
+        pending.store(HOLD_LOW + 1, Ordering::SeqCst);
+        e.distribute();
+        assert!(e.m.io.dz.lines[2].hold);
+        pending.store(HOLD_LOW, Ordering::SeqCst);
+        e.distribute();
+        assert!(!e.m.io.dz.lines[2].hold);
+        assert_eq!(
+            orx.try_iter().map(|b| b.len()).sum::<usize>(),
+            HOLD_HIGH + 10
+        );
+        drop(e);
+        let text = std::fs::read_to_string(&rec).unwrap();
+        assert!(
+            text.contains("{\"dz_hold\":{\"line\":2,\"on\":true}}"),
+            "{text}"
+        );
+        assert!(
+            text.contains("{\"dz_hold\":{\"line\":2,\"on\":false}}"),
             "{text}"
         );
         std::fs::remove_dir_all(&dir).unwrap();

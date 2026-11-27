@@ -587,6 +587,17 @@ connects to the same port again thus gets the same ITS terminal.
   `neoks10` sends WILL ECHO, WILL SUPPRESS-GO-AHEAD and DO
   SUPPRESS-GO-AHEAD; ITS echoes. Received commands are removed. CR LF
   and CR NUL become CR. A data byte 255 goes out as IAC IAC.
+- `neoks10` holds at most about 64 KiB of output for a client that does
+  not read (`HOLD_HIGH`; the socket buffer of the host comes on top).
+  Above it, the line holds its output: the transmit scanner passes over
+  the line, as if its transmitter were busy, and ITS waits. At 32 KiB
+  (`HOLD_LOW`) the line goes on. No output is lost. The hold and its end
+  are inputs of the host layer (`dz_hold` in a record).
+- In `--pace normal`, a line sends about 1 character for each 1000
+  instructions (`CHAR_TIME`), at the full speed of the guest: about
+  20000 characters a second on the x86-64 host, not 960 as at 9600 baud
+  (see [To do](#to-do)). **[estimate]** Basis: the ITS boot with
+  `--no-idle` did 138 million instructions in 6.1 s.
 - A connection sets the carrier of the line, and its end clears it.
   ITS does not read the modem status of the DZ11 **[its]** (its.1652
   and ts3tty.402 have no reference to `%DZRMS`). For ITS the lines are

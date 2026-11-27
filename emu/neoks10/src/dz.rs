@@ -10,7 +10,7 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
@@ -143,11 +143,13 @@ fn connection(line: usize, mut s: TcpStream, peer: SocketAddr, tx: Sender<Reques
     let _ = s.set_nodelay(true);
     let (otx, orx) = channel::<Vec<u8>>();
     let (rtx, rrx) = channel();
+    let pending = Arc::new(AtomicUsize::new(0));
     if tx
         .send(Request::DzConnect {
             line,
             peer,
             out: otx,
+            pending: pending.clone(),
             reply: rtx,
         })
         .is_err()
@@ -172,6 +174,7 @@ fn connection(line: usize, mut s: TcpStream, peer: SocketAddr, tx: Sender<Reques
             if w.write_all(&escape(&b)).is_err() {
                 break;
             }
+            pending.fetch_sub(b.len(), Ordering::SeqCst);
         }
         let _ = w.shutdown(Shutdown::Both);
     });

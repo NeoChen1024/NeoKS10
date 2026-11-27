@@ -43,6 +43,10 @@ pub struct Line {
     pub lpr: u16,
     /// The transmitter sends a character until this instruction count.
     pub busy_until: u64,
+    /// The host holds the output of the line (a flow control of the host
+    /// layer, not of the DZ11): the scanner passes over the line, as if
+    /// its transmitter were busy.
+    pub hold: bool,
 }
 
 pub struct Dz11 {
@@ -150,10 +154,10 @@ impl Dz11 {
         let mut wake = None;
         for k in 0..8 {
             let n = (self.scan + k) % 8;
-            if self.tcr & (1 << n) == 0 {
+            let l = &self.lines[n];
+            if self.tcr & (1 << n) == 0 || l.hold {
                 continue;
             }
-            let l = &self.lines[n];
             if l.busy_until <= now {
                 self.csr =
                     (self.csr & !(d::csr::TLINE as u16)) | ((n as u16) << 8) | d::csr::TRDY as u16;
@@ -203,7 +207,7 @@ impl Dz11 {
         let mut t = self.last_poll + CHAR_TIME;
         if self.csr & d::csr::TRDY as u16 == 0 && self.csr & d::csr::MSE as u16 != 0 {
             for (n, l) in self.lines.iter().enumerate() {
-                if self.tcr & (1 << n) != 0 {
+                if self.tcr & (1 << n) != 0 && !l.hold {
                     t = t.min(l.busy_until);
                 }
             }
@@ -323,6 +327,25 @@ mod tests {
         z.write(d::TCR, 0o377 << 8, 0o177777, CHAR_TIME, &mut ev);
         assert_eq!(z.read(d::CSR) & d::csr::TRDY as u16, 0);
         assert!(!z.tx_irq);
+    }
+
+    // A held line gets no TRDY; after the release, the next update gives
+    // it.
+    #[test]
+    fn hold_output() {
+        let mut z = Dz11::new(devregs::DZ0);
+        let mut ev = Vec::new();
+        z.lines[3].hold = true;
+        let on = (d::csr::TIE | d::csr::MSE) as u16;
+        z.write(d::CSR, on, 0o177777, 0, &mut ev);
+        z.write(d::TCR, 1 << 3, 0o177777, 0, &mut ev);
+        assert_eq!(z.read(d::CSR) & d::csr::TRDY as u16, 0);
+        assert_eq!(z.deadline(), CHAR_TIME);
+        z.lines[3].hold = false;
+        z.poll(10, &mut ev);
+        let c = z.read(d::CSR);
+        assert_ne!(c & d::csr::TRDY as u16, 0);
+        assert_eq!((c & d::csr::TLINE as u16) >> 8, 3);
     }
 
     // dz11.10: RDR has Data Valid (100000), the line in bits 8-10 and the
