@@ -472,8 +472,14 @@ replay thus gives the same run without the terminal or the socket.
   no host directory and works at another place. The last line is the
   `quit`, where a replay ends.
 - A replay needs the images in the state at the start of the recorded
-  run, so it must run on fresh copies. `neoks10` does not check this
-  yet (docs/unknowns.md).
+  run, so it must run on fresh copies. The record has the SHA-256 of
+  each image at its `attach`. If the image of a replay has another
+  SHA-256, the replay ends with exit status 1.
+- `--record` and `--replay` read each image once to get its SHA-256,
+  in the machine thread. A `disk attach` during a recorded run thus
+  stops the machine for that time. **[measured]** 2026-11-27, x86-64
+  host: the boot script with `--record` took 1.26 s, without it 1.01 s
+  (317 MB image). The SHA-256 agreed with `sha256sum`.
 - An input from the terminal or the socket gets the count at which the
   machine thread takes it. A second run of the same client can thus give
   other counts; only the replay of its record repeats the run.
@@ -724,10 +730,16 @@ Decided on 2026-11-27:
 9. The crate `serde_json` is approved. A well-known crate is better than
    a new implementation, within reason.
 10. The interactive console can start a script (`script run FILE`).
+11. `crossterm` is approved as a direct dependency (decision 5).
+12. The crate `sha2` is approved for the image check of a replay. With
+   `default-features = false` it brings `digest`, `block-buffer`,
+   `crypto-common`, `hybrid-array`, `typenum` and `cpufeatures`.
+13. The emulator detects the idle loop of ITS (the owner proposed an
+   idle detection as in SIMH). See [Time](#time).
 
 Open:
 
-11. The IMP interface for step 6. The choices include the emulator-only
+14. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.

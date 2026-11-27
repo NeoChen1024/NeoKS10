@@ -45,6 +45,10 @@ pub enum Input {
         unit: usize,
         path: PathBuf,
         read_only: bool,
+        /// The SHA-256 of the image when the record was made: a replay
+        /// checks that its image is the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
     },
     Detach {
         kind: Kind,
@@ -278,7 +282,8 @@ impl Engine {
     pub fn input(&mut self, i: Input) -> Result<String, String> {
         if let Some(w) = &mut self.record {
             let mut input = i.clone();
-            if let Input::Attach { path, .. } = &mut input {
+            if let Input::Attach { path, sha256, .. } = &mut input {
+                *sha256 = Some(sha256_file(path)?);
                 let base = self.opts.record.as_deref().and_then(Path::parent);
                 let base = base
                     .filter(|b| !b.as_os_str().is_empty())
@@ -317,6 +322,7 @@ impl Engine {
                 unit,
                 path,
                 read_only,
+                ..
             } => {
                 let f = Self::open(&path, read_only)?;
                 match kind {
@@ -497,6 +503,7 @@ impl Engine {
                 unit,
                 path: absolute(&path),
                 read_only,
+                sha256: None,
             })),
             Command::DiskDetach(u) => r(self.input(Input::Detach {
                 kind: Kind::Disk,
@@ -511,6 +518,7 @@ impl Engine {
                 unit,
                 path: absolute(&path),
                 read_only,
+                sha256: None,
             })),
             Command::TapeUnmount(u) => r(self.input(Input::Detach {
                 kind: Kind::Tape,
@@ -906,9 +914,18 @@ impl Engine {
             }
             // Recorded inputs that are due.
             while self.replay.front().is_some_and(|r| r.count <= self.m.count) {
-                if let Some(s) = self.replay.pop_front()
-                    && let Err(e) = self.apply(s.input)
-                {
+                let Some(s) = self.replay.pop_front() else {
+                    break;
+                };
+                // An image that is not the recorded one gives another run:
+                // the replay ends.
+                if let Err(e) = check_image(&s.input) {
+                    self.notice(format!("neoks10: replay: {e}"));
+                    self.exit = 1;
+                    self.quit = true;
+                    return;
+                }
+                if let Err(e) = self.apply(s.input) {
                     self.notice(format!("neoks10: replay: {e}"));
                 }
             }
@@ -977,6 +994,45 @@ impl Engine {
             }
         }
     }
+}
+
+/// The SHA-256 of a file, in hexadecimal.
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut f = File::open(path).map_err(err)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(err)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// For an `Attach` of a replay: the image must have the SHA-256 of the
+/// record, if the record has one.
+fn check_image(i: &Input) -> Result<(), String> {
+    let Input::Attach {
+        path,
+        sha256: Some(want),
+        ..
+    } = i
+    else {
+        return Ok(());
+    };
+    let have = sha256_file(path)?;
+    if &have != want {
+        return Err(format!(
+            "{}: the image is not the recorded one (SHA-256 {have}, the record has {want}); a replay needs a copy of the images as at the start of the recorded run",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -1109,6 +1165,56 @@ mod tests {
         assert_eq!(b.m.count, count);
         assert_eq!(b.m.mem[0o32], w32);
         assert!(!b.running);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // FIPS 180-2, appendix B.1: SHA-256 of "abc".
+    #[test]
+    fn sha256_of_abc() {
+        let dir = std::env::temp_dir().join(format!("neoks10-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("abc");
+        std::fs::write(&f, b"abc").unwrap();
+        assert_eq!(
+            sha256_file(&f).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // The record has the SHA-256 of a mounted tape. A replay with the same
+    // image mounts it; a replay after a change of one byte ends with exit
+    // status 1 and does not mount it.
+    #[test]
+    fn replay_checks_the_image() {
+        let dir = std::env::temp_dir().join(format!("neoks10-img-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = dir.join("run.rec");
+        let tape = dir.join("t.tape");
+        std::fs::write(&tape, [4, 0, 0, 0, 1, 2, 3, 4, 4, 0, 0, 0]).unwrap();
+        let mut a = Engine::new(options(Some(rec.clone()), None)).unwrap();
+        a.input(Input::Attach {
+            kind: Kind::Tape,
+            unit: 0,
+            path: tape.clone(),
+            read_only: true,
+            sha256: None,
+        })
+        .unwrap();
+        a.input(Input::Quit).unwrap();
+        drop(a);
+        let text = std::fs::read_to_string(&rec).unwrap();
+        assert!(text.contains(&sha256_file(&tape).unwrap()), "{text}");
+        let replay = || {
+            let mut b = Engine::new(options(None, Some(rec.clone()))).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel::<Request>();
+            drop(tx);
+            b.serve(&rx);
+            (b.exit, b.images[1][0].is_some())
+        };
+        assert_eq!(replay(), (0, true));
+        std::fs::write(&tape, [4, 0, 0, 0, 1, 2, 3, 5, 4, 0, 0, 0]).unwrap();
+        assert_eq!(replay(), (1, false));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

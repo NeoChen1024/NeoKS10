@@ -140,6 +140,7 @@ fn run(args: &[String]) -> Result<i32, String> {
                     unit,
                     path,
                     read_only: img.read_only,
+                    sha256: None,
                 })?;
             }
         }
