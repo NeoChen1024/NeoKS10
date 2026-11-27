@@ -240,8 +240,9 @@ impl Machine {
     /// 2901 registers, the RAM file and main memory get `fill`, and the
     /// other registers and flags get 0 if `fill` is 0 and all ones if not
     /// (docs/microcode-model.md, "Stage 1"). A correct run does not depend
-    /// on `fill`. The cycle type of DPM5 E33 is the exception: it starts
-    /// as no cycle.
+    /// on `fill`, except where the hardware does too: the halt code that
+    /// power-up writes to location 0 (docs/microcode-model.md, "Stage
+    /// 1").
     pub fn new(cram: Vec<Microword>, drom: Vec<u64>, fill: W40) -> Self {
         assert_eq!(cram.len(), crate::cram::CRAM_WORDS);
         assert_eq!(drom.len(), DROM_WORDS);
@@ -297,10 +298,12 @@ impl Machine {
             vma: pw,
             vma_flags,
             vma_ram: if p { 0o1777 } else { 0 },
-            // Assumption: E33 holds no cycle at power on. No reset clears
-            // it, and the power-up sequence depends on it
-            // (docs/unknowns.md, "The microcode-level model").
-            cycle: Cycle::default(),
+            cycle: Cycle {
+                read: p,
+                write_test: p,
+                write: p,
+                cache_inhibit: p,
+            },
             memory_cycle: p,
             int_latched: Some(p),
             one_ms_latched: p,
@@ -555,11 +558,10 @@ impl Machine {
                 return Err(self.unmodelled("page fail: interrupt or 1 ms timer"));
             }
         }
-        // DPM5 E32, E5: a read-pause-write cycle does not start a cycle.
+        // DPM5 E32, E5: with RPW CYCLE (READ and WRITE from the last load,
+        // and no stop), a MEM EN word starts no cycle: no bus request
+        // (DPM5 E46) and MEMORY CYCLE 0.
         let rpw = self.cycle.read && self.cycle.write && !stop_main_memory;
-        if mem_en && rpw {
-            return Err(self.unmodelled("read-pause-write cycle"));
-        }
         let bus_cycle = memory_delay && !stop_main_memory;
         if bus_cycle && (self.vma_flags.io || self.vma_flags.wru || self.vma_flags.vector) {
             return Err(self.unmodelled("I/O cycle"));
@@ -635,8 +637,9 @@ impl Machine {
             self.ram_file[addr] = dbus.expect("the DBus of a RAM file write");
         }
         // A write takes DP of the word that completes the cycle (DPM8,
-        // DPM9 MIX: DP in the data phase).
-        if bus_cycle && self.cycle.write {
+        // DPM9 MIX: DP in the data phase). DPMA WRITE CYCLE needs NOT MEM
+        // READ (DPMA E17, E21, E14).
+        if bus_cycle && self.cycle.write && !self.cycle.read {
             self.memory[address] = dp;
         }
         if let Some(s) = scad {
@@ -1147,5 +1150,85 @@ impl Machine {
             self.sp = self.sp.wrapping_sub(1) & 15;
         }
         Ok(next)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cram::CRAM_WORDS;
+
+    /// A word of the number field with the given bits (0 at the left).
+    fn num(bits: &[u32]) -> u32 {
+        bits.iter().fold(0, |a, b| a | 1 << (17 - b))
+    }
+
+    /// A cycle that starts with the number field `start` at address 100
+    /// and completes in the next word with DP = 5. The word at 100 is 7.
+    fn run_cycle(start: &[u32]) -> Machine {
+        // MEM, the number field, DEST/A (Y is the A register), DBUS/DP,
+        // RAMADR/VMA, no dispatch.
+        let word = |n: u32, a: u32, j: u32| {
+            Microword::from_bits(0)
+                .with(u::MEM, 1)
+                .with(u::DBUS, 1)
+                .with(u::RAMADR, 4)
+                .with(u::NUM, n)
+                .with(u::A, a)
+                .with(u::DISP, 0o70)
+                .with(u::J, j)
+        };
+        let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
+        cram[0] = word(num(start), 1, 1);
+        cram[1] = word(num(&[16]), 3, 2);
+        let mut m = Machine::new(cram, vec![0; DROM_WORDS], W40::ZERO);
+        m.alu.reg[1] = alu::d_input(W36::wrap(0o100));
+        m.alu.reg[3] = alu::d_input(W36::wrap(5));
+        m.memory[0o100] = W36::wrap(7);
+        m.step().unwrap();
+        m.step().unwrap();
+        m
+    }
+
+    // Number field bits: 03 READ CYCLE, 05 WRITE CYCLE, 08 PHYSICAL,
+    // 14 LDVMA, 16 WAIT (ks10, "# REDEFINED WHEN USED AS MEMORY CYCLE
+    // CONTROL").
+    #[test]
+    fn a_write_cycle_writes_dp_of_the_completing_word() {
+        let m = run_cycle(&[5, 8, 14, 16]);
+        assert_eq!(m.memory[0o100], W36::wrap(5));
+    }
+
+    #[test]
+    fn a_cycle_with_read_and_write_reads_and_does_not_write() {
+        // DPMA WRITE CYCLE needs NOT MEM READ (DPMA E17, E21).
+        let m = run_cycle(&[3, 5, 8, 14, 16]);
+        assert_eq!(m.memory[0o100], W36::wrap(7));
+        assert_eq!(m.mb, W36::wrap(7));
+    }
+
+    #[test]
+    fn rpw_cycle_starts_no_cycle() {
+        // E33 holds READ and WRITE and VMA is not an AC: the next MEM EN
+        // word starts nothing (DPM5 E32, E5).
+        let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
+        cram[0] = Microword::from_bits(0)
+            .with(u::MEM, 1)
+            .with(u::NUM, num(&[5, 8, 14, 16]))
+            .with(u::A, 1)
+            .with(u::DISP, 0o70)
+            .with(u::J, 1);
+        let mut m = Machine::new(cram, vec![0; DROM_WORDS], W40::ZERO);
+        m.alu.reg[1] = alu::d_input(W36::wrap(0o100));
+        m.vma = W36::wrap(0o200);
+        m.vma_flags.physical = true;
+        m.cycle = Cycle {
+            read: true,
+            write: true,
+            ..Cycle::default()
+        };
+        m.step().unwrap();
+        assert!(!m.memory_cycle);
+        assert!(m.cycle.write && !m.cycle.read);
     }
 }

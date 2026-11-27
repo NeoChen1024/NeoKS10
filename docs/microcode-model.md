@@ -480,6 +480,14 @@ completes a cycle sees what the starting word loaded **[manual]**:
   values (DPM5 E32). E16 loads START CYCLE at MEM WAIT.
 - MEMORY DELAY is (MEM EN OR `SPEC/MEM WAIT`) AND MEMORY CYCLE (DPM5
   E30): this word completes the cycle.
+- A bus request needs START CYCLE, or a request that has no grant yet
+  (DPM5 E46, E70); single-step mode adds terms (E39, E62). DP RESET is in
+  STOP MAIN MEMORY and clears the held request.
+- DPMA WRITE CYCLE, which puts DP on the bus, is SYNC AND NOT STOP MAIN
+  MEMORY AND NOT MEM READ AND MEMORY CYCLE AND MEMORY DELAY outside
+  single-step mode (DPMA E14, E21, E17). A cycle with READ and WRITE thus
+  reads and sends no data. With RPW CYCLE, a MEM EN word starts no cycle
+  and sends nothing.
 - FORCE RAMFILE is (CACHE HIT EN OR AC REF) AND MEMORY DELAY AND MEM
   READ (DPM5 E14). It changes the DBus select DBM (3) into the RAM file
   (2) in both halves (M8620-0-DPE3 rev B, E70).
@@ -561,9 +569,8 @@ step that reads one stops.
 **Initial state.** `Machine::new` takes a fill value. The 2901
 registers, the RAM file and main memory get it. The other registers and
 flags without a reset get 0 if the fill is 0, and all ones if not. Each
-test runs with both fills: a correct run does not depend on them. The
-cycle type of DPM5 E33 is the exception; [`unknowns.md`](unknowns.md)
-gives the reason.
+test runs with both fills: a correct run does not depend on them, except
+where the hardware also depends on its state at power on.
 
 **Modelled** (2026-11-27):
 
@@ -595,8 +602,8 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - paging: PAGE EN with a virtual VMA and a memory cycle;
 - a page fail from INT OR ERR; an APR interrupt request (APR enables
   24–31 not 0) where INTERRUPT REQ is read;
-- I/O cycles (VMA I/O, WRU, VECTOR), a read-pause-write cycle, and a bus
-  cycle above 512 Ki words;
+- I/O cycles (VMA I/O, WRU, VECTOR), and a bus cycle above 512 Ki
+  words;
 - DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
   on the DBus where DP depends on D;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
@@ -623,8 +630,17 @@ cycles, from both fills. The table of the powers of ten in the
 workspace equals 10^n for n from 0 to 21, as the test computes them, and
 the microcode check of 10^21 passes. MASK, XWD1, ONE, PC, USER and the
 trap flags have the values that the comments of the sequence give. In
-642 cycles the machine is in `HALTLP` with HALT LOOP set. Location 0 has
-the halt code 0 (`HALT/POWER`) and location 1 has PC 0.
+642 cycles the machine is in `HALTLP` with HALT LOOP set. Location 1 has
+PC 0. With the zero fill, location 0 has the halt code 0 (`HALT/POWER`).
+
+With the fill of all ones, location 0 keeps its content. The cycle type
+in DPM5 E33 has no clear input and loads only at MEM EN. The loop for
+the powers of ten leaves VMA at an address that is not an AC. If E33
+holds READ and WRITE at power on, RPW CYCLE is 1 at `PWRON`: that word
+starts no cycle, and its `MEM WRITE` sends no data (see "The cycle in
+the registers"). E33 then holds the write type, and the write of PC to
+location 1 takes place. The hardware has the same dependence on its
+state at power on.
 
 ### Single instructions
 
@@ -676,6 +692,10 @@ before a case reaches them.
 `RAMADR/#` takes the address through DBM. Of the 173 words that use the
 RAM file with `RAMADR/#`, all have `DBM/#` **[measured]** 2026-11-27 (a
 scan of the ITS listing 262).
+
+Unit tests in `machine.rs` run single memory cycles with hand-written
+words: a write, a cycle with READ and WRITE, and RPW CYCLE. Each fails
+without its rule.
 
 Mutants of the memory model: a write of MB in place of DP stops each
 case; no FORCE RAMFILE gives four differences. An AC write at the end of

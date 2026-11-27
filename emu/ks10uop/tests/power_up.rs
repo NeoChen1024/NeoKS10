@@ -11,6 +11,7 @@
 mod common;
 
 use common::{FILLS, label, machine, run_until, symbol as work};
+use ks10uop::alu::W40;
 use pdp10::W36;
 
 #[test]
@@ -59,6 +60,14 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
 /// location 1, sets HALT LOOP and waits for CONTINUE (inout, PWRON, STOPC,
 /// H1, HALTLP). The power-up halt code is 0 (ks10, `HALT/POWER=0`), and
 /// the power-up sequence clears PC.
+///
+/// The write to location 0 depends on the cycle type in DPM5 E33 at power
+/// on, which no reset clears. The loop for the powers of ten leaves VMA
+/// at an address that is not an AC. If E33 holds READ and WRITE, RPW
+/// CYCLE is 1 at PWRON: START CYCLE is 0 (DPM5 E32, E5), so there is no
+/// bus request (DPM5 E46) and no MEMORY CYCLE, and DPMA WRITE CYCLE needs
+/// MEMORY CYCLE (DPMA E17, E21). Location 0 then keeps its content. The
+/// fill with all ones has READ and WRITE in E33.
 #[test]
 fn power_up_ends_in_the_halt_loop() {
     let Some(text) = common::listing_text("halt loop") else {
@@ -70,7 +79,12 @@ fn power_up_ends_in_the_halt_loop() {
         let r = run_until(&mut m, 100_000, |m| m.upc == haltlp && m.console.halt_loop);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         assert_eq!(r, Ok(()));
-        assert_eq!(m.memory[0], W36::ZERO);
+        let location_0 = if fill == W40::ZERO {
+            W36::ZERO
+        } else {
+            ks10uop::alu::word(fill)
+        };
+        assert_eq!(m.memory[0], location_0);
         assert_eq!(m.memory[1], W36::ZERO);
         // The loop stays in HALTLP while CONTINUE is 0.
         run_until(&mut m, 20, |_| false).unwrap_err();
