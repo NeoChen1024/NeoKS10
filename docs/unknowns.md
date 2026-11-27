@@ -86,7 +86,14 @@ schematics (MP00540):
   66, 70, 74 and 76; every `DISP/MUL` word has `J` bit 10 set; no word
   uses `DISP/PAGE FAIL`.
 - The byte dispatch inputs BYTE DISP 09–11 (DPE3).
-- The program flag logic (DPE9), and the SCAD mixers (DPM3).
+- The Am2901 itself: which shift pins (RAM0, RAM3, Q0, Q3) drive in
+  each destination, and the G and P outputs of the logic functions. The
+  model takes the function, source and destination codes from ks10 and
+  marks the carries of logic functions and the undriven shift lines as
+  undefined. The AMD data sheet would settle both.
+- XR PREV, which DPMA PREVIOUS EN loads with XR (DPEA E311).
+- The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1), and the SCAD
+  mixers (DPM3).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

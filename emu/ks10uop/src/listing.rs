@@ -27,6 +27,27 @@ pub fn drom_field(word: u64, f: crate::fields::Field) -> u32 {
     ((word >> (35 - u32::from(f.last))) & ((1u64 << width) - 1)) as u32
 }
 
+/// The address of a label of the microcode: the address of the first U
+/// word at or after the line where the label is defined.
+pub fn label(text: &str, name: &str) -> Option<u16> {
+    let mut pending = false;
+    for line in text.lines() {
+        if !pending {
+            // The source text follows "; <line number>\t".
+            let Some((_, src)) = line.split_once("; ") else {
+                continue;
+            };
+            let src = src.trim_start_matches(|c: char| c.is_ascii_digit());
+            let src = src.trim_start_matches('\t');
+            pending = src.strip_prefix(name).is_some_and(|r| r.starts_with(':'));
+        }
+        if pending && let Some((addr, _)) = groups(line, 'U') {
+            return Some(addr);
+        }
+    }
+    None
+}
+
 /// A line that looks like a word but is not one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListingError {
@@ -114,6 +135,18 @@ some text U 0001, 0000
         assert_eq!(drom_field(0o0001_1740_2100, crate::fields::d::B), 0o1);
         assert_eq!(drom_field(0o0001_1740_2100, crate::fields::d::J), 0o1740);
         assert_eq!(l.drom.len(), 1);
+    }
+
+    #[test]
+    fn finds_a_label_on_its_word_or_before_it() {
+        let text = "\
+\t\t\t\t; 8496\tHALTED:\tWORK[SV.ARX]_[ARX],
+U 2415, 0002,3771,0012,4374,4007,0700,0000,0037,7777\t; 8497\t\tX
+U 2416, 0002,3771,0012,4374,4007,0700,0000,0037,7777\t; 8501\tPWRON:\t[ARX]_0
+";
+        assert_eq!(label(text, "HALTED"), Some(0o2415));
+        assert_eq!(label(text, "PWRON"), Some(0o2416));
+        assert_eq!(label(text, "PWR"), None);
     }
 
     #[test]

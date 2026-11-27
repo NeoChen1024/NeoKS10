@@ -88,6 +88,6 @@ project agree, that is not a proof that one of them is correct.
 | 1 | The Rust emulator with the software processor passes the diagnostics and boots ITS on a host computer | Done ([`emulator.md`](emulator.md), "Device model" and "Diagnostics") |
 | 2 | The same emulator runs on the PS of the board | It builds for the board and passes its tests in qemu-arm; no run on the board yet |
 | 3 | Measurements of the PS/PL memory path: latency of the HP ports, uncached mapping, write queue | The path is measured (Part B of [`mem-path-experiment.md`](mem-path-experiment.md)); the demand of the guest (Parts A and C) is open |
-| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The microcode of the ITS build loads and is checked; the data path model is next |
+| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The microcode of the ITS build loads and is checked; the data path model runs the power-up sequence; memory functions and instructions are next |
 | 5 | The core runs on the board with the devices on the PS | Not started |
 | 6 | Front panel on HDMI, Chaosnet, IMP interface | Not started |

@@ -112,7 +112,7 @@ source. Bit numbers of a 36-bit word are those of DEC (bit 0 at the left).
 
 Schematic citations give the drawing, its revision and the chips. They
 are from the second copy of each board in MP00540 (PDF pages: DPE1 125,
-DPE2 126, DPE5 129, DPEA 134, CRA1 184, CRA2 185). After the first citation of a
+DPE2 126, DPE5 129, DPE9 133, DPEA 134, CRA1 184, CRA2 185). After the first citation of a
 drawing, the text gives the board sheet only, for example "DPE5 E603".
 
 ### Cycle
@@ -357,6 +357,37 @@ functions" ([`discrepancies.md`](discrepancies.md)).
 `SPEC/EXPTST` test ASH and exponent overflow **[manual]** (5.5.5)
 **[microcode]** (ks10, "# REDEFINED WHEN USED AS PC FLAG CONTROL").
 
+The flags read the left half of the DBM mixer, not the microword.
+`CHANGE FLAGS` is `SPEC/FLAGS` only, and `DBM` defaults to `#`, so DBM
+bit n is bit n of the number field **[microcode]** (ks10, `DBM` "D,7" and
+the macro `CHANGE FLAGS`). With LOAD = DBM 15, CARRY = DBM 17, JFCL EN =
+DBM 14, each with `SPEC/FLAGS`, the registers load at the clock
+**[manual]** (M8620-0-DPE9 rev A1, PDF page 133):
+
+| Flag | New value | Register enabled by |
+|---|---|---|
+| CRY0 | (LOAD ? DP 01 : CRY0) AND NOT JFCL 10, OR (CARRY AND CARRY OUT) | FLAGS (E305) |
+| CRY1 | (LOAD ? DP 02 : CRY1) AND NOT JFCL 11, OR (CARRY AND DP CRY1) | FLAGS (E305) |
+| FPD | ((LOAD ? DP 04 : FPD) OR DBM 04) AND NOT DBM 03 | FLAGS (E305) |
+| USER | (USER AND DBM 05) OR (LOAD AND DP 05) | FLAGS (E210) |
+| PCU | (LOAD AND DP 06 AND NOT USER) OR (NOT LOAD AND PCU) OR (USER AND DBM 09) OR (DBM 05 AND PCU AND DP 06 AND LOAD) | FLAGS (E210) |
+| TRAP 2 | (DP 09 AND DBM 15) OR DBM 07 | FLAGS (E210) |
+| NO DIV | DBM 02 OR (LOAD ? DP 12 : NO DIV) | FLAGS (E210) |
+| OV | P OR X OR ((LOAD ? DP 00 : OV) AND NOT JFCL 09) OR DBM 00 | FLAGS, ASH TEST, EXP TEST (E209) |
+| TRAP 1 | P OR X OR (LOAD AND DP 10) OR DBM 08 | as OV |
+| FOV | X OR ((LOAD ? DP 03 : FOV) AND NOT JFCL 12) OR DBM 01 | as OV |
+| FXU | (LOAD ? DP 11 : FXU), and a term of EXP TEST | as OV |
+
+- P = (ASH TEST AND DP 01 XOR DP 02) OR (CARRY AND DP OVERFLOW); X = EXP
+  TEST AND SCAD 01 (E205, E501).
+- DP OVERFLOW = DP SIGN XOR DP 00; DP CRY1 = DP OVERFLOW XOR CARRY OUT
+  (E504). Both use DP, so they are right only if DP is the ALU output.
+- JFCL 09–12 = the flag (OV, CRY0, CRY1, FOV) AND the AC bit AND JFCL EN
+  (E107, E109). JFCL SKIP is their OR (E108).
+- One flip-flop is PCU and USER IOT (E210 R1).
+- TRAP 1 has no "keep" input: a flag change without a set clears it.
+  KS10FPGA `pcflags.v` agrees **[emulator]** (5090e7a1).
+
 ### Memory functions
 
 `MEM` 1 starts or completes a memory or I/O function. The number field
@@ -370,17 +401,72 @@ of the number field **[manual]** (5.6, 5.6.1) **[microcode]** (ks10,
 ## Stage 1
 
 Stage 1 runs the instructions that need no paging and no I/O: a flat
-memory of 512 Ki words, physical addresses, no cache. It has:
+memory of 512 Ki words, physical addresses, no cache. A test runs one
+instruction from a state and compares the result with `emu/ks10` for the
+same state. The model is `emu/ks10uop/src/alu.rs` and `machine.rs`.
 
-- the microsequencer, the dispatch ROM, the skip and dispatch conditions;
-- the arithmetic unit, the shifts, DIVIDE and MULTI PREC;
-- the DBus and DBM mixers, the RAM file with AC blocks;
-- the 10-bit logic, the program flags, IR and XR;
-- memory functions on the flat memory, with AC references.
+A function is either modelled or a stop with "unmodelled". The model
+does not guess a value. A carry of a logic function and a shift line that
+nothing drives are undefined; a step that reads one stops.
 
-It stops at a page fail, an I/O function, an interrupt, or a halt. A test
-runs one instruction from a state and compares the result with
-`emu/ks10` for the same state.
+**State of 2026-11-27.** Modelled:
+
+- the microsequencer: skip, dispatch, the dispatch ROM, AREAD, the AC
+  dispatch, the stack;
+- the arithmetic unit with the shifts, DIVIDE, MULTI PREC and E603;
+- the DBus (DP, RAM file, DBM) and DBM (DP, DP swapped, number field);
+- the RAM file with `RAMADR` 0, 1 (`ACALU` `B` and `AC+N`), 6 and 7;
+- SCAD with `SCADA` SC or `S#`, `SCADB` FE; SC and FE;
+- IR and AC; the program flags with `SPEC/FLAGS` and `SPEC/ASHOV`;
+  `SPEC/LDACBLK`; the VMA load.
+
+These functions keep DP and change nothing else, because stage 1 has no
+interrupts, no APR conditions and no page fail: `SPEC/LDPI`, `SPEC/APR
+EN`, `SPEC/MEMCLR`.
+
+The rest stops (the `unmodelled` branches of `machine.rs`):
+
+- memory and I/O cycles (`READ CYCLE`, `WRITE TEST`, `WRITE CYCLE`,
+  `AREAD`, `DP FUNC`, `WAIT`, `BWRITE`);
+- DBus input 0 (flags, PI, VMA); DBM inputs 0, 1, 2, 5, 6, and DP with a
+  byte insertion; DP on the DBus while DP depends on the DBus;
+- `RAMADR` 2 and 4, and `ACALU` other than `B` and `AC+N`;
+- `SCADA` 2–7 and `SCADB` 1–3;
+- `SPEC` group 40 codes 2 and 5 (`EXPTST`), group 20 codes other than 5
+  and 7 (so `LOADXR`, `LDINST` and `PXCT OFF`), and all of group 10;
+- the skip inputs INTERRUPT REQ, EXECUTE, −I/O LATCH, −CONTINUE and
+  −1 MSEC;
+- the dispatches DIAG ADR, PAGE FAIL, NICOND and BYTE, and `DISP/MUL`
+  with `J` bit 10 clear;
+- `MULTI SHIFT`, and `CALL` with a return in one word;
+- a read of an undefined carry or shift line.
+
+**Power-up [measured]** 2026-11-27 (`emu/ks10uop/tests/power_up.rs`, the
+ITS listing 262). The power-up sequence runs from 0 to `PWRON` in 637
+cycles, from two initial states (zero, and a pattern in the registers,
+the RAM file and the flags). The table of the powers of ten in the
+workspace equals 10^n for n from 0 to 21, as the test computes them, and
+the microcode check of 10^21 passes. MASK, XWD1, ONE, PC, USER and the
+trap flags have the values that the comments of the sequence give.
+
+The run executes only these codes, so the test verifies nothing else:
+
+| Field | Codes (octal) |
+|---|---|
+| `AD` | 1 5 24 33 34 35 37 41 42 44 45 47 65 74 |
+| `DEST` | 0 1 3 5 7 |
+| `SHSTYLE` | NORM, left and right |
+| `SKIP` | 32 56 63 70 |
+| `DISP` | 41 70 |
+| `DBUS`, `DBM` | 1 2 3; 4 7 |
+| `RAMADR` | 1 6 7 |
+| `SCAD`/`SCADA`/`SCADB` | 6/0/0 7/1/0 |
+| `SPEC` | 0 25 27 43 46 47 |
+
+A model with the skip on SC after its load fails the test. A model that
+shifts 0 into the sign on a right shift passes it, and so does a model
+with the MUL dispatch on the QR 37 of the same cycle: power-up shifts
+only positive values and does not multiply with `DISP/MUL`.
 
 ## Field tables
 

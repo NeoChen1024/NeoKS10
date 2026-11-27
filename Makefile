@@ -187,7 +187,7 @@ microcode:
 	cp $(MICROCODE_DIR)/tape/kshack/mcr.262 $(MICROCODE_LISTING)
 	rm -rf $(MICROCODE_DIR)/tape
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
-	    $(NICE) $(CARGO) test --locked -p ks10uop --test ram_file -- --nocapture
+	    $(NICE) $(CARGO) test --locked -p ks10uop --tests -- --nocapture
 
 # The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
 # The tape comes from `make references`. t10backup of tapeutils (the
