@@ -154,7 +154,6 @@ fn run(args: &[String]) -> Result<i32, String> {
         None => Pace::Fast,
     };
     let mut e = Engine::new(Options {
-        ns_per_instruction: cfg.machine.time_per_instruction_ns,
         pace,
         idle: a.idle,
         record: a.record,

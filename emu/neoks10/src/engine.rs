@@ -244,8 +244,11 @@ pub enum Pace {
     Normal,
 }
 
+/// The virtual time of one instruction, in ns: the time base of the
+/// processors (`ks10_machine::INSTRUCTIONS_PER_MS`).
+const NS_PER_INSTRUCTION: u64 = 1_000_000 / ks10_machine::INSTRUCTIONS_PER_MS;
+
 pub struct Options {
-    pub ns_per_instruction: u64,
     pub pace: Pace,
     /// Do the passes of the idle loop at once (`Machine::step_idle`).
     pub idle: bool,
@@ -1236,7 +1239,7 @@ impl Engine {
             if self.opts.pace == Pace::Normal {
                 // The batch ends at the next tick, so that a tick comes
                 // within one batch, and the idle passes count at the
-                // rate of time_per_instruction_ns.
+                // rate of the time base.
                 // If the ticks are behind the wall clock, a batch is 1 ms
                 // of instructions.
                 self.wall_ticks();
@@ -1244,7 +1247,7 @@ impl Engine {
                 if left.is_zero() {
                     left = Duration::from_millis(1);
                 }
-                let n = left.as_nanos() as u64 / self.opts.ns_per_instruction.max(1);
+                let n = left.as_nanos() as u64 / NS_PER_INSTRUCTION;
                 end = end.min(self.m.count + n.max(1));
             }
             let skipped = self.skipped;
@@ -1266,7 +1269,7 @@ impl Engine {
             }
             self.distribute();
             self.check_expects();
-            let ns = |n: u64| Duration::from_nanos(n.saturating_mul(self.opts.ns_per_instruction));
+            let ns = |n: u64| Duration::from_nanos(n.saturating_mul(NS_PER_INSTRUCTION));
             let due = match self.opts.pace {
                 Pace::Fast => continue,
                 Pace::Realtime => self.base.0 + ns(self.m.count - self.base.1),
@@ -1425,7 +1428,6 @@ mod tests {
 
     fn options(record: Option<PathBuf>, replay: Option<PathBuf>) -> Options {
         Options {
-            ns_per_instruction: 1000,
             pace: Pace::Fast,
             idle: true,
             record,

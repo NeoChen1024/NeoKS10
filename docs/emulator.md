@@ -288,10 +288,12 @@ that record on `soft` then repeats the run in software.
 
 ### Time
 
-- Virtual time advances by a fixed amount for each instruction. The amount
-  is a configuration value; its default is an **[estimate]**: 1 µs. Basis:
-  none yet. The instruction times of the KS10 technical manual will replace
-  it. The amount sets the rate of `RDTIM` and of the interval timer.
+- Virtual time advances by 1 µs for each instruction **[estimate]**
+  (`ks10_machine::INSTRUCTIONS_PER_MS`). Basis: none yet. The instruction
+  times of the KS10 technical manual will replace it. This amount sets the
+  rate of `RDTIM`, of the interval timer and of `--pace`. It is a
+  constant: a configuration value that only changes the pace would make
+  the guest clock and the wall clock disagree.
 - Device delays (seek, tape motion, line speed of the DZ11) are in virtual
   time. They do not change the results of the guest program, only its
   timing.
@@ -302,9 +304,8 @@ that record on `soft` then repeats the run in software.
 - `normal` is the mode for daily use. The ticks of the 1 ms clock
   (`Machine::tick`) come from the wall clock, as in SIMH. The guest works
   at full speed; while ITS is idle, the host sleeps to the next tick, and
-  the idle passes count at 1 for each `time_per_instruction_ns`. The run
-  depends on the host and cannot be repeated, so `normal` refuses
-  `--record` and `--replay`.
+  the idle passes count at 1 µs each. The run depends on the host and
+  cannot be repeated, so `normal` refuses `--record` and `--replay`.
 - If the host stops (a sleep of the host, a stop of the process), the
   ticks of the lost time come back. They come one interval of the timer
   at a time, so that ITS gets each interval interrupt. **[measured]**
@@ -315,7 +316,7 @@ that record on `soft` then repeats the run in software.
 |---|---|---|---|---|
 | `normal` | To the next tick, while ITS is idle | The wall clock | Low while ITS is idle | No |
 | `fast` | None | Far ahead of the wall clock, most of all while ITS is idle | One core | Yes |
-| `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each `time_per_instruction_ns` | Low | Yes |
+| `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each µs | Low | Yes |
 
 - `run` with a terminal, a control socket or `[dz11]` uses `normal`, if
   it has no `--script` and no `--replay`. Such a run with `--record` needs
@@ -637,7 +638,6 @@ in TOML:
 ```toml
 [machine]
 memory_kwords = 512
-time_per_instruction_ns = 1000
 
 [disk.0]
 type = "rp06"

@@ -55,25 +55,16 @@ pub struct MachineCfg {
     /// The memory size in Ki words. The emulator has 512 Ki words.
     #[serde(default = "default_memory")]
     pub memory_kwords: usize,
-    /// The virtual time of one instruction, in ns (docs/emulator.md,
-    /// "Time").
-    #[serde(default = "default_ns")]
-    pub time_per_instruction_ns: u64,
 }
 
 fn default_memory() -> usize {
     ks10_machine::MEMORY_WORDS / 1024
 }
 
-fn default_ns() -> u64 {
-    1000
-}
-
 impl Default for MachineCfg {
     fn default() -> Self {
         MachineCfg {
             memory_kwords: default_memory(),
-            time_per_instruction_ns: default_ns(),
         }
     }
 }
@@ -133,9 +124,6 @@ impl Config {
                 default_memory()
             ));
         }
-        if self.machine.time_per_instruction_ns == 0 {
-            return Err("machine.time_per_instruction_ns must not be 0".into());
-        }
         for (kind, map) in [("disk", &self.disk), ("tape", &self.tape)] {
             for (k, img) in map {
                 unit_number(k).ok_or_else(|| format!("{kind}.{k}: the unit must be 0 to 7"))?;
@@ -186,7 +174,6 @@ mod tests {
             r#"
             [machine]
             memory_kwords = 512
-            time_per_instruction_ns = 1000
 
             [disk.0]
             type = "rp06"
@@ -213,6 +200,9 @@ mod tests {
         assert!(Config::parse("[disk.0]\nimage = \"x\"\ntype = \"rp07\"\n").is_err());
         // A typing error in a key.
         assert!(Config::parse("[disk.0]\nimgae = \"x\"\n").is_err());
+        // The time of an instruction is the time base of the processors,
+        // not a setting (docs/emulator.md, "Time").
+        assert!(Config::parse("[machine]\ntime_per_instruction_ns = 2000\n").is_err());
     }
 
     #[test]
