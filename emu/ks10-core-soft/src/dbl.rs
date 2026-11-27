@@ -174,14 +174,39 @@ fn quad_words(sign: bool, (hi, lo): Quad) -> [W36; 4] {
     [d(hi >> 35), d(hi), d(lo >> 35), d(lo)]
 }
 
+/// The four partial products of DMUL, in the order of the microcode
+/// **[microcode]** (simple.42, DMUL, DMUL2, QMULT): C(E+1) * C(AC+1);
+/// C(E) * C(AC+1) plus the high part of the first; C(AC) * C(E+1) plus the
+/// low 35 bits of the second; C(AC) * C(E) plus the high parts of the
+/// second and the third. The high words are signed, the low words are 35
+/// magnitude bits. Each call of QMULT ends with `[ARX]+[ARX], AD FLAGS`,
+/// with the high part of its product in ARX: Carry 0 is its sign, Carry 1
+/// its bit 35 in two's complement (docs/discrepancies.md, "DMUL: the
+/// carry flags of QMULT", has the measurement on `ks10-core-uop`).
+fn dmul_flags(m: &mut Machine, (ah, al): (W36, W36), (bh, bl): (W36, W36)) {
+    let (ah, bh) = (i128::from(ah.signed()), i128::from(bh.signed()));
+    let (al, bl) = (i128::from(al.get() & MAG), i128::from(bl.get() & MAG));
+    let low = (1i128 << 35) - 1;
+    let h1 = (al * bl) >> 35;
+    let p2 = bh * al + h1;
+    let h2 = p2 >> 35;
+    let h3 = (ah * bl + (p2 & low)) >> 35;
+    let h4 = (ah * bh + h2 + h3) >> 35;
+    for h in [h1, h2, h3, h4] {
+        m.flags.arith(h < 0, (h >> 35) & 1 != 0);
+    }
+}
+
 fn dmul(m: &mut Machine, i: Inst, e: Half) -> R {
-    let b = value(m.read(e)?, m.read(next(e))?);
-    let a = value(m.ac[i.ac], m.ac[ac(i, 1)]);
+    let (bh, bl) = (m.read(e)?, m.read(next(e))?);
+    let (ah, al) = (m.ac[i.ac], m.ac[ac(i, 1)]);
+    let (a, b) = (value(ah, al), value(bh, bl));
+    dmul_flags(m, (ah, al), (bh, bl));
     let p = mul70(a.unsigned_abs(), b.unsigned_abs());
     let negative = (a < 0) != (b < 0) && p != (0, 0);
     let (sign, q) = if p.0 >> 70 != 0 {
         // Only (-2^70)^2: the magnitude 2^140 does not fit (PRM, DMUL).
-        m.flags.set(Flags::AROV);
+        // The last call of QMULT sets Overflow ([`dmul_flags`]).
         (true, (0, 0))
     } else if negative {
         (true, neg_quad(p))
@@ -318,10 +343,17 @@ mod tests {
         let mut m = machine(&[N, N], &[0, 3]);
         run(&mut m, 0o116);
         assert_eq!(acs(&m, 4), [N, N, N, N - 2]);
-        // (-2^70)^2 overflows.
+        // (-2^70)^2 overflows. The flags are those of ks10-core-uop
+        // (docs/discrepancies.md, "DMUL: the carry flags of QMULT"):
+        // Overflow, Carry 1, Trap 1.
         let mut m = machine(&[1 << 35, 0], &[1 << 35, 0]);
         run(&mut m, 0o116);
-        assert!(m.flags.has(Flags::AROV) && m.flags.has(Flags::TRAP1));
+        assert_eq!(m.flags.0, Flags::AROV | Flags::CRY1 | Flags::TRAP1);
+        // -1,,2 (AC) by 377777,,777777 123456,,654321 (E): Carry 0 and
+        // Carry 1, from ks10-core-uop.
+        let mut m = machine(&[N, 2], &[0o377777_777777, 0o123456_654321]);
+        run(&mut m, 0o116);
+        assert_eq!(m.flags.0, Flags::CRY0 | Flags::CRY1);
     }
 
     #[test]

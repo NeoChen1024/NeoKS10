@@ -764,7 +764,11 @@ impl Machine {
         } else {
             false
         };
-        let flag_fl_02 = if multi_prec {
+        // MULTI SHIFT reaches only F 37 of a left shift of F with the shift
+        // style 0 (alu.rs, `into_f37`). Another word does not use FL 02,
+        // which the 2901 drives only in a shift (Am2901A, Figure 4).
+        let multi_shift_used = dest >= 4 && dest & 2 == 0 && spec_low == 0;
+        let flag_fl_02 = if multi_prec && multi_shift_used {
             need(f.fl_02, "FL 02")?
         } else {
             false
@@ -935,6 +939,12 @@ impl Machine {
         self.check_spec(spec_en, spec_low)?;
         let pc_flags = spec_en & 4 != 0 && spec_low == 6;
         let ash_test = spec_en & 4 != 0 && spec_low == 4;
+        let exp_test = spec_en & 4 != 0 && spec_low == 5;
+        let exp_scad = if exp_test {
+            Some(self.scad_output(mw, dp_early)?)
+        } else {
+            None
+        };
         let dbm_flags = if pc_flags {
             Some(self.dbm(mw, dp_early)?)
         } else {
@@ -988,8 +998,8 @@ impl Machine {
         let dp = alu::word(out.y);
         let jfcl = self.jfcl(dbm_flags);
         let next = self.next_address(mw, scad, &out, jfcl)?;
-        if pc_flags || ash_test {
-            self.flags = self.new_flags(dbm_flags, ash_test, &out, jfcl)?;
+        if pc_flags || ash_test || exp_test {
+            self.flags = self.new_flags(dbm_flags, ash_test, exp_scad, &out, jfcl)?;
         }
         if let Some(addr) = ram_addr {
             self.ram_file[addr] = dbus.expect("the DBus of a RAM file write");
@@ -1516,11 +1526,13 @@ impl Machine {
     }
 
     /// The program flags after the clock (DPE9). `dbm` is the DBM mixer for
-    /// SPEC/PC FLAGS, `None` for ASH TEST.
+    /// SPEC/PC FLAGS, `None` for ASH TEST and EXP TEST. `exp_scad` is the
+    /// SCAD output of an EXP TEST word.
     fn new_flags(
         &self,
         dbm: Option<W36>,
         ash_test: bool,
+        exp_scad: Option<u16>,
         out: &Outputs,
         jfcl: [bool; 4],
     ) -> Result<PcFlags, Stop> {
@@ -1549,21 +1561,25 @@ impl Machine {
             g.trap2 = (dp.bit(9) && n(15)) || n(7);
             g.nodiv = n(2) || pick(12, f.nodiv);
         }
-        // E209, E205, E107, E207, E206, E501, E208.
+        // E209, E205, E107, E207, E206, E501, E208. EXP TEST tests SCAD 01
+        // (X: OV, TRAP 1, FOV; E501) and SCAD 00 (FXU; E206 pins 12, 13
+        // and 1, rev B E84). E206 drives D3 of E209 without an inversion,
+        // and the FXU flag is the Q-bar output, pin 14.
+        let x = exp_scad.is_some_and(|s| s >> 8 & 1 != 0);
+        let u = exp_scad.is_some_and(|s| s >> 9 & 1 != 0);
         let p = (ash_test && dp.bit(1) != dp.bit(2)) || (carry && overflow);
-        g.ov = p || pick(0, f.ov) && !jfcl[0] || n(0);
-        g.trap1 = p || (load && dp.bit(10)) || n(8);
-        g.fov = (pick(3, f.fov) && !jfcl[3]) || n(1);
-        g.fxu = pick(11, f.fxu);
+        g.ov = p || x || pick(0, f.ov) && !jfcl[0] || n(0);
+        g.trap1 = p || x || (load && dp.bit(10)) || n(8);
+        g.fov = x || (pick(3, f.fov) && !jfcl[3]) || n(1);
+        g.fxu = pick(11, f.fxu) || u;
         Ok(g)
     }
 
     /// Stop before the clock if a special function is not modelled.
     fn check_spec(&self, en: u32, low: u32) -> Result<(), Stop> {
         // Group 40 (DPE5 E102): 0 CRY 18 INH, 1 IR LOAD, 3 PI LOAD,
-        // 4 ASH TEST, 6 PC FLAGS, 7 AC BLOCKS EN. EXP TEST needs the FXU
-        // gate of DPE9 (E206), which is not read yet.
-        if en & 4 != 0 && !matches!(low, 0 | 1 | 3 | 4 | 6 | 7) {
+        // 4 ASH TEST, 5 EXP TEST, 6 PC FLAGS, 7 AC BLOCKS EN.
+        if en & 4 != 0 && !matches!(low, 0 | 1 | 3 | 4 | 5 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 40, code {low}")));
         }
         // Group 20 (DPMA E78): 0 PREVIOUS, 1 XR LOAD, 3 APR FLAGS, 4 SET

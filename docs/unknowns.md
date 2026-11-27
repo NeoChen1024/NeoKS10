@@ -81,7 +81,6 @@ schematics (MP00540):
   77, and the assembler put other words at 60, 64, 66, 70, 74 and 76;
   every `DISP/MUL` word has `J` bit 10 set; no word uses `DISP/PAGE
   FAIL`. The model takes EA1, EF1 and EK1 as inactive.
-- The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1).
 - The I/O cycles of the model in microcycles
   ([`microcode-model.md`](microcode-model.md), "I/O cycles"): how long a
   Unibus adapter asserts I/O BUSY before its data cycle, and after a
@@ -116,22 +115,6 @@ schematics (MP00540):
   marks an entry that nothing wrote. The ITS boot loader sweeps both
   tables with `WRUBR` at 1004, its fifth instruction **[measured]**
   2026-11-27 (`emu/ks10-core-uop/tests/its_boot.rs`).
-- The program flags after DMUL in `emu/ks10-core-soft`. The subroutine
-  `QMULT` ends with `[ARX]+[ARX], AD FLAGS` **[microcode]** (simple), so
-  DMUL sets Overflow, Carry 0 and Carry 1 from that sum, with ARX a
-  partial product of the 40-bit multiply. **[measured]** 2026-11-27, the
-  microcode-level model: DMUL of -1,,2 by 377777,,777777 and
-  123456,,654321 sets Carry 0 and Carry 1; DMUL of -2^70 by itself sets
-  Overflow, Carry 1 and Trap 1. `emu/ks10-core-soft` sets only Overflow
-  and Trap 1 for the square of -2^70: it does not compute the partial
-  products. Open item.
-- Bits 14–17 of the page fail word. PFMAP keeps them from VMA (itspag,
-  `ADDRESS HIGH/MEMORY`), and VMA loads them only with `EXT ADR`, at a
-  physical reference (DPM4; ks10, `VMA PHYSICAL`). After 13 370 188
-  instructions of the lockstep boot, a page fail word of the model has
-  bit 17 set, and the one of `emu/ks10-core-soft`, which keeps no VMA
-  14–17, has 0 **[measured]** 2026-11-27. The load that set it is not
-  traced.
 - The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
   both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
   clocks the data path at each repeat, as the manual describes

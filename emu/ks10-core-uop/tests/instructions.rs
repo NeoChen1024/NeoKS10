@@ -492,6 +492,112 @@ fn random_shifts() -> Vec<Case> {
     v
 }
 
+/// Floating point instructions on random normalized numbers. A third of
+/// the exponents are near 0 or 377, so that the results overflow and
+/// underflow (`SPEC/EXPTST`: Overflow, Floating Overflow, Floating
+/// Underflow, Trap 1).
+fn random_floats() -> Vec<Case> {
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let float = |next: &mut dyn FnMut() -> u64| {
+        let exp = match next() % 3 {
+            0 => next() % 12,
+            1 => 0o377 - next() % 12,
+            _ => next() % 0o400,
+        };
+        let w = exp << 27 | 1 << 26 | (next() & 0o377777777);
+        if next() & 1 == 0 {
+            w
+        } else {
+            w.wrapping_neg() & 0o777777_777777
+        }
+    };
+    // Single: FAD, FADR, FSB, FSBR, FMP, FMPR, FDV, FDVR, FIX, FIXR,
+    // FSC. Double: DFAD, DFSB, DFMP, DFDV.
+    let single = [
+        0o140, 0o144, 0o150, 0o154, 0o160, 0o164, 0o170, 0o174, 0o122, 0o126, 0o132,
+    ];
+    let double = [0o110, 0o111, 0o112, 0o113];
+    let mut v = Vec::new();
+    for k in 0..120 {
+        let (a, b) = (float(&mut next), float(&mut next));
+        let (lo_a, lo_b) = (next() & 0o377777_777777, next() & 0o377777_777777);
+        let (op, ac, mem, inst) = if k % 3 == 2 {
+            let op = double[(next() % 4) as usize];
+            (
+                (op),
+                acs(&[(1, a), (2, lo_a)]),
+                [b, lo_b],
+                i(op, 1, E as u64),
+            )
+        } else {
+            let op = single[(next() % 11) as usize];
+            // FSC: E is the scale, -200 to 177.
+            let e = if op == 0o132 {
+                (next() % 0o400).wrapping_sub(0o200) & 0o777777
+            } else {
+                E as u64
+            };
+            (op, acs(&[(1, a)]), [b, 0], i(op, 1, e))
+        };
+        v.push(Case {
+            name: format!(
+                "{op:o} {:012o} {:012o} {:012o} {:012o}",
+                ac[1], ac[2], mem[0], mem[1]
+            ),
+            inst,
+            ac,
+            mem,
+            flags: 0,
+        });
+    }
+    v
+}
+
+/// DMUL on random double words, with high words of 0 or -1 now and then:
+/// the four calls of QMULT set Overflow, Carry 0 and Carry 1 from their
+/// partial products (simple, QMULT). The first two cases are those of
+/// docs/unknowns.md.
+fn random_dmuls() -> Vec<Case> {
+    let mut x: u64 = 0xd1b5_4a32_d192_ed03;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x & 0o777777_777777
+    };
+    let mut ops = vec![
+        [0o777777_777777, 2, 0o377777_777777, 0o123456_654321],
+        [0o400000_000000, 0, 0o400000_000000, 0],
+    ];
+    for _ in 0..40 {
+        let mut w = [next(), next(), next(), next()];
+        for h in [0, 2] {
+            if next() % 3 == 0 {
+                w[h] = if next() & 1 == 0 { 0 } else { 0o777777_777777 };
+            }
+        }
+        ops.push(w);
+    }
+    ops.into_iter()
+        .map(|w| Case {
+            name: format!(
+                "DMUL {:012o} {:012o} by {:012o} {:012o}",
+                w[0], w[1], w[2], w[3]
+            ),
+            inst: i(0o116, 1, E as u64),
+            ac: acs(&[(1, w[0]), (2, w[1])]),
+            mem: [w[2], w[3]],
+            flags: 0,
+        })
+        .collect()
+}
+
 /// A case of [`flag_cases`]: name, instruction, ACs, and the words at 2000
 /// and 2001.
 type Base = (&'static str, u64, Vec<(usize, u64)>, [u64; 2]);
@@ -623,6 +729,32 @@ fn flag_cases() -> Vec<Case> {
         ("JSR", i(0o264, 0, e), vec![], [0, 0]),
         ("JSP", i(0o265, 1, e), vec![], [0, 0]),
         ("DMUL", i(0o116, 1, e), vec![(1, 0), (2, 3)], [0, 5]),
+        // EXP TEST loads Trap 1, Overflow, Floating Overflow and Floating
+        // Underflow (DPE9 E209): without an overflow it clears Trap 1.
+        (
+            "FAD",
+            i(0o140, 1, e),
+            vec![(1, 0o201400_000000)],
+            [0o202400_000000, 0],
+        ),
+        (
+            "FMP with an underflow",
+            i(0o160, 1, e),
+            vec![(1, 0o001400_000000)],
+            [0o001400_000000, 0],
+        ),
+        (
+            "FMP with an overflow",
+            i(0o160, 1, e),
+            vec![(1, 0o377400_000000)],
+            [0o377400_000000, 0],
+        ),
+        (
+            "DFAD",
+            i(0o110, 1, e),
+            vec![(1, 0o201400_000000), (2, 0)],
+            [0o202400_000000, 0],
+        ),
         (
             "DMUL of large numbers",
             i(0o116, 1, e),
@@ -648,6 +780,8 @@ fn flag_cases() -> Vec<Case> {
 fn all_cases() -> Vec<Case> {
     let mut v = cases();
     v.extend(random_shifts());
+    v.extend(random_floats());
+    v.extend(random_dmuls());
     v.extend(flag_cases());
     v
 }

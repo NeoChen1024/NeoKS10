@@ -331,6 +331,11 @@ shifted out to the left) and Q 37. The next cycle uses them **[manual]**
 - DIVIDE SHIFT = `DIVIDE` AND flag CARRY OUT;
 - MULTI SHIFT = `MULTI PREC` AND flag F 02.
 
+The 2901 drives FL 02 only in a shift. MULTI SHIFT reaches only F 37 of
+a left shift of F with the shift style 0. In another word with `MULTI
+PREC`, such as `[AR]_-[AR]-.25, MULTI PREC/1` of DFSB (flt), the value of
+FL 02 has no effect, and the model does not need it.
+
 The flag Q 37 is the input of the MUL dispatch (CRA1 E121).
 
 ### DBus and DBM
@@ -427,10 +432,18 @@ DBM 14, each with `SPEC/FLAGS`, the registers load at the clock
 | OV | P OR X OR ((LOAD ? DP 00 : OV) AND NOT JFCL 09) OR DBM 00 | FLAGS, ASH TEST, EXP TEST (E209) |
 | TRAP 1 | P OR X OR (LOAD AND DP 10) OR DBM 08 | as OV |
 | FOV | X OR ((LOAD ? DP 03 : FOV) AND NOT JFCL 12) OR DBM 01 | as OV |
-| FXU | (LOAD ? DP 11 : FXU), and a term of EXP TEST | as OV |
+| FXU | (LOAD ? DP 11 : FXU) OR (EXP TEST AND SCAD 00) | as OV |
 
 - P = (ASH TEST AND DP 01 XOR DP 02) OR (CARRY AND DP OVERFLOW); X = EXP
   TEST AND SCAD 01 (E205, E501).
+- The FXU term is E206, pins 12, 13 and 1. E206 drives D3 of E209
+  without an inversion, and the FXU flag is the Q-bar output, pin 14
+  **[manual]** (M8620-0-DPE9 rev A1, PDF page 133). Rev B has the same
+  gates, with E84 for E206 **[manual]** (rev B, PDF page 120).
+- `EXP TEST` is in the word `[]_EXP`, which puts the exponent through
+  SCAD as 0 + FE **[microcode]** (ks10, `[]_EXP`). DBM input 2 takes the
+  exponent from SCAD 02–09. So SCAD 01 is 1 if the exponent is above 377
+  or below 0, and SCAD 00 is 1 only if it is below 0.
 - DP OVERFLOW = DP SIGN XOR DP 00; DP CRY1 = DP OVERFLOW XOR CARRY OUT
   (E504). Both use DP, so they are right only if DP is the ALU output.
 - JFCL 09–12 = the flag (OV, CRY0, CRY1, FOV) AND the AC bit AND JFCL EN
@@ -454,10 +467,11 @@ of the number field **[manual]** (5.6, 5.6.1) **[microcode]** (ks10,
 From M8621-0-DPM4 rev B and M8621-0-DPM5 rev B (MP00540 PDF pages 144
 and 145) **[manual]**:
 
-- **VMA load.** VMA 18–35 load from DP 18–35, and VMA 14–17 with VMA
-  EXTENDED (`EXT ADR`) from DP 14–17, when DPE5 VMA EN is true: `MEM`
-  with `LDVMA`, or `MEM` with `AREAD` and the DROM `VMA` bit, or SET SWEEP
-  (DPE5 E205, E601).
+- **VMA load.** VMA 14–35 load from DP 14–35, and VMA EXTENDED from
+  `EXT ADR` (number field bit 15A), when DPE5 VMA EN is true: `MEM` with
+  `LDVMA`, or `MEM` with `AREAD` and the DROM `VMA` bit, or SET SWEEP
+  (DPE5 E205, E601). VMA 14–17 load at each VMA EN (DPM4 E183); VMA
+  EXTENDED only selects them for the bus address.
 - **VMA flags** (DPM4 E55, E54, E74, E82, E90). If `DP FUNC` is 1, USER,
   PREVIOUS, PHYSICAL and FETCH load from DP 00, 09, 08 and 02, and the
   I/O flags (VMA I/O, WRU, VECTOR, I/O BYTE) from DP 10, 11, 12 and 13
@@ -621,16 +635,16 @@ where the hardware also depends on its state at power on.
   DP depends on the DBus and the DBus selects DP, the model computes DP
   with D = 0 and with D = all ones. If the two agree, the 2901 function
   does not depend on D, and the model uses the value;
-- the DBus with FORCE RAMFILE; DBM inputs 3, 4, 5, 6 and 7;
+- the DBus with FORCE RAMFILE; all DBM inputs;
 - the RAM file with `RAMADR` 0, 1 (`ACALU` `B` and `AC+N`), 2, 4, 6 and 7,
   and RAMFILE WRITE;
 - memory cycles on 512 Ki words of main memory: VMA and the VMA flags,
   the cycle type, MEMORY CYCLE, AC references, MB;
 - SCAD with `SCADA` SC or `S#`, `SCADB` FE; SC and FE;
-- IR, AC, XR with XR PREV; the program flags with `SPEC/FLAGS` and
-  `SPEC/ASHOV`; `SPEC/LDACBLK`, `SPEC/LDPI`, `SPEC/APR EN`, `SPEC/PREV`,
-  `SPEC/PXCT EN`, `SPEC/PXCT OFF`, `SPEC/MEMCLR`, `SPEC/MEM WAIT`,
-  `SPEC/NICOND`, `SPEC/CLRCLK`, `SPEC/#`;
+- IR, AC, XR with XR PREV; the program flags with `SPEC/FLAGS`,
+  `SPEC/ASHOV` and `SPEC/EXPTST`; `SPEC/LDACBLK`, `SPEC/LDPI`, `SPEC/APR
+  EN`, `SPEC/PREV`, `SPEC/PXCT EN`, `SPEC/PXCT OFF`, `SPEC/MEMCLR`,
+  `SPEC/MEM WAIT`, `SPEC/NICOND`, `SPEC/CLRCLK`, `SPEC/#`;
 - the console inputs RUN, CONTINUE, EXECUTE, TRAP EN and 1 MSEC EN, and
   HALT LOOP; INTERRUPT REQ from program requests; the 1 ms flag;
 - I/O cycles, the I/O LATCH, `SPEC/CLR IO LATCH` and `SPEC/CLR IO BUSY`,
@@ -638,8 +652,7 @@ where the hardware also depends on its state at power on.
 
 Timing within a cycle is not modelled: SYNC is 1 at the clock, and the
 skip latch CRA2 E98 has the values of the cycle, except NOT I/O LATCH
-(stage 2). The cache directory
-(DPM7) is not modelled; without PAGE EN there is no cache hit.
+(stage 2).
 
 The rest stops (the `unmodelled` branches of `machine.rs`):
 
@@ -653,8 +666,8 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
   ("DBus and DBM inputs"); SCAD on DBM where SCAD depends on DP; a byte
   loop whose undefined bits reach a result;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
-- `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2 and 3
-  (code 2 has no name in ks10);
+- `SPEC` group 40 code 2; group 20 codes 2 and 3 (code 2 has no name in
+  ks10);
 - the dispatches DIAG ADR and PAGE FAIL, and `DISP/MUL` with `J`
   bit 10 clear;
 - `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
@@ -714,30 +727,39 @@ of the last step ([`discrepancies.md`](discrepancies.md), "Trap 1 and
 Trap 2: each flag word loads them"). Without that rule in
 `emu/ks10-core-soft`, 15 of the 90 cases differ, from both fills.
 
-48 more cases run twice with flags set: once with the two trap flags,
+52 more cases run twice with flags set: once with the two trap flags,
 once with all flags of executive mode except FPD. They test the words with
 `SPEC/FLAGS`, which load both trap flags (`AD FLAGS`, `JFCL FLAGS`, `SET
 AROV`, `SET PDL OV`, `NO DIVIDE`, `CLR FPD`), and the carry flags of DMOVN
 ([`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag
 word loads them" and "DMOVN: the carry flags of the complement"). They
-also run PUSHJ, JSR, JSP (DBus input 0), DMUL, the byte instructions and
-JFFO (the byte loop). A DPB of a 7-bit byte 5 into a word with bit 35
+also run PUSHJ, JSR, JSP (DBus input 0), DMUL, the byte instructions,
+JFFO (the byte loop), and FAD, FMP and DFAD (`SPEC/EXPTST`). A DPB of a 7-bit byte 5 into a word with bit 35
 set keeps bit 35; with bit 35 of DBM input 1 as 0, its four runs differ.
-All 372 runs agree.
+
+120 random floating point cases from a fixed seed run FAD, FADR, FSB,
+FSBR, FMP, FMPR, FDV, FDVR, FIX, FIXR, FSC, DFAD, DFSB, DFMP and DFDV. A
+third of the exponents are near 0 or 377, so that results overflow and
+underflow (`SPEC/EXPTST`). 42 DMUL cases have random double words, and
+the two cases of [`discrepancies.md`](discrepancies.md), "DMUL: the
+carry flags of QMULT". All 712 runs agree. Mutants: without the FXU
+term, 32 runs differ; without X in Floating Overflow, 62; without X in
+Trap 1, 66. If `EXP TEST` keeps Trap 1, 8 runs with flags set differ.
+If each `MULTI PREC` word needs FL 02, 26 runs of DFSB stop.
 
 The run executes these codes (both fills, with the halt path):
 
 | Field | Codes (octal) |
 |---|---|
-| `AD` | 1 5 11 21 22 24 25 31 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 72 74 |
+| `AD` | 0 1 2 5 11 21 22 23 24 25 30 31 32 33 34 35 36 37 40 41 42 44 45 46 47 50 51 55 57 65 70 72 73 74 |
 | `DEST` | 0–7 |
 | `SHSTYLE` | NORM, ROT, ASHC and LSHC left and right; ONES and DIV left |
-| `SKIP` | 31 32 33 35 36 42 52 53 55 56 62 63 64 66 70 |
+| `SKIP` | 31 32 33 35 36 42 51 52 53 55 56 62 63 64 66 70 |
 | `DISP` | 1 12 13 34 37 41 62 64 65 66 67 70 |
-| `DBUS`, `DBM` | 0 1 2 3; 3 4 5 6 7 |
+| `DBUS`, `DBM` | 0 1 2 3; 2 3 4 5 6 7 |
 | `RAMADR` | 0 1 2 4 6 7 |
-| `SCAD`/`SCADA`/`SCADB` | 3/1/0 3/1/3 3/3/3 4/1/0 4/1/2 5/1/0 6/0/0 7/1/0 7/3/0 7/7/0 |
-| `SPEC` | 0 1 2 3 4 5 6 10 15 21 25 27 36 40 43 44 46 47 61 |
+| `SCAD`/`SCADA`/`SCADB` | 1/1/0 2/0/0 2/0/1 3/0/1 3/1/0 3/1/3 3/3/3 4/0/1 4/1/0 4/1/1 4/1/2 5/1/0 6/0/0 7/1/0 7/3/0 7/7/0 |
+| `SPEC` | 0 1 2 3 4 5 6 10 15 17 21 25 27 36 40 43 44 45 46 47 61 |
 
 Modelled, but no case exercises it: PXCT ON and PREVIOUS EN 1, so XR
 PREV 1 and the previous block of `RAMADR` 4; `SPEC/PREV`, `SPEC/LDPXCT`,
@@ -1086,9 +1108,7 @@ co-simulation of the model with the logic in `rtl/`.
 - Unit tests in `machine.rs`: the page fail dispatch gives the codes of
   `PFD`, and the byte dispatch the codes of `LDB1`.
 - `emu/ks10-core-uop/tests/instructions.rs`: PUSHJ, JSR, JSP and DMUL
-  with the flags set agree (DBus input 0). DMUL of a negative operand,
-  and of -2^70 by itself, differs in Carry 0 and Carry 1
-  ([`unknowns.md`](unknowns.md), DMUL).
+  with the flags set agree (DBus input 0).
 - `emu/ks10-core-uop/tests/its_boot.rs`: the 8080 BT command, then "its"
   and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`), to
   both processors at the same instruction. The model agreed up to the
@@ -1178,13 +1198,21 @@ failure.
 
 **[measured]** 2026-11-27, the ITS listing 262:
 
-- Pass: DSKAA to DSKAH (PASCNT), DSKAI to DSKAM, DSKCF and DSKBA ("END
-  PASS n."). Under SUBSM, the instruction counts equal those of
-  `emu/ks10-core-soft`.
-- PENDING: DSKCA to DSKCE stop at `SPEC/EXPTST` (the FXU gate of DPE9
-  E206, [`unknowns.md`](unknowns.md)).
-- Not run: DSKCG, DSKEA, DSKEB and DSKEC, for the reasons of
-  `emu/ks10-core-soft`. They are not tried on the model yet.
+- Pass: DSKAA to DSKAH (PASCNT), DSKAI to DSKAM, DSKCA to DSKCF and
+  DSKBA ("END PASS n."). Under SUBSM, the instruction counts equal those
+  of `emu/ks10-core-soft`.
+- DSKCG runs tests 1 to 8 without an error, with the fixture of
+  `emu/ks10-core-soft`, to the start of test 9 (035223). The model counts
+  1 706 706 instructions and `emu/ks10-core-soft` 1 706 705. The model
+  also counts the JRST with which the console starts the program.
+- Not run: DSKEA and DSKEC, for the reasons of `emu/ks10-core-soft`.
+- Not run: DSKEB. Its cache tests tell a hit from a miss by time: RDTIME
+  before and after a page of JFCLs, against a threshold in ticks of the
+  4 MHz clock (DSKEBM.MAC, `PHYCHK`, `CACCHK`). The time base of the
+  model counts instructions, so a page takes the same time with and
+  without hits. **[measured]** 2026-11-28: under SUBSM with the switches
+  000100, the model fails the first cache test, "PHYSICAL EXEC CACHE
+  CHECK, CACHE HITS WHEN MISSES EXPECTED".
 
 ## Field tables
 

@@ -364,3 +364,38 @@ The project uses the microcode and the data path (rank 1).
 differential run takes Carry 0 and Carry 1 of SIMH and KLH10 as 1 for
 such a case (`emu/ks10-core-soft/tests/oracle.rs`,
 `microcode_dmovn_carry`).
+
+## DMUL: the carry flags of QMULT
+
+- **[microcode]** DMUL calls the subroutine QMULT four times (simple,
+  `DMUL`, `DMUL2`, `QMULT`). The products are C(E+1) * C(AC+1); C(E) *
+  C(AC+1) plus the high part of the first; C(AC) * C(E+1) plus the low
+  35 bits of the second; C(AC) * C(E) plus the high parts of the second
+  and the third. QMULT ends with `[ARX]+[ARX], AD FLAGS`, with the high
+  part of its product in ARX.
+- **[manual]** `AD FLAGS` sets Carry 0 and Carry 1 from the carries of
+  the 2901, and keeps a flag that is set (M8620-0-DPE9 rev A1, E305;
+  [`microcode-model.md`](microcode-model.md), "Program flags"). For
+  ARX + ARX, Carry 0 is the sign of the high part, and Carry 1 is its
+  bit 35 in two's complement. Overflow needs a high part outside
+  -2^35 to 2^35 - 1. Only the last part of (-2^70)^2 is outside.
+- **[measured]** 2026-11-27, the microcode-level model: a run that read
+  ARX at the `AD FLAGS` word of QMULT (its address + 4), for 204 operand
+  pairs from a fixed seed. ARX at each of the four words is twice the
+  high part, as a 40-bit number, and the flags after DMUL follow from
+  these values in each pair. Thus DMUL sets Carry 0 and Carry 1 if a
+  high part is negative, and (-2^70)^2 sets Overflow, Carry 1 and Trap 1.
+  `emu/ks10-core-uop/tests/instructions.rs` (`random_dmuls`) keeps 42
+  of these cases.
+- **[emulator]** sims 9556eca0 (`kx10_cpu.c`, DMUL: Overflow and Trap 1
+  if `flag3` is 3, that is both operands -2^70) and KLH10 6d733f2
+  (`kn10ops.c`, `op10dmul`) set Overflow and Trap 1 for (-2^70)^2, and
+  no carry flag. **[measured]** 2026-11-27: without the mask below, the
+  differential run gives 3 differences with each emulator, all DMUL.
+
+The project uses the microcode (rank 1). `emu/ks10-core-soft` computes
+the four high parts (`dbl.rs`, `dmul_flags`). For DMUL, the
+differential run takes Carry 0 and Carry 1 of SIMH and KLH10 from
+`emu/ks10-core-soft` (`emu/ks10-core-soft/tests/oracle.rs`,
+`microcode_dmul_carry`). `emu/ks10-core-uop/tests/instructions.rs`
+(`random_dmuls`) checks the flags against the microcode.

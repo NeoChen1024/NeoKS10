@@ -877,6 +877,17 @@ Differences from the microcode:
   same result, because the strings must not overlap (PRM 2.12).
 - The halt status block has 0 in the words of microcode temporaries
   (`docs/unknowns.md`).
+- Bits 16 and 17 of the page fail word of a memory reference are 0. The
+  microcode keeps VMA 16 and 17 there **[microcode]** (`itspag.98`,
+  `PFMAP`, `ADDRESS HIGH/MEMORY`). The hardware loads VMA 14 to 17 from
+  DP 14 to 17 at each VMA load **[manual]** (M8621-0-DPM4 rev B, E183).
+  So the bits come from the left half of the word that gave the address,
+  for example the stack pointer of PUSH (`simple.42`, `PUSH1`:
+  `[ARX]_AC+1000001, LOAD VMA`). **[measured]** 2026-11-28, the lockstep
+  boot of `emu/ks10-core-uop` without its stop at IN OPERATION: the first
+  difference is at instruction 11 437 018. The page fail word in AC 16
+  is 410001,,000637 in the model and 410000,,000637 here. The last VMA
+  load before it was `PUSH1` (CRAM 2565), with VMA 777015,,000637.
 
 ### Order of the work
 

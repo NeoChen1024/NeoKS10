@@ -219,6 +219,22 @@ fn microcode_dmovn_carry(c: &Case, mut b: Run) -> Run {
     b
 }
 
+/// "DMUL: the carry flags of QMULT" (docs/discrepancies.md): each call
+/// of QMULT ends with `AD FLAGS` on a partial product, which sets Carry 0
+/// and Carry 1. Both emulators leave them. For DMUL the comparison takes
+/// Carry 0 and Carry 1 (PC word bits 1 and 2) of the emulator from
+/// `ks10-core-soft`. `emu/ks10-core-uop/tests/instructions.rs`
+/// (`random_dmuls`) checks these flags against the microcode.
+fn microcode_dmul_carry(c: &Case, a: &Run, mut b: Run) -> Run {
+    if c.inst >> 27 == 0o116 {
+        let bits = 3 << (35 - 2);
+        for (r, s) in b.records.iter_mut().zip(&a.records).skip(1) {
+            r[0] = (r[0] & !bits) | (s[0] & bits);
+        }
+    }
+    b
+}
+
 /// ASH or ASHC left: a step loses a bit that differs from the sign, but
 /// the last step does not. The bits that the steps lose are the magnitude
 /// from the top, then zeros.
@@ -841,12 +857,13 @@ fn random_instructions() {
             let theirs =
                 reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
             for (c, b) in chunk.iter().zip(theirs) {
-                let b = &microcode_dmovn_carry(c, microcode_trap_1(c, b));
+                let b = microcode_dmovn_carry(c, microcode_trap_1(c, b));
                 match ours(c) {
                     Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
                     Ok(a) => {
                         records += a.records.len();
-                        if let Some(d) = difference(c, &a, b, r) {
+                        let b = microcode_dmul_carry(c, &a, b);
+                        if let Some(d) = difference(c, &a, &b, r) {
                             failures.push((c, d));
                         }
                     }

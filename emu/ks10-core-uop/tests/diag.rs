@@ -20,7 +20,8 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{FILLS, label, machine};
+use common::{FILLS, label, machine, symbol};
+use ks10_core_uop::alu;
 use ks10_core_uop::machine::Machine;
 use ks10_machine::boot::Processor;
 use ks10_machine::console::Script;
@@ -109,6 +110,8 @@ fn started(text: &str, d: &Path, programs: &[&str]) -> Machine {
 enum How {
     Alone,
     Subsm(&'static str),
+    /// DSKCG to the start of test 9, with the UBR fixture of SUBSM.
+    Dskcg,
     Skip(&'static str),
 }
 
@@ -118,11 +121,14 @@ fn how(name: &str) -> Option<How> {
         "DSKAI" | "DSKAJ" | "DSKAK" | "DSKAL" | "DSKAM" | "DSKCA" | "DSKCB" | "DSKCC" | "DSKCD"
         | "DSKCE" | "DSKCF" => How::Subsm("000100"),
         "DSKBA" => How::Subsm("000110"),
-        "DSKCG" => {
-            How::Skip("the paging of the DEC microcode in test 9; the model has no paging yet")
-        }
+        "DSKCG" => How::Dskcg,
         "DSKEA" => How::Skip("the paging of the DEC microcode"),
-        "DSKEB" => How::Skip("the cache, which the model does not have yet"),
+        // DSKEB tells cache hits from misses by time: RDTIME before and
+        // after a page of JFCLs (DSKEBM.MAC, PHYCHK, CACCHK). The time
+        // base of the model counts instructions.
+        "DSKEB" => {
+            How::Skip("cache hits by time, and the time base of the model counts instructions")
+        }
         "DSKEC" => How::Skip("the KL paging of the DEC microcode"),
         _ => return None,
     })
@@ -172,13 +178,33 @@ fn one(
                 e => Err(format!("{name}: {e:?}, PASCNT {:o}", pascnt(&m).get())),
             }
         }
+        How::Dskcg => {
+            // The fixture and the end of `emu/ks10-core-soft/tests/diag.rs`
+            // (`How::Dskcg`): the ITS form of the UBR of SUBSM at 7103, and
+            // the run ends at the first PAGSET (35223), after tests 1 to 8.
+            let mut m = started(text, d, &["subsm", &lower]);
+            m.memory[0o7103] = pdp10::W36::wrap(0o100000_000000);
+            let pc = symbol(text, "PC");
+            let mut script = subsm_script("000100", rh);
+            let end = run(&mut m, haltlp, 50_000_000, &mut script, |m| {
+                alu::word(m.alu.reg[pc]).get() & 0o777777 == 0o35223
+            });
+            let out = String::from_utf8_lossy(&m.cty.output).replace('\r', "");
+            if end != End::Done {
+                return Err(format!("{name}: {end:?}, not at test 9\n{out}"));
+            }
+            if out.contains("ERROR") {
+                return Err(format!("{name}: an error message\n{out}"));
+            }
+            Ok(format!(
+                "{name}: tests 1 to 8 without an error, {} instructions",
+                m.instructions
+            ))
+        }
         How::Subsm(lh) => {
             let want = format!("END PASS {iterations}.");
             let mut m = started(text, d, &["subsm", &lower]);
-            let mut script = Script::default();
-            script.answer("TTY SWITCH CONTROL", "Y\r");
-            script.answer("LH SWITCHES", &format!("{lh}\r"));
-            script.answer("RH SWITCHES", &format!("{rh}\r"));
+            let mut script = subsm_script(lh, rh);
             // The text comes one character at a time: look at the end.
             let end = run(&mut m, haltlp, 1_000_000_000, &mut script, |m| {
                 let o = &m.cty.output;
@@ -199,6 +225,15 @@ fn one(
             ))
         }
     }
+}
+
+/// The answers to the questions of SUBSM.
+fn subsm_script(lh: &str, rh: &str) -> Script {
+    let mut script = Script::default();
+    script.answer("TTY SWITCH CONTROL", "Y\r");
+    script.answer("LH SWITCHES", &format!("{lh}\r"));
+    script.answer("RH SWITCHES", &format!("{rh}\r"));
+    script
 }
 
 /// A stop of the model at a function that it does not have.
