@@ -110,9 +110,16 @@ generated `emu/ks10uop/src/fields.rs` has their positions. The exact
 logic of each mixer and condition is in the code of `ks10uop`, with its
 source. Bit numbers of a 36-bit word are those of DEC (bit 0 at the left).
 
-Schematic citations give the drawing, its revision and the chips. They
-are from the second copy of each board in MP00540 (PDF pages: DPE1 125,
-DPE2 126, DPE5 129, DPE9 133, DPEA 134, CRA1 184, CRA2 185). After the first citation of a
+Schematic citations give the drawing, its revision and the chips.
+MP00540 has two revisions of each board: rev A1 and the later etch rev B.
+The readings of the DPE and CRA sheets come from rev A1 (PDF pages: DPE1
+125, DPE2 126, DPE5 129, DPE9 133, DPEA 134, CRA1 184, CRA2 185). Rev B
+of the same sheets (PDF pages 112, 113, 116, 120, 121, 172, 173) has the
+same connections with other chip numbers; for example DPE1 E703–E707
+are E20, E71, E48, E41 and E12 in rev B, and DPE5 rev B keeps the E603
+flags in other bits of its register. The comparison was made for the
+connections that this document uses; for DPE9 it compared the inputs of
+each gate. New readings use rev B. After the first citation of a
 drawing, the text gives the board sheet only, for example "DPE5 E603".
 
 ### Cycle
