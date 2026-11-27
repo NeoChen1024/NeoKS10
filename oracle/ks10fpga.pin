@@ -1,0 +1,6 @@
+# The third reference: KS10FPGA, a KS10 in an FPGA with the data path of
+# the DEC schematics (Verilog, fpga/ks10/cpu). It is the submodule
+# 3rdparty/KS10FPGA (shallow). The project reads it for the data path of
+# the microcode-level model; it does not copy it. No build target yet.
+url https://github.com/KS10FPGA/KS10FPGA
+commit 5090e7a1fea90121b2509404782ac7e96e2a948c

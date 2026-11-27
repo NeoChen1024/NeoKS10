@@ -36,8 +36,11 @@ source.
    the DEC manuals on <https://bitsavers.org/pdf/dec/pdp10/>. A statement
    for the whole PDP-10 family applies to the KS10 only if no KS10 source
    differs.
-4. The behaviour of other emulators (KLH10, the `pdp10-ks` simulator).
-   They find cases to examine. Their agreement does not decide a case.
+4. The behaviour of other implementations: the emulators KLH10 and
+   `pdp10-ks`, and KS10FPGA (`3rdparty/KS10FPGA`), which implements the
+   data path of the DEC schematics. They find cases to examine. Their
+   agreement does not decide a case. A data path detail from KS10FPGA
+   has the mark [emulator] until a DEC schematic or manual gives it.
 5. Inside this repository:
    - `spec/instructions.*` is the only definition of the instruction set.
    - `spec/devices.*` is the only definition of the I/O device registers.
@@ -80,7 +83,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
 | `oracle/` | Pinned commits and patch files for the reference emulators |
-| `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data |
+| `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data, `KS10FPGA` is the FPGA KS10 that is a reference for the data path (shallow) |
 | `its/` | The files that PDP-10/its needs under `build/<emulator>/` |
 | `tests/` | Guest programs, saved random seeds, expected traces |
 | `docs/` | Design notes, `unknowns.md`, `discrepancies.md`, `regmap.md` (generated) |
@@ -144,9 +147,9 @@ fails.
   mutant of the new code is not sufficient.
 - A formal proof has a time limit. A timeout is not a pass and not a fail.
   Report it as a timeout.
-- The reference emulators are external. Pin them by commit in `oracle/`.
-  Keep the trace hook as a patch file. You can read their source. Do not
-  copy it.
+- The reference emulators and KS10FPGA are external. Pin them by commit
+  in `oracle/`. Keep the trace hook as a patch file. You can read their
+  source. Do not copy it.
 
 ## Rules for the emulator (Rust)
 

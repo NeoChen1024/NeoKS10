@@ -4,3 +4,7 @@
 [submodule "3rdparty/PYNQ-Z2"]
 	path = 3rdparty/PYNQ-Z2
 	url = https://github.com/NeoChen1024/PYNQ-Z2.git
+[submodule "3rdparty/KS10FPGA"]
+	path = 3rdparty/KS10FPGA
+	url = https://github.com/KS10FPGA/KS10FPGA.git
+	shallow = true

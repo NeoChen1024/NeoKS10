@@ -24,6 +24,13 @@ emulators are the submodules of the same tree:
 | sims `pdp10-ks` (Richard Cornwell) | `tools/sims` | 9556eca0 | The ITS build of step 0 uses it (`Makefile`, variable `KS10`) |
 | KLH10 | `tools/klh10` | 6d733f2a | Second reference |
 
+KS10FPGA is the submodule `3rdparty/KS10FPGA` (commit 5090e7a1, shallow).
+It is a KS10 in Verilog with the data path of the DEC schematics: ten
+am2901 slices, the SCAD, the dispatches and the microsequencer
+(`fpga/ks10/cpu`). It is the reference for the data path of the
+microcode-level model (decision 17). Its console processor is a program
+on an ARM, not the 8080 program.
+
 Step 0 built ITS with `make EMULATOR=pdp10-ks` on the host on 2026-11-26.
 The machine configuration of that build is `DB` in
 `build/pdp10-ks/config.202` of the ITS tree.
@@ -932,10 +939,12 @@ Decided on 2026-11-27:
    (ARM); the PL does not need an 8080. It reaches the PL processor
    through the console registers of the PS/PL interface.
 18. KLH10 is a second reference emulator, next to SIMH.
+19. KS10FPGA is a reference for the data path, as the submodule
+   `3rdparty/KS10FPGA`.
 
 Open:
 
-19. The IMP interface for step 6. The choices include the emulator-only
+20. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.
@@ -1009,6 +1018,7 @@ ITS tree lists and extracts them):
 - `ks10_8080_microcode.tap.bz2` (trailing-edge, "KS-10 8080 Microcode
   V5.2"): the 8080 console program, with the listing `KNS10.PNT`.
 
-A related project is KS10FPGA (github.com/KS10FPGA/KS10FPGA), a KS10 with
-the DEC microcode in an FPGA. Its repository has no license file
-(2026-11-26), so this project can read it as a reference but not copy it.
+KS10FPGA (`3rdparty/KS10FPGA`, see [Sources](#sources)) has no license
+file at the top. Its Verilog files say LGPL 2.1 in their headers, and its
+microcode files have the DEC hobbyist license. This project reads it as a
+reference and does not copy it (AGENTS.md).
