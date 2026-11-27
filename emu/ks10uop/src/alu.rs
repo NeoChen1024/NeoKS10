@@ -75,9 +75,9 @@ pub struct Controls {
     pub divide_shift: bool,
 }
 
-/// The outputs of one microinstruction. A carry or a shift line is `None`
-/// where no source of this project gives its value (a carry of a logic
-/// function, a line that nothing drives).
+/// The outputs of one microinstruction. A shift line is `None` where
+/// nothing drives it: the 2901 shift pins are inputs in the destinations
+/// that do not shift, and the mixers of DPE1 drive one direction only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Outputs {
     /// The function output F.
@@ -85,9 +85,9 @@ pub struct Outputs {
     /// The chip output Y, which is DP.
     pub y: W40,
     /// CARRY OUT: out of bit −2 (DPE2 E709).
-    pub carry_out: Option<bool>,
+    pub carry_out: bool,
     /// CARRY 02: out of bit 02 into bit 01 (DPE2 E710).
-    pub carry_02: Option<bool>,
+    pub carry_02: bool,
     /// The line DPE1 FL 02 between bit 01 and bit 02 of the main register.
     pub fl_02: Option<bool>,
     /// The line DPE1-2 QR 37 at the right end of Q.
@@ -149,33 +149,82 @@ impl Alu {
     }
 
     /// The function output F and the carries, with D at the D input.
-    fn function(&self, c: &Controls, d: W40) -> (u64, Option<bool>, Option<bool>) {
+    ///
+    /// Each slice gives G and P by the table "Logic functions for G, P,
+    /// Cn+4, and OVR" **[manual]** (The Am2900 Family Data Book, 1978,
+    /// Am2901A, Figure 8). The 2902 chips of DPE2 combine them: the carry
+    /// out of a slice is G + P·(its carry in), the carry into bit 37 is
+    /// CARRY IN, and the carry from the slice of bits 18–21 into the slice
+    /// of bits 14–17 goes through P2 of E711, which `SPEC/INHCRY18` turns
+    /// off **[manual]** (M8620-0-DPE2 rev A1).
+    fn function(&self, c: &Controls, d: W40) -> (u64, bool, bool) {
         let a = self.reg[usize::from(c.a & 15)].get();
         let b = self.reg[usize::from(c.b & 15)].get();
         let (rl, sl) = self.operands(c.src_left, a, b, d.get());
         let (rr, sr) = self.operands(c.src_right, a, b, d.get());
         let r = (rl & LEFT) | (rr & RIGHT);
         let s = (sl & LEFT) | (sr & RIGHT);
-        let (x, y) = match c.func & 7 {
-            0 => (r, s),        // ADD: R plus S
-            1 => (s, !r & ALL), // SUBR: S minus R
-            2 => (r, !s & ALL), // SUBS: R minus S
-            3 => return (r | s, None, None),
-            4 => return (r & s, None, None),
-            5 => return (!r & s & ALL, None, None),
-            6 => return (r ^ s, None, None),
-            _ => return (!(r ^ s) & ALL, None, None),
+        let func = c.func & 7;
+        // The R and S of the G and P definitions (Figure 8: substitute
+        // the complement of R for S−R, R̄∧S and R⊻S, of S for R−S).
+        let (gr, gs) = match func {
+            1 | 5 | 6 => (!r & ALL, s),
+            2 => (r, !s & ALL),
+            _ => (r, s),
         };
-        // Right half, bits 18–37 (shift 0–19).
-        let right = (x & RIGHT) + (y & RIGHT) + u64::from(c.carry_in);
-        let carry_18 = right >> 20 != 0 && !c.inhibit_carry_18;
-        // Bits 02–17 (shift 20–35).
-        let mid = ((x >> 20) & 0xFFFF) + ((y >> 20) & 0xFFFF) + u64::from(carry_18);
-        let carry_02 = mid >> 16 != 0;
-        // Bits −2 to 01 (shift 36–39).
-        let top = ((x >> 36) & 0xF) + ((y >> 36) & 0xF) + u64::from(carry_02);
-        let f = ((top & 0xF) << 36) | ((mid & 0xFFFF) << 20) | (right & RIGHT);
-        (f, Some(top >> 4 != 0), Some(carry_02))
+        let mut f = 0u64;
+        let mut carry = c.carry_in;
+        let (mut carry_02, mut carry_out) = (false, false);
+        // Slice 9 holds bits 34–37 (shift 0–3), slice 0 bits −2 to 01.
+        for slice in (0..10u32).rev() {
+            let sh = 4 * (9 - slice);
+            let (ri, si) = ((gr >> sh) & 15, (gs >> sh) & 15);
+            let (p, g) = (ri | si, ri & si);
+            let pb = |i: u32| (p >> i) & 1 != 0;
+            let gb = |i: u32| (g >> i) & 1 != 0;
+            let lookahead = gb(3)
+                || (pb(3) && gb(2))
+                || (pb(3) && pb(2) && gb(1))
+                || (pb(3) && pb(2) && pb(1) && gb(0));
+            let (big_g, big_p) = match func {
+                0..=2 => (lookahead, p == 15),
+                3 => (p != 15, true),
+                4 | 5 => (g != 0, true),
+                // R⊽S (and R⊻S with R̄): the last term has P0, not G0.
+                _ => {
+                    let x = gb(3)
+                        || (pb(3) && gb(2))
+                        || (pb(3) && pb(2) && gb(1))
+                        || (pb(3) && pb(2) && pb(1) && pb(0));
+                    (!x, g == 0)
+                }
+            };
+            let (x, y) = ((r >> sh) & 15, (s >> sh) & 15);
+            let fi = match func {
+                0 => x + y + u64::from(carry),
+                1 => y + (!x & 15) + u64::from(carry),
+                2 => x + (!y & 15) + u64::from(carry),
+                3 => x | y,
+                4 => x & y,
+                5 => !x & y,
+                6 => x ^ y,
+                _ => !(x ^ y),
+            } & 15;
+            f |= fi << sh;
+            let out = big_g || (big_p && carry);
+            if slice == 1 {
+                carry_02 = out;
+            }
+            if slice == 0 {
+                carry_out = out;
+            }
+            carry = if slice == 5 {
+                out && !c.inhibit_carry_18
+            } else {
+                out
+            };
+        }
+        (f, carry_out, carry_02)
     }
 
     /// The output Y before the registers change. It does not depend on D
@@ -231,7 +280,8 @@ impl Alu {
                 _ => f02,
             };
             qr_37 = Some(into_q37);
-            // The slice of bits 02–05 drives FL 02 only while it shifts up.
+            // The slice of bits 02–05 drives FL 02 (its RAM3 pin) only in
+            // RAMQU and RAMU (Am2901A, Figure 4).
             fl_02 = shift_f.then_some(f02);
             if shift_f {
                 let mut v = (f << 1) & ALL;
@@ -265,8 +315,9 @@ impl Alu {
                 _ => f37,
             };
             fl_02 = Some(into_f02);
-            // The rightmost slice drives QR 37 only while Q shifts down.
-            qr_37 = shift_q.then_some(bit(q, I37));
+            // The rightmost slice drives QR 37 (its Q0 pin) in RAMQD and
+            // RAMD (Am2901A, Figure 4): the field codes 6 and 7.
+            qr_37 = shift_f.then_some(bit(q, I37));
             if shift_f {
                 let mut v = f >> 1;
                 v = with_bit(v, 0, bit(f, 0)); // ADL SIGN into F SIGN
@@ -343,7 +394,7 @@ mod tests {
         let c = ctl(1, 1, 3);
         let o = u.step(&c, W40::ZERO);
         assert_eq!(o.f.get(), (7 << 2) - 1);
-        assert_eq!(o.carry_out, Some(true));
+        assert!(o.carry_out);
         let o = u.step(
             &Controls {
                 carry_in: true,
@@ -387,10 +438,33 @@ mod tests {
     }
 
     #[test]
-    fn a_logic_function_has_no_carry() {
+    fn the_carries_of_logic_functions_follow_the_data_sheet() {
+        // OR: P = 1, G = NOT(P3P2P1P0). With R = 0 and S = 0 every slice
+        // generates, so CARRY OUT is 1 whatever the carry in.
         let mut u = Alu::new(W40::ZERO);
         let o = u.step(&ctl(3, 1, 3), W40::ZERO);
-        assert_eq!(o.carry_out, None);
-        assert_eq!(o.carry_02, None);
+        assert!(o.carry_out && o.carry_02);
+        // AND: P = 1, G = OR of the bit generates. With all ones, G = 1.
+        u.reg[1] = W40::ONES;
+        u.reg[2] = W40::ONES;
+        let o = u.step(&ctl(4, 1, 3), W40::ZERO);
+        assert!(o.carry_out);
+        // AND with no common bits and no carry in: no carry.
+        u.reg[2] = W40::ZERO;
+        let o = u.step(&ctl(4, 1, 3), W40::ZERO);
+        assert!(!o.carry_out);
+    }
+
+    #[test]
+    fn arithmetic_carries_agree_with_the_sum() {
+        let mut u = Alu::new(W40::ZERO);
+        for (x, y) in [(0o777777_777777u64, 1u64), (0o377777_777777, 1), (5, 7)] {
+            u.reg[1] = d_input(W36::wrap(x));
+            u.reg[2] = d_input(W36::wrap(y));
+            let o = u.step(&ctl(0, 1, 3), W40::ZERO);
+            let sum = u.reg[1].get() + u.reg[2].get();
+            assert_eq!(o.f.get(), sum & ALL);
+            assert_eq!(o.carry_out, sum >> 40 != 0);
+        }
     }
 }

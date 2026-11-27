@@ -248,9 +248,18 @@ microword:
   `SPEC/INHCRY18` turns off. CARRY OUT is the carry out of bit −2 (E709).
   CARRY 02 is the carry out of bit 02 into bit 01 (E710) **[manual]**
   (DPE2).
-- For a logic function, the carry outputs come from the G and P pins of
-  the 2901, which this project does not have a source for. The model
-  marks such a carry as undefined, and stops if a later step uses it.
+- Each slice gives the 2902 chips a generate G and a propagate P. For an
+  arithmetic function they are the usual lookahead terms. For a logic
+  function the data sheet gives other terms: for R∨S, P = 1 and G =
+  NOT(P3P2P1P0); for R∧S, P = 1 and G = G3+G2+G1+G0; for R⊽S, P =
+  NOT(G3+G2+G1+G0) and G = NOT(G3+P3G2+P3P2G1+P3P2P1P0) **[manual]**
+  (The Am2900 Family Data Book, 1978, Am2901A, Figure 8). So a logic
+  function also has a defined CARRY OUT and CARRY 02.
+- The 2901 shift pins: RAM0 and Q0 are outputs in RAMQD and RAMD, RAM3
+  and Q3 in RAMQU, RAM3 in RAMU, and all four are inputs in the other
+  destinations **[manual]** (Am2901A, Figure 4). Thus the line QR 37 is
+  driven in a right shift of F (field `DEST` 6 and 7), and FL 02 in a
+  left shift of F (4 and 5).
 - Overflow comes from DP SIGN (the 40-bit sign) against DP bit 0. Carry 1
   is overflow XOR carry 0 **[manual]** (5.5.5).
 - `DEST` selects the 2901 output Y: the A register for `DEST/A`,
@@ -406,8 +415,8 @@ instruction from a state and compares the result with `emu/ks10` for the
 same state. The model is `emu/ks10uop/src/alu.rs` and `machine.rs`.
 
 A function is either modelled or a stop with "unmodelled". The model
-does not guess a value. A carry of a logic function and a shift line that
-nothing drives are undefined; a step that reads one stops.
+does not guess a value. A shift line that nothing drives is undefined; a
+step that reads one stops.
 
 **State of 2026-11-27.** Modelled:
 
@@ -439,7 +448,7 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - the dispatches DIAG ADR, PAGE FAIL, NICOND and BYTE, and `DISP/MUL`
   with `J` bit 10 clear;
 - `MULTI SHIFT`, and `CALL` with a return in one word;
-- a read of an undefined carry or shift line.
+- a read of a shift line that nothing drove in the previous cycle.
 
 **Power-up [measured]** 2026-11-27 (`emu/ks10uop/tests/power_up.rs`, the
 ITS listing 262). The power-up sequence runs from 0 to `PWRON` in 637

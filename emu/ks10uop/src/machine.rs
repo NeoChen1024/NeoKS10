@@ -383,8 +383,8 @@ impl Machine {
         }
         self.e603 = Flags603 {
             func_01: func01,
-            carry_02: out.carry_02,
-            carry_out: out.carry_out,
+            carry_02: Some(out.carry_02),
+            carry_out: Some(out.carry_out),
             fl_02: out.fl_02,
             qr_37: out.qr_37,
         };
@@ -466,16 +466,12 @@ impl Machine {
         let dp = alu::word(out.y);
         let dp_sign = out.y.get() >> 39 & 1 != 0;
         let overflow = dp_sign != dp.bit(0);
-        let carry_out = || {
-            out.carry_out
-                .ok_or_else(|| self.unmodelled("CARRY OUT for the flags is not defined"))
-        };
         let pick = |dp_bit: u32, flag: bool| if load { dp.bit(dp_bit) } else { flag };
         let mut g = f;
         if pf {
             // E305, E306, E204, E401.
-            g.cry0 = (pick(1, f.cry0) && !jfcl[1]) || (carry && carry_out()?);
-            let dp_cry1 = carry && (overflow ^ carry_out()?);
+            g.cry0 = (pick(1, f.cry0) && !jfcl[1]) || (carry && out.carry_out);
+            let dp_cry1 = carry && (overflow ^ out.carry_out);
             g.cry1 = (pick(2, f.cry1) && !jfcl[2]) || dp_cry1;
             g.fpd = (pick(4, f.fpd) || n(4)) && !n(3);
             // E210, E211, E106, E110, E302.
@@ -588,7 +584,7 @@ impl Machine {
         if sel != 0 {
             if en & 4 == 0 {
                 skip_bit |= match sel {
-                    1 => need(out.carry_out, "CARRY OUT")?,
+                    1 => out.carry_out,
                     2 => out.adl_zero(),
                     3 => out.adr_zero(),
                     4 => !self.flags.user,
@@ -599,7 +595,7 @@ impl Machine {
             }
             if en & 2 == 0 {
                 skip_bit |= match sel {
-                    1 => need(out.carry_02, "CARRY 02")?,
+                    1 => out.carry_02,
                     2 => out.adl_sign(),
                     3 => out.adr_sign(),
                     4 => self.flags.pcu,
@@ -610,7 +606,7 @@ impl Machine {
                     6 => {
                         let v = out.y.get();
                         let overflow = (v >> 39 & 1) != (v >> 37 & 1);
-                        overflow ^ need(out.carry_out, "CARRY OUT")?
+                        overflow ^ out.carry_out
                     }
                     // TXXX: DROM TXXX EN (a copy of DROM bit 9) XOR AD=0
                     // (DPEA E319; EK-OKS10-TM-002 5.4.2).
