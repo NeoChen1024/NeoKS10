@@ -6,7 +6,12 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot microcode diag oracle oracle-sims oracle-klh10
+.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop verify verify-build verify-jobs oracle oracle-sims oracle-klh10
+
+# The targets that need these give them to cargo themselves. Without this,
+# a variable on the command line reaches every recipe, and `cargo test` of
+# check-rust also runs the tests of the disk image.
+unexport KS10_ITS_DISK KS10_DIAG_DIR KS10_MCR_LISTING KS10_ORACLE KS10_ORACLE_KLH10
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -150,10 +155,15 @@ cross:
 #    the record on a fresh copy must give the same CTY output.
 ITS_BOOT_DIR = $(abspath $(BUILD_DIR))/its-boot
 NEOKS10 = $(CURDIR)/emu/target/release/neoks10
-its-boot:
+its-boot: its-boot-soft its-boot-neoks10
+
+its-boot-soft:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test its --test idle --test tape
+
+its-boot-neoks10:
+	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	cd emu && $(NICE) $(CARGO) build --locked --release -p neoks10
 	rm -rf $(ITS_BOOT_DIR) && mkdir -p $(ITS_BOOT_DIR)
 	cp tests/its-boot/its.toml tests/its-boot/boot.script $(ITS_BOOT_DIR)/
@@ -173,19 +183,26 @@ its-boot:
 # directory. itstar (the submodule tools/itstar of 3rdparty/its, pinned
 # there) extracts the listing KSHACK; MCR 262 into the build output. The
 # test emu/ks10-core-uop/tests/ram_file.rs reads the RAM file from the disk as
-# the 8080 does and compares it with the listing.
+# the 8080 does and compares it with the listing. The listing is extracted
+# again only if output.tape is newer.
 MICROCODE_DIR = $(abspath $(BUILD_DIR))/microcode
 MICROCODE_LISTING = $(MICROCODE_DIR)/mcr.262
 ITSTAR = $(ITS_TREE)/tools/itstar
-microcode:
+ITS_TAPE = $(abspath $(dir $(KS10_ITS_DISK)))/output.tape
+microcode: microcode-test
+
+$(MICROCODE_LISTING): $(wildcard $(ITS_TAPE))
 	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
-	@test -f "$(dir $(KS10_ITS_DISK))output.tape" || { echo "microcode: output.tape is not next to $(KS10_ITS_DISK)" >&2; exit 2; }
+	@test -f "$(ITS_TAPE)" || { echo "microcode: output.tape is not next to $(KS10_ITS_DISK)" >&2; exit 2; }
 	@test -f $(ITSTAR)/itstar.c || { echo "microcode: run git -C $(ITS_TREE) submodule update --init tools/itstar" >&2; exit 2; }
-	rm -rf $(MICROCODE_DIR) && mkdir -p $(MICROCODE_DIR)/tape
+	rm -rf $(MICROCODE_DIR)/tape && mkdir -p $(MICROCODE_DIR)/tape
 	$(CC) -O2 -o $(MICROCODE_DIR)/itstar $(addprefix $(ITSTAR)/,itstar.c dirlst.c pack.c tapeio.c tm03.c unpack.c zopen.c)
-	cd $(MICROCODE_DIR)/tape && $(NICE) ../itstar -xf "$(abspath $(dir $(KS10_ITS_DISK)))/output.tape" > ../itstar.log
-	cp $(MICROCODE_DIR)/tape/kshack/mcr.262 $(MICROCODE_LISTING)
+	cd $(MICROCODE_DIR)/tape && $(NICE) ../itstar -xf "$(ITS_TAPE)" > ../itstar.log
+	cp $(MICROCODE_DIR)/tape/kshack/mcr.262 $@.new && mv $@.new $@
 	rm -rf $(MICROCODE_DIR)/tape
+
+microcode-test: $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
+	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" KS10_MCR_LISTING=$(MICROCODE_LISTING) \
 	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --tests -- --nocapture
 
@@ -195,23 +212,50 @@ microcode:
 # files into the build output. The test emu/ks10-core-soft/tests/diag.rs runs the
 # programs of the run file SMCPU.CMD. emu/ks10-core-uop/tests/diag.rs runs
 # them on the microcode-level model, if `make microcode` made the listing.
+# The files are extracted again only if the tape is newer than the stamp.
 DIAG_DIR = $(abspath $(BUILD_DIR))/diag
 DIAG_TAPE = references/trailing-edge/tapes/ks_diag_gs.tap.bz2
+DIAG_STAMP = $(DIAG_DIR)/extracted
 TAPEUTILS = $(ITS_TREE)/tools/tapeutils
-diag:
+diag: diag-soft diag-uop
+
+$(DIAG_STAMP): $(wildcard $(DIAG_TAPE))
 	@test -f $(DIAG_TAPE) || { echo "diag: $(DIAG_TAPE) is missing; run make references" >&2; exit 2; }
 	@test -f $(TAPEUTILS)/t10backup.c || { echo "diag: run git -C $(ITS_TREE) submodule update --init tools/tapeutils" >&2; exit 2; }
 	rm -rf $(DIAG_DIR) && mkdir -p $(DIAG_DIR)/files
 	$(CC) -O2 -o $(DIAG_DIR)/t10backup $(TAPEUTILS)/t10backup.c $(TAPEUTILS)/tapeio.c
 	bunzip2 -c $(DIAG_TAPE) > $(DIAG_DIR)/ks_diag_gs.tap
 	cd $(DIAG_DIR)/files && ../t10backup -x -f ../ks_diag_gs.tap '*' > ../t10backup.log
+	touch $@
+
+diag-soft: $(DIAG_STAMP)
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
 	    --test diag -- --nocapture
+
+# With KS10_ITS_DISK, the listing comes first (make -j verify).
+diag-uop: $(DIAG_STAMP) $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
 	@test -f $(MICROCODE_LISTING) || echo "diag: microcode-level model SKIPPED, $(MICROCODE_LISTING) is missing (make microcode)"
 	if [ -f $(MICROCODE_LISTING) ]; then \
 	    cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files KS10_MCR_LISTING=$(MICROCODE_LISTING) \
 	        $(NICE) $(CARGO) test --locked --release -p ks10-core-uop --test diag -- --nocapture; \
 	fi
+
+# The rows of AGENTS.md for a change of the software processor or a
+# device, and before a merge: check, microcode, diag and its-boot. Run it
+# as `make -j verify KS10_ITS_DISK=<rp0.dsk>`. verify-build compiles the
+# test programs first, so that the parallel jobs do not wait for the
+# build lock of cargo. -k runs the other jobs after a failure; -Otarget
+# keeps the output of each job together.
+verify: verify-build
+	+$(MAKE) -k -Otarget verify-jobs
+
+verify-jobs: check microcode-test diag its-boot
+
+verify-build:
+	@test -n "$(KS10_ITS_DISK)" || { echo "verify: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
+	cd emu && $(NICE) $(CARGO) test --locked --no-run
+	cd emu && $(NICE) $(CARGO) test --locked --release --no-run -p ks10-core-soft -p ks10-core-uop
+	cd emu && $(NICE) $(CARGO) build --locked --release -p neoks10
 
 # The reference emulators with their trace hooks (oracle/). Each source is
 # a submodule of 3rdparty/its, which must be at the commit of its pin

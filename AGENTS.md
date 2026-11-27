@@ -129,7 +129,13 @@ fails.
   `rp0.dsk`), compares it with the RAM file on the disk, and runs the
   tests of `emu/ks10-core-uop` that need it (the power-up sequence and the
   single instructions). Run it when `emu/ks10-core-uop` or the microcode
-  changes.
+  changes. It extracts the listing again only if `output.tape` is newer.
+- `make -j verify KS10_ITS_DISK=<rp0.dsk>` runs `make check`, `make
+  microcode`, `make diag` and `make its-boot` as parallel jobs, after one
+  build of the test programs. It continues after a failure and prints the
+  output of each job together. A commit message can name it in place of
+  these four rows. `make diag` and `make its-boot` are also `diag-soft`,
+  `diag-uop`, `its-boot-soft` and `its-boot-neoks10`.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example
