@@ -247,6 +247,15 @@ impl Alu {
         Some(W40::wrap(zero))
     }
 
+    /// The output Y for a D input, before the registers change.
+    pub fn y(&self, c: &Controls, d: W40) -> W40 {
+        if c.dest & 7 == 0 {
+            self.reg[usize::from(c.a & 15)]
+        } else {
+            W40::wrap(self.function(c, d).0)
+        }
+    }
+
     /// Run one microinstruction: compute F and Y, and clock the registers.
     pub fn step(&mut self, c: &Controls, d: W40) -> Outputs {
         let (f, carry_out, carry_02) = self.function(c, d);

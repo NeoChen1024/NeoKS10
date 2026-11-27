@@ -131,7 +131,11 @@ inside a cycle.
 
 - If `MULTI SHIFT` is 1, the microinstruction repeats until FE bit 0 is
   0. If FE bit 0 is already 0, the microinstruction is a no-op
-  **[manual]** (5.4.1, bit 79).
+  **[manual]** (5.4.1, bit 79). The CRA clock stops while `MULTI SHIFT`
+  and FE SIGN are both 1 (M8616-0-CSL5 rev D, E52, E33). Thus the word
+  repeats with the same address and stack, and the data path runs at
+  each repeat. The model stops if such a word also has a memory
+  function, `FMWRITE` or a special function of group 10, 20 or 40.
 - A memory function needs two microinstructions: the first sets up and
   starts it, the second waits and takes or gives the word **[manual]**
   (5.6). A flat memory completes each function at once.
@@ -364,6 +368,34 @@ SCAD is a 10-bit adder with eight function codes (`SCAD`), an A input
 `LOADSC` and `LOADFE` load SC and FE from SCAD **[manual]** (5.5.4)
 **[microcode]** (ks10, `SCAD`, `SCADA`, `SCADB`). The manual says "seven
 functions" ([`discrepancies.md`](discrepancies.md)).
+
+The mixers of the two inputs are on M8621-0-DPM3 rev B **[manual]**. SCAD
+bit 00 is the left bit; bit 09 is the right bit. `SCADA` is # 03–05, and
+`SCADB` is # 06–07; the select inputs are the inverted number field
+bits with inverting inputs.
+
+| `SCADA` | Bits 01–07 (E75, E51, E91, E67, E83, E99, E107) |
+|---|---|
+| 0 `SC` | SC 01–07 |
+| 1 `S#` | # 09–15 |
+| 2 `PTR44` | 1, 0, 0, 1, 0, 0, DP 06 |
+| 3–7 `BYTE1`–`BYTE5` | DP 00–06, 07–13, 14–20, 21–27, 28–34 |
+
+For `SCADA` 2–7, bits 00, 08 and 09 come from E28: SC 00, 08 and 09 if #
+05 is 0, else # 08, 16 and 17. For `SCADA` 0 and 1, E28 gives the same
+bits as the 8-input mixers. The 2-input mixer only reads # 05, so `S#`
+gives # 08–17, and `SC` gives SC.
+
+| `SCADB` | Bits 00–01 | Bits 02–09 (E36, E60, E76, E84, E92) |
+|---|---|---|
+| 0 `FE` | FE 00–01 | FE 02–09 |
+| 1 `EXP` | 0, 0 | DP 01–08 XOR DP 00 (E68, E100, E41) |
+| 2 `SHIFT` | DP 18, DP 18 | DP 28–35 |
+| 3 `SIZE` | 0, DP 06 | DP 07–11, then 0, 0, 0 |
+
+SIZE puts the byte size in SCAD bits 01–06, which is the size times 8.
+The microcode agrees: `FE_S+2` uses `S#/20` **[microcode]** (ks10,
+`FE_S+2`).
 
 ### Program flags
 
@@ -607,14 +639,14 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
   on the DBus where DP depends on D;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
-- `SCADA` 2–7 and `SCADB` 1–3;
 - `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2, 3 and 4
   (`APR FLAGS`, `CLRCSH`, `SWEEP`); group 10 codes 2, 3 and 4 (I/O
   latch, I/O busy, `LDPAGE`);
 - the skip input NOT I/O LATCH;
 - the dispatches DIAG ADR, PAGE FAIL and BYTE, and `DISP/MUL` with `J`
   bit 10 clear;
-- `MULTI SHIFT`, and `CALL` with a return in one word;
+- `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
+  of group 10, 20 or 40, and `CALL` with a return in one word;
 - a read of a shift line that nothing drove in the previous cycle.
 
 **NICOND inputs EA1, EF1 and EK1.** The model takes them as inactive.
@@ -659,33 +691,38 @@ halt code there.
 
 **Result [measured]** 2026-11-27 (`emu/ks10uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
-and the words at 2000 and 2001 with `emu/ks10`. 28 cases of 34 agree,
+and the words at 2000 and 2001 with `emu/ks10`. 33 cases of 34 agree,
 from both fills: moves to and from memory and ACs, ADD and SUB with
 overflow and carries, ADDB, AND, IOR, SETZM, AOS (memory, AC
 destination, AC operand), HRRZ, HLL, CAIE, SKIPL, an indexed and an
-indirect MOVE, IMUL, MUL, IDIV and DIV. The six shift cases (ASH, ASHC,
-LSH, ROT) stop at `SCADB` 2: the SCAD mixers are not read. The test
-checks that they still stop there.
+indirect MOVE, IMUL, MUL, IDIV, DIV, ASH left and right, ASHC, LSH and
+ROT.
+
+In the case "ASH overflow", TRAP 1 differs, and all other state agrees.
+The microcode tests each step of the left shift, and a step without
+overflow clears TRAP 1 ([`discrepancies.md`](discrepancies.md), "ASH:
+TRAP 1 when an early step loses significance"). The test expects this
+difference in TRAP 1 only, and fails if it disappears.
 
 The run executes these codes (both fills, with the halt path):
 
 | Field | Codes (octal) |
 |---|---|
-| `AD` | 1 5 11 21 22 24 25 32 33 34 35 37 40 41 42 44 45 46 47 51 57 65 70 74 |
+| `AD` | 1 5 11 21 22 24 25 32 33 34 35 36 37 40 41 42 44 45 46 47 51 57 65 70 74 |
 | `DEST` | 0–7 |
-| `SHSTYLE` | NORM left and right, ASHC right, DIV left |
-| `SKIP` | 32 36 42 52 56 62 63 64 66 70 |
+| `SHSTYLE` | NORM left and right, ROT left, ASHC left and right, DIV left |
+| `SKIP` | 32 33 36 42 52 53 56 62 63 64 66 70 |
 | `DISP` | 1 12 13 34 37 41 62 64 66 70 |
 | `DBUS`, `DBM` | 1 2 3; 4 5 6 7 |
 | `RAMADR` | 0 1 2 4 6 7 |
-| `SCAD`/`SCADA`/`SCADB` | 6/0/0 7/1/0 |
-| `SPEC` | 0 4 6 10 15 21 25 27 36 43 46 47 61 |
+| `SCAD`/`SCADA`/`SCADB` | 3/1/0 4/1/0 4/1/2 6/0/0 7/1/0 |
+| `SPEC` | 0 3 4 6 10 15 21 25 27 36 43 44 46 47 61 |
 
 Modelled, but no case exercises it: PXCT ON and PREVIOUS EN 1, so XR
 PREV 1 and the previous block of `RAMADR` 4; `SPEC/PREV`, `SPEC/LDPXCT`,
 `SPEC/MEM WAIT` and `SPEC/CLRCLK`; the VMA flags from `DP FUNC`; the USER
 terms in user mode; INTERRUPT REQ 1 and `SKIP/INT`; the NICOND trap
-codes. Some of these rest on readings at overview scale (DPEB E126,
+codes; `SCADA` 2–7, and `SCADB` 1 and 3. Some of these rest on readings at overview scale (DPEB E126,
 E140, E175; DPE9 E125; CRA2 E147; DPMC E1). They need a closer reading
 before a case reaches them.
 
@@ -702,7 +739,11 @@ case; no FORCE RAMFILE gives four differences. An AC write at the end of
 a read survives: FORCE RAMFILE gives the DBus the same RAM file word,
 so the write does not change it. The MUL dispatch on QR 37 of the same
 cycle now gives differences in IMUL and MUL. The right shift with 0 into
-the sign waits for the shift cases.
+the sign gives differences in IMUL, MUL, ASH and ASHC.
+
+Mutants of the shifts: `SCADB` `SHIFT` with 0 in bits 00 and 01 gives
+differences in ASH right, ASHC and LSH. A last `MULTI SHIFT` word that
+changes the data path gives differences in ASH right, LSH and ROT.
 
 ## Field tables
 

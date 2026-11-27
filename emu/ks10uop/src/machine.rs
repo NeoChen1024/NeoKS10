@@ -435,16 +435,51 @@ impl Machine {
         })
     }
 
-    /// The SCAD output (DPM3) for the number field of `mw`.
-    fn scad(&self, mw: Microword) -> Result<u16, Stop> {
-        let a = match get(mw, u::SCADA) {
+    /// The SCAD output (M8621-0-DPM3 rev B) for the number field of `mw`
+    /// and DP of this cycle. SCAD has 10 bits, 00 at the left.
+    fn scad(&self, mw: Microword, dp: Option<W36>) -> Result<u16, Stop> {
+        let num = get(mw, u::NUM);
+        let nb = |k: u32| u16::from((num >> (17 - k)) & 1 != 0);
+        // Bit k of SCAD as a value (bit 09 is 1).
+        let at = |k: u32, v: u16| v << (9 - k);
+        let sel_a = get(mw, u::SCADA);
+        let sel_b = get(mw, u::SCADB);
+        let dp = match dp {
+            Some(w) => w,
+            None if sel_a < 2 && sel_b == 0 => W36::ZERO,
+            None => return Err(self.unmodelled("SCAD needs DP, which depends on the DBus")),
+        };
+        let dpb = |k: u32| u16::from(dp.bit(k));
+        // SCADA bits 00, 08 and 09: SC if # 05 is 0, else # 08, 16 and 17
+        // (E28).
+        let ends = if nb(5) == 0 {
+            self.sc & 0o1003
+        } else {
+            at(0, nb(8)) | at(8, nb(16)) | at(9, nb(17))
+        };
+        // SCADA bits 01–07 (E75, E51, E91, E67, E83, E99, E107).
+        let a = match sel_a {
             0 => self.sc,
             1 => get(mw, u::S_NUM) as u16,
-            other => return Err(self.unmodelled(format!("SCADA {other}"))),
+            // PTR44: 1, 0, 0, 1, 0, 0, DP 06.
+            2 => ends | at(1, 1) | at(4, 1) | at(7, dpb(6)),
+            // BYTE1 to BYTE5: seven DP bits from DP 00, 07, 14, 21, 28.
+            n => {
+                let first = 7 * (n - 3);
+                (1..=7).fold(ends, |v, k| v | at(k, dpb(first + k - 1)))
+            }
         };
-        let b = match get(mw, u::SCADB) {
+        // SCADB (E36, E60, E76, E84, E92).
+        let b = match sel_b {
             0 => self.fe,
-            other => return Err(self.unmodelled(format!("SCADB {other}"))),
+            // EXP: DP 01–08 XOR DP 00 in bits 02–09 (E68, E100, E41).
+            1 => (2..=9).fold(0, |v, k| v | at(k, dpb(k - 1) ^ dpb(0))),
+            // SHIFT: DP 18 in bits 00 and 01, DP 28–35 in bits 02–09.
+            2 => (2..=9).fold(at(0, dpb(18)) | at(1, dpb(18)), |v, k| {
+                v | at(k, dpb(k + 26))
+            }),
+            // SIZE: DP 06–11 in bits 01–06.
+            _ => (1..=6).fold(0, |v, k| v | at(k, dpb(k + 5))),
         };
         let m = 0o1777;
         Ok(match get(mw, u::SCAD) {
@@ -460,11 +495,33 @@ impl Machine {
     }
 
     /// Run one microinstruction.
+    ///
+    /// `MULTI SHIFT` (CSL5 E52, E33): while FE SIGN is 1, the CRA clock
+    /// stops and the data path runs the word again; when FE SIGN is 0, the
+    /// CRA clock runs and the word does nothing in the data path
+    /// **[manual]** (EK-OKS10-TM-002 5.4.1, bit 79; M8616-0-CSL5 rev D).
     pub fn step(&mut self) -> Result<(), Stop> {
         let mw = self.cram[usize::from(self.upc & 0o3777)];
-        if get(mw, u::MULTI_SHIFT) != 0 {
-            return Err(self.unmodelled("MULTI SHIFT"));
+        if get(mw, u::MULTI_SHIFT) == 0 {
+            return self.step_word(mw);
         }
+        // The data path state that such a word can change.
+        if get(mw, u::MEM) != 0 || get(mw, u::FMWRITE) != 0 || get(mw, u::SPEC) >> 3 != 0 {
+            return Err(self.unmodelled("MULTI SHIFT with a memory or special function"));
+        }
+        if self.fe & 0o1000 != 0 {
+            let (upc, sp, stack) = (self.upc, self.sp, self.stack);
+            self.step_word(mw)?;
+            (self.upc, self.sp, self.stack) = (upc, sp, stack);
+        } else {
+            let (alu, e603, sc, fe) = (self.alu.clone(), self.e603, self.sc, self.fe);
+            self.step_word(mw)?;
+            (self.alu, self.e603, self.sc, self.fe) = (alu, e603, sc, fe);
+        }
+        Ok(())
+    }
+
+    fn step_word(&mut self, mw: Microword) -> Result<(), Stop> {
         let spec = get(mw, u::SPEC);
         let spec_low = spec & 7;
         let spec_en = spec >> 3;
@@ -607,7 +664,8 @@ impl Machine {
             self.coverage
                 .scad
                 .insert((get(mw, u::SCAD), get(mw, u::SCADA), get(mw, u::SCADB)));
-            Some(self.scad(mw)?)
+            let dp = dp_early.or_else(|| dbus.map(|d| self.alu.y(&c, alu::d_input(d))));
+            Some(self.scad(mw, dp.map(alu::word))?)
         } else {
             None
         };

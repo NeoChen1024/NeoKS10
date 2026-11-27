@@ -75,8 +75,6 @@ disagree:
 the manual and the field definitions give. These connections need the
 schematics (MP00540):
 
-- How `MULTI SHIFT` repeats a step, and what changes FE at each repeat
-  (CSL5, DPM4).
 - Backplane inputs of the microsequencer that the CRA sheets do not
   trace: NICOND inputs 0, 4 and 6 (EA1, EF1, EK1), the MUL dispatch input
   FK2, and the page fail dispatch inputs EU1, FE2, FL2, FS2. The ITS
@@ -87,8 +85,7 @@ schematics (MP00540):
   every `DISP/MUL` word has `J` bit 10 set; no word uses `DISP/PAGE
   FAIL`. The model takes EA1, EF1 and EK1 as inactive.
 - The byte dispatch inputs BYTE DISP 09–11 (DPE3).
-- The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1), and the SCAD
-  mixers (DPM3).
+- The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

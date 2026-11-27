@@ -256,3 +256,27 @@ two codes give the same function.
 The project uses the schematic: group 20 drives bits 00–07. The
 microcode text counts 7 bits because bit 00 is outside the 4000 words of
 the control RAM.
+
+## ASH: TRAP 1 when an early step loses significance
+
+- **[microcode]** **[manual]** The ITS microcode shifts ASH left one place
+  per step and tests each step with `ASH AROV` (`SPEC/ASHOV`) (simple,
+  `ASHL`, macro `ASH36 LEFT`). At each `SPEC/ASHOV`, DPE9 E78 loads OV and
+  TRAP 1. OV has a hold term: OV AND NOT JFCL 09 (E68). TRAP 1 has none:
+  P OR X OR (LOAD AND DP 10) OR (DBM 08 AND `SPEC/FLAGS`) (M8620-0-DPE9
+  rev B, E85, E92, E78). A step without overflow thus clears TRAP 1.
+  **[measured]** 2026-11-27, the microcode-level model
+  (`emu/ks10uop/tests/instructions.rs`, case "ASH overflow"): ASH 1,2 with
+  AC 1 = 200000,,000001 gives AC 1 = 4 and OV 1. The first step sets OV
+  and TRAP 1; the second step does not overflow and clears TRAP 1.
+- `emu/ks10` (`shift.rs`, `execute`, 240) tests the whole shift once and
+  sets Overflow and Trap 1 together. **[emulator]** sims 9556eca0,
+  `kx10_cpu.c`, ASH (240), and KLH10 6d733f2, `kn10ops.c`, `x_ashflg`, do
+  the same.
+- **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at ASH TEST, both OV and
+  TRAP 1 take the overflow of the step, with no hold.
+
+Not decided. The microcode-level model follows its reading of rank 1, and
+`emu/ks10` keeps Trap 1. A DEC diagnostic that tests Trap 1 after ASH
+(rank 2), or a second reading of DPE9, decides the case. The test of
+single instructions expects this difference and no other.

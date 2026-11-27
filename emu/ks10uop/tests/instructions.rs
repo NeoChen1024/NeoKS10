@@ -33,7 +33,7 @@ struct Case {
 }
 
 /// The state after the instruction.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct State {
     pc: u64,
     flags: u32,
@@ -381,12 +381,13 @@ fn cases() -> Vec<Case> {
 /// text of the stop. They are not a pass: the test checks that they still
 /// stop there, so that each one moves to the compared cases when the
 /// function arrives.
-fn pending(name: &str) -> Option<&'static str> {
-    // The SCAD mixers (DPM3) are not read yet (docs/unknowns.md).
-    ["ASH", "ASHC", "LSH", "ROT"]
-        .iter()
-        .any(|p| name.split(' ').next() == Some(p))
-        .then_some("SCADB 2")
+/// Cases with a known difference (docs/discrepancies.md): the name of the
+/// entry and the flags that may differ. All other state must agree.
+fn known(name: &str) -> Option<(&'static str, u32)> {
+    (name == "ASH overflow").then_some((
+        "ASH: TRAP 1 when an early step loses significance",
+        ks10::flags::Flags::TRAP1,
+    ))
 }
 
 #[test]
@@ -396,21 +397,26 @@ fn single_instructions_agree_with_the_software_processor() {
     };
     let mut stops = Vec::new();
     let mut differences = Vec::new();
-    let mut not_run = Vec::new();
+    let mut known_diff = Vec::new();
     let mut coverage = Coverage::default();
     for fill in FILLS {
         let base = halted(&text, fill);
         for c in cases() {
             let want = reference(&c).expect(c.name);
             let got = model(&text, &base, &c, &mut coverage);
-            if let Some(stop) = pending(c.name) {
-                match got {
-                    Err(e) if e.contains(stop) => {
-                        not_run.push(format!("{} (fill {:o}): {e}", c.name, fill.get()));
-                        continue;
-                    }
-                    other => panic!("{}: expected a stop at {stop}, got {other:?}", c.name),
-                }
+            if let Some((entry, flags)) = known(c.name) {
+                let got = got.unwrap_or_else(|e| panic!("{}: {e}", c.name));
+                let mut want = want;
+                assert_ne!(
+                    got.flags, want.flags,
+                    "{}: the known difference is gone",
+                    c.name
+                );
+                assert_eq!(got.flags ^ want.flags, flags, "{}", c.name);
+                want.flags = got.flags;
+                assert_eq!(got, want, "{}", c.name);
+                known_diff.push(format!("{} (fill {:o}): {entry}", c.name, fill.get()));
+                continue;
             }
             match got {
                 Ok(got) if got == want => {}
@@ -425,15 +431,15 @@ fn single_instructions_agree_with_the_software_processor() {
     }
     let n = 2 * cases().len();
     println!(
-        "{} cases: {} agree, {} differ, {} stop, {} not run (pending)",
+        "{} cases: {} agree, {} differ, {} stop, {} known difference",
         n,
-        n - differences.len() - stops.len() - not_run.len(),
+        n - differences.len() - stops.len() - known_diff.len(),
         differences.len(),
         stops.len(),
-        not_run.len()
+        known_diff.len()
     );
-    for s in &not_run {
-        println!("NOT RUN {s}");
+    for s in &known_diff {
+        println!("KNOWN {s}");
     }
     println!("{coverage}");
     for s in &stops {
