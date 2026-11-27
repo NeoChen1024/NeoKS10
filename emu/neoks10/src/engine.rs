@@ -168,9 +168,22 @@ struct Expect {
     reply: Sender<(Reply, usize)>,
 }
 
+/// How the run follows the wall clock (docs/emulator.md, "Time").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// No wait.
+    Fast,
+    /// Wait for the time of the idle passes only: full speed while the
+    /// guest works, a sleep of the host while it is idle.
+    Idle,
+    /// Wait so that the virtual time does not run ahead of the wall
+    /// clock.
+    Realtime,
+}
+
 pub struct Options {
     pub ns_per_instruction: u64,
-    pub realtime: bool,
+    pub pace: Pace,
     /// Do the passes of the idle loop at once (`Machine::step_idle`).
     pub idle: bool,
     pub record: Option<PathBuf>,
@@ -191,7 +204,7 @@ pub struct Engine {
     expects: Vec<Expect>,
     images: [[Option<(PathBuf, bool)>; 8]; 2],
     /// The wall clock and instruction count of the last start, for
-    /// `--realtime`.
+    /// `--pace realtime`.
     base: (Instant, u64),
     script: Option<ScriptRun>,
     /// The passes of the idle loop done at once.
@@ -952,6 +965,7 @@ impl Engine {
                 continue;
             }
             let end = self.batch_end();
+            let skipped = self.skipped;
             let watch = self.script.as_ref().is_some_and(|r| r.wait.is_some());
             while self.m.count < end {
                 let before = self.m.console.output.len();
@@ -970,26 +984,31 @@ impl Engine {
             }
             self.distribute();
             self.check_expects();
-            if self.opts.realtime {
-                let ns = (self.m.count - self.base.1).saturating_mul(self.opts.ns_per_instruction);
-                let due = self.base.0 + Duration::from_nanos(ns);
+            let ns = |n: u64| Duration::from_nanos(n.saturating_mul(self.opts.ns_per_instruction));
+            let due = match self.opts.pace {
+                Pace::Fast => continue,
+                Pace::Idle => Instant::now() + ns(self.skipped - skipped),
+                Pace::Realtime => self.base.0 + ns(self.m.count - self.base.1),
+            };
+            // Wait for the wall clock. Requests come in during the wait.
+            while self.running {
                 let now = Instant::now();
-                // Wait for the wall clock, or for the next request.
-                if due > now {
-                    if !connected {
-                        std::thread::sleep(due - now);
-                        continue;
-                    }
-                    match rx.recv_timeout(due - now) {
-                        Ok(r) => {
-                            self.request(r);
-                            if self.quit {
-                                return;
-                            }
+                if due <= now {
+                    break;
+                }
+                if !connected {
+                    std::thread::sleep(due - now);
+                    break;
+                }
+                match rx.recv_timeout(due - now) {
+                    Ok(r) => {
+                        self.request(r);
+                        if self.quit {
+                            return;
                         }
-                        Err(RecvTimeoutError::Timeout) => {}
-                        Err(RecvTimeoutError::Disconnected) => connected = false,
                     }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => connected = false,
                 }
             }
         }
@@ -1117,7 +1136,7 @@ mod tests {
     fn options(record: Option<PathBuf>, replay: Option<PathBuf>) -> Options {
         Options {
             ns_per_instruction: 1000,
-            realtime: false,
+            pace: Pace::Fast,
             idle: true,
             record,
             replay,

@@ -284,12 +284,18 @@ that record on `soft` then repeats the run in software.
 - Device delays (seek, tape motion, line speed of the DZ11) are in virtual
   time. They do not change the results of the guest program, only its
   timing.
-- `--realtime` makes the emulator wait so that virtual time does not run
-  ahead of the wall clock. It does not change the result of a run, only its
-  speed. While it waits, a command from the terminal or the socket comes
-  in at once.
-- `run` on a terminal without `--script` uses `--realtime`. Other runs
-  (a script, a replay, no terminal) use `--fast`: no wait.
+- `--pace` selects how the run waits for the wall clock. A wait does not
+  change the result of a run, only its speed. While the machine thread
+  waits, a command from the terminal or the socket comes in at once.
+
+| `--pace` | Wait | Guest clock | Host CPU |
+|---|---|---|---|
+| `fast` | None | Far ahead of the wall clock, most of all while ITS is idle | One core |
+| `idle` | The time of the idle passes | Ahead while ITS works, at wall speed while it is idle | Low while ITS is idle |
+| `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each `time_per_instruction_ns` | Low |
+
+- `run` on a terminal without `--script` uses `realtime`. Other runs (a
+  script, a replay, no terminal) use `fast`.
 - The wall clock (for the date of ITS) is a host input of the host layer.
 
 **The idle loop.** If no job can run, ITS runs the null job **[its]**
@@ -329,18 +335,24 @@ emulator waits. Both take the wall clock into the virtual time;
   boots ITS twice and lists `SYS;`. 118406612 of 138001000 instructions
   were idle passes. The state of the two machines was the same at each
   check, and the two disk images were the same at the end.
-- The boot script of [Scripts](#scripts), with `--fast`: 6.13 s wall
+- The boot script of [Scripts](#scripts), with `--pace fast`: 6.13 s wall
   time with `--no-idle`, 1.01 s with the idle loop. The record files of
   the two runs and of the run before this change were the same, and so
   was the CTY output.
 - The same script without `quit`, with 30 s of idle ITS after the
-  listing, with `--realtime`: 167.5 s wall time in both runs (the virtual
+  listing, with `--pace realtime`: 167.5 s wall time in both runs (the virtual
   time). The CPU time in user mode was 8.52 s with `--no-idle` and 1.50 s
   with the idle loop, 5.1 % and 0.9 % of one core. Method: GNU `time`.
+- The same script with `--pace idle`: 146.1 s wall time for 167.5 s of
+  virtual time, 1.43 s CPU time in user mode.
+- The script with 1000 s of idle ITS after the listing, `--pace fast`:
+  2.57 s wall time and 2.52 s CPU time for 1137.5 s of virtual time.
+  The 1000 s of idle time took about 1.6 s: the guest clock ran about
+  600 times faster than the wall clock, on one full core.
 - Most of the boot time of ITS is a wait: the system job tries to get
-  the time from the network (`NETIME`), and no host answers. With
-  `--realtime`, the boot thus takes about 136 s of wall time. That is the
-  virtual time of the boot.
+  the time from the network (`NETIME`), and no host answers. The wait is
+  idle time. With `--pace idle` or `realtime`, the boot thus takes about
+  2 minutes of wall time.
 
 ### Command line
 
@@ -348,7 +360,7 @@ The program `neoks10` has subcommands.
 
 ```
 neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-            [--replay FILE] [--script FILE] [--realtime | --fast]
+            [--replay FILE] [--script FILE] [--pace fast|idle|realtime]
             [--no-idle] [--trace FILE] [--cpu soft|pl]
 neoks10 console [--control PATH]
 neoks10 ctl [--control PATH] [--json] COMMAND...

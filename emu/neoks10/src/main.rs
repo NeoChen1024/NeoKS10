@@ -12,11 +12,11 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
 use config::{BootDevice, Config};
-use engine::{Engine, Input, Kind, Options, Out, Request};
+use engine::{Engine, Input, Kind, Options, Out, Pace, Request};
 
 const USAGE: &str = "\
 usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-                   [--replay FILE] [--script FILE] [--realtime | --fast]
+                   [--replay FILE] [--script FILE] [--pace fast|idle|realtime]
                    [--no-idle]
        neoks10 console [--control PATH]
        neoks10 ctl [--control PATH] [--json] COMMAND...
@@ -24,7 +24,8 @@ usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
 
 In `run`, Ctrl-\\ opens the operator prompt; `help` there lists the commands.
 `run` on a terminal without --script keeps the virtual time to the wall
-clock (--realtime); other runs go as fast as possible (--fast).
+clock (--pace realtime); other runs do not wait (--pace fast). With
+--pace idle, the host sleeps for the idle time of ITS only.
 `run` listens on the control socket neoks10.sock in the directory of CONFIG
 (or the current directory). `console` and `ctl` use NEOKS10_CONTROL, or
 neoks10.sock in the current directory, if --control is not given.";
@@ -61,8 +62,8 @@ struct RunArgs {
     config: Option<PathBuf>,
     record: Option<PathBuf>,
     replay: Option<PathBuf>,
-    /// `--realtime` or `--fast`; else the default of the run.
-    realtime: Option<bool>,
+    /// `--pace`; else the default of the run.
+    pace: Option<Pace>,
     idle: bool,
     control: Option<PathBuf>,
     no_control: bool,
@@ -74,7 +75,7 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
         config: None,
         record: None,
         replay: None,
-        realtime: None,
+        pace: None,
         idle: true,
         control: None,
         no_control: false,
@@ -90,8 +91,14 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
         match a.as_str() {
             "--record" => r.record = Some(value("--record")?),
             "--replay" => r.replay = Some(value("--replay")?),
-            "--realtime" => r.realtime = Some(true),
-            "--fast" => r.realtime = Some(false),
+            "--pace" => {
+                r.pace = Some(match it.next().map(String::as_str) {
+                    Some("fast") => Pace::Fast,
+                    Some("idle") => Pace::Idle,
+                    Some("realtime") => Pace::Realtime,
+                    _ => return Err("--pace needs fast, idle or realtime".into()),
+                })
+            }
             "--no-idle" => r.idle = false,
             "--control" => r.control = Some(value("--control")?),
             "--no-control" => r.no_control = true,
@@ -125,7 +132,11 @@ fn run(args: &[String]) -> Result<i32, String> {
     let interactive = std::io::stdin().is_terminal() && a.replay.is_none();
     let mut e = Engine::new(Options {
         ns_per_instruction: cfg.machine.time_per_instruction_ns,
-        realtime: a.realtime.unwrap_or(interactive && a.script.is_none()),
+        pace: a.pace.unwrap_or(if interactive && a.script.is_none() {
+            Pace::Realtime
+        } else {
+            Pace::Fast
+        }),
         idle: a.idle,
         record: a.record,
         replay: a.replay,

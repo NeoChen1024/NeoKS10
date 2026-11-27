@@ -1269,6 +1269,32 @@ mod tests {
         assert!(printed > 5, "{printed} characters printed");
     }
 
+    // The pass from 777777,,777777 to 0 sets CRY0 and CRY1 (PRM 2.6) and
+    // is a step; the passes before and after it are skipped.
+    #[test]
+    fn idle_skip_stops_at_the_carry() {
+        let start = || {
+            let mut m = Machine::new();
+            m.ac[0o17] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o17));
+            m.ac[0] = W36::wrap(W36::MASK - 2500);
+            m.pc = Half::wrap(0o17);
+            m
+        };
+        let (mut a, mut b) = (start(), start());
+        let mut skipped = 0;
+        while b.count < 5000 {
+            skipped += b.step_idle(5000).unwrap();
+            while a.count < b.count {
+                a.step().unwrap();
+            }
+            assert_eq!(idle_state(&a), idle_state(&b));
+        }
+        assert!(b.flags.has(Flags::CRY0) && b.flags.has(Flags::CRY1));
+        assert!(!b.flags.has(Flags::AROV));
+        assert_eq!(b.ac[0].get(), 5000 - 2501);
+        assert!(skipped > 4000, "{skipped} passes skipped");
+    }
+
     // Not the idle loop: an AOJA that counts in its own AC, and an AOJA
     // at the PC that jumps elsewhere.
     #[test]
