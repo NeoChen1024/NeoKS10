@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use common::{FILLS, ks10_flags, label, machine, symbol};
 use ks10_core_uop::alu;
 use ks10_machine::boot;
+use pdp10::W36;
 
 /// The most microcycles without an instruction. The longest
 /// instruction of the boot is a BLT that clears memory: about 1.05
@@ -37,16 +38,35 @@ const STALL_CYCLES: u64 = 10_000_000;
 /// The longest run, in instructions.
 const LIMIT: u64 = 40_000_000;
 
-/// The instructions that the model runs before its first stop
-/// (docs/microcode-model.md, "Stage 3", "Results"). A change that stops
-/// the model earlier fails the test.
-const PROGRESS: u64 = 9_377_512;
+/// The instructions to "IN OPERATION" on the CTY
+/// (docs/microcode-model.md, "Stage 5", "Results").
+const PROGRESS: u64 = 11_012_654;
 
 /// The words that the console halt writes (see above): the halt code,
 /// PC, and the halt status block of 16 registers and the VMA (inout,
 /// "WRITE HALT STATUS BLOCK").
 fn console_halt_word(a: usize) -> bool {
     a <= 1 || (0o500..=0o520).contains(&a)
+}
+
+/// The level of the interrupt that the model starts, if ks10-core-soft
+/// accepts the same level now. The devices of ks10-core-soft first run to
+/// its instruction count, as the model ran them at its last `SPEC/NICOND`.
+fn accept(
+    m: &ks10_core_uop::machine::Machine,
+    s: &mut ks10_core_soft::Machine,
+) -> Result<u8, String> {
+    s.run_devices();
+    let level = m.pi_new();
+    if s.acceptable_interrupt() == Some(level) {
+        Ok(level)
+    } else {
+        Err(format!(
+            "instruction {}: the model takes an interrupt on level {level}, ks10-core-soft accepts {:?}",
+            m.instructions,
+            s.acceptable_interrupt()
+        ))
+    }
 }
 
 fn copy_image(src: &Path, name: &str) -> (PathBuf, std::fs::File) {
@@ -102,9 +122,18 @@ fn boot_from_disk_in_step_with_the_software_processor() {
     // .IF/PCST). The PC word depends on that microcycle
     // (docs/microcode-model.md, "The lockstep run and time").
     let mut samples = std::collections::BTreeSet::new();
+    let mut synced = 0;
+    let pcst_work = symbol(&text, "PCST");
+    let (time1_work, quan_work) = (symbol(&text, "TIME1"), symbol(&text, "QUAN"));
+    let mut model_time1 = m.ram_file[time1_work];
+    let mut quan_copies = 0;
+    let mut pfw_copies = 0;
+    let mut model_pcst = m.ram_file[pcst_work];
     let mut stop = None;
     let mut difference = None;
     let mut last_progress = (0, 0);
+    let mut seen = 0;
+    let mut in_operation = false;
     while m.instructions < LIMIT {
         // A word loop without SPEC/NICOND (the halt loop, a wait) would
         // never end the run.
@@ -119,13 +148,20 @@ fn boot_from_disk_in_step_with_the_software_processor() {
             ));
             break;
         }
-        if let Some(&(prompt, answer)) = script.last() {
+        if m.cty.output.len() != seen {
+            seen = m.cty.output.len();
             let out = String::from_utf8_lossy(&m.cty.output).to_lowercase();
-            if out.contains(&prompt.to_lowercase()) {
-                m.cty.input.extend(answer);
-                s.console.input.extend(answer);
-                m.cty.output.clear();
-                script.pop();
+            if let Some(&(prompt, answer)) = script.last() {
+                if out.contains(&prompt.to_lowercase()) {
+                    m.cty.input.extend(answer);
+                    s.console.input.extend(answer);
+                    m.cty.output.clear();
+                    seen = 0;
+                    script.pop();
+                }
+            } else if out.contains("in operation") {
+                in_operation = true;
+                break;
             }
         }
         let before = m.instructions;
@@ -133,21 +169,21 @@ fn boot_from_disk_in_step_with_the_software_processor() {
             stop = Some(e.to_string());
             break;
         }
-        // The model starts an interrupt: ks10-core-soft must accept the
-        // same level now; it takes it at its next step.
-        if m.upc == pi_label && release.is_none() {
-            let level = m.pi_new();
-            if s.acceptable_interrupt() != Some(level) {
-                difference = Some(format!(
-                    "instruction {}: the model takes an interrupt on level {level}, ks10-core-soft accepts {:?}",
-                    m.instructions,
-                    s.acceptable_interrupt()
-                ));
-                break;
-            }
-            release = Some(level);
-        }
+        // The model starts an interrupt. ks10-core-soft first does the
+        // step of an instruction that the model ended in the same word;
+        // then it must accept the same level, and takes it at its next
+        // step.
+        let starts_interrupt = m.upc == pi_label && release.is_none();
         if m.instructions == before || m.instructions < 2 {
+            if starts_interrupt {
+                match accept(&m, &mut s) {
+                    Ok(l) => release = Some(l),
+                    Err(e) => {
+                        difference = Some(e);
+                        break;
+                    }
+                }
+            }
             continue;
         }
         s.hold_interrupts = release.is_none();
@@ -156,6 +192,49 @@ fn boot_from_disk_in_step_with_the_software_processor() {
         s.hold_interrupts = true;
         if s.pcst != pcst && pcst.bit(0) {
             samples.insert(pcst.rh().get() as usize);
+        }
+        // ITS reads the table later: ks10-core-soft gets each sample that
+        // the model writes, as it gets the interrupts of the model. The
+        // model writes a sample at the right half of WORK[PCST], and then
+        // adds 1,,1 to it.
+        let p = m.ram_file[pcst_work];
+        if p != model_pcst {
+            let next = W36::from_halves(
+                pdp10::Half::wrap(model_pcst.lh().get() + 1),
+                pdp10::Half::wrap(model_pcst.rh().get() + 1),
+            );
+            if model_pcst.bit(0) && p == next {
+                let a = model_pcst.rh().get() as usize;
+                s.mem[a] = m.memory[a];
+                synced += 1;
+            }
+            model_pcst = p;
+        }
+        // Bits 14-17 of a page fail word are the old VMA 14-17: VMA loads
+        // them only with EXT ADR, at a physical reference (DPM4; ks10,
+        // `VMA PHYSICAL`). The last such reference depends on the page
+        // table of the hardware, which ks10-core-soft does not have. A
+        // page fail word that differs only there comes from the model.
+        for n in 0..8 {
+            let a = s.ept_addr(0o440 + 3 * n) as usize;
+            let diff = m.memory[a].get() ^ s.mem[a].get();
+            if diff != 0 && diff & !(0o17 << 18) == 0 {
+                s.mem[a] = m.memory[a];
+                pfw_copies += 1;
+            }
+        }
+        // The quantum counter of ITS: TOCK adds a tick only if no PI level
+        // is in progress (inout, TOCK), and the microcode does TOCK at the
+        // 1 ms page fail, ks10-core-soft at the instruction boundary. After
+        // each TOCK of the model (WORK[TIME1] changes), ks10-core-soft gets
+        // the counter of the model.
+        let t = m.ram_file[time1_work];
+        if t != model_time1 {
+            model_time1 = t;
+            if s.timer.quan != m.ram_file[quan_work] {
+                s.timer.quan = m.ram_file[quan_work];
+                quan_copies += 1;
+            }
         }
         if let Err(e) = r {
             difference = Some(format!("ks10-core-soft stops: {e:?}"));
@@ -193,9 +272,21 @@ fn boot_from_disk_in_step_with_the_software_processor() {
             ));
             break;
         }
+        if starts_interrupt {
+            match accept(&m, &mut s) {
+                Ok(l) => release = Some(l),
+                Err(e) => {
+                    difference = Some(e);
+                    break;
+                }
+            }
+        }
     }
+    // The model ran the 8080 and the devices at its last SPEC/NICOND;
+    // ks10-core-soft does that at the start of its next step.
+    s.run_devices();
     let memory: Vec<String> = (0..m.memory.len())
-        .filter(|&a| m.memory[a] != s.mem[a] && !console_halt_word(a) && !samples.contains(&a))
+        .filter(|&a| m.memory[a] != s.mem[a] && !console_halt_word(a))
         .take(10)
         .map(|a| {
             format!(
@@ -213,10 +304,13 @@ fn boot_from_disk_in_step_with_the_software_processor() {
         m.instructions, m.cycles
     );
     println!("{interrupts} interrupts, longest wait {longest_wait} instructions");
-    let sample_diffs = samples.iter().filter(|&&a| m.memory[a] != s.mem[a]).count();
-    println!("{} PC samples, {sample_diffs} differ", samples.len());
+    println!(
+        "{} PC samples, {synced} copied from the model; {quan_copies} quantum counts, {pfw_copies} page fail words copied",
+        samples.len()
+    );
     println!("CTY: {}", String::from_utf8_lossy(&s.console.output));
     assert_eq!(difference, None);
     assert_eq!(memory, Vec::<String>::new());
+    assert!(in_operation, "ITS is not in operation");
     assert!(m.instructions >= PROGRESS);
 }

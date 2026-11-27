@@ -91,7 +91,9 @@ const BYTE_BITS: [(u32, u32); 5] = [(0, 6), (7, 13), (14, 20), (21, 27), (28, 35
 
 /// DBM input 1, `BYTES` **[manual]** (M8621-0-DPM1 and DPM2 rev B, input
 /// 1D of each 74LS151): bit b is SCAD 01–07 in turn (SCAD 1 + b mod 7)
-/// for bits 00–34; bit 35 is 0 (GND). `scad` has SCAD 00 at the left.
+/// for bits 00–34. Bit 35 is DP 35 (DPM2 E188: 1D is on the line of 3D);
+/// this function gives 0 there, and the callers add DP 35. `scad` has
+/// SCAD 00 at the left.
 fn bytes(scad: u16) -> W36 {
     let bit = |k: u32| u64::from((scad >> (9 - k)) & 1);
     W36::wrap((0..35).fold(0, |v, b| v | bit(1 + b % 7) << (35 - b)))
@@ -328,6 +330,14 @@ pub struct Machine {
     pub pxct: Pxct,
     /// The DP word of the last `SPEC/APR EN` (DPMB E123, E132; DPEB E173).
     pub apr_enables: W36,
+    /// DP of this word with D all 0 and with D all 1.
+    pub dp_bounds: Option<(W36, W36)>,
+    /// The DP bits of this word that a byte loop of DBM leaves undefined
+    /// ([`Machine::dbm`]).
+    pub byte_loop: Option<u64>,
+    /// The 2901 state after a byte loop with the undefined bits 1, for the
+    /// check in the next word.
+    pub byte_loop_alu: Option<Alu>,
     /// The APR flags 24–31 **[manual]** (M8621-0-DPMB rev B, E159, E158,
     /// E139, E147): bit 7 is flag 24, bit 0 is flag 31.
     pub apr_flags: u8,
@@ -454,6 +464,9 @@ impl Machine {
             },
             apr_enables: pw,
             apr_flags: all(0o377),
+            byte_loop: None,
+            dp_bounds: None,
+            byte_loop_alu: None,
             pi: pw,
             interrupt_req: p,
             bus_requests: all(0o177),
@@ -879,6 +892,12 @@ impl Machine {
         let xr_load = spec_en & 2 != 0 && spec_low == 1;
         let ram_write = fmwrite || ramfile_write;
         let dbus_needed = uses_d || ram_write || ir_load || xr_load;
+        // DP with D all 0 and all 1: the bits that agree do not depend on
+        // the DBus ([`Machine::dbm`], input 2).
+        self.dp_bounds = Some((
+            alu::word(self.alu.y(&c, alu::d_input(W36::ZERO))),
+            alu::word(self.alu.y(&c, alu::d_input(W36::ONES))),
+        ));
         let dbus = if dbus_needed {
             Some(self.dbus(mw, dp_early, force_ramfile)?)
         } else {
@@ -922,7 +941,43 @@ impl Machine {
         // The clock. The skip and dispatch conditions see F and DP of this
         // cycle, SC before LOADSC, and E603 before its load.
         let d_in = dbus.map(alu::d_input).unwrap_or(W40::ZERO);
+        // The word after a byte loop: the result must be the same with the
+        // undefined bits 0 and 1. Its D input must not come from DP.
+        let loop_alu = self.byte_loop_alu.take();
+        let dbus_dp =
+            get(mw, u::DBUS) == 1 || (get(mw, u::DBUS) == 3 && matches!(get(mw, u::DBM), 3 | 4));
+        if loop_alu.is_some() && dbus_needed && dbus_dp {
+            return Err(self.unmodelled("the word after a byte loop of DBM uses DP on the DBus"));
+        }
+        let undefined = self.byte_loop.take();
+        let before = undefined.map(|_| self.alu.clone());
         let out = self.alu.step(&c, d_in);
+        if let Some(mut alt) = loop_alu {
+            let alt_out = alt.step(&c, d_in);
+            if alt != self.alu || alt_out != out {
+                return Err(self.unmodelled("a bit of the byte loop of DBM reaches a result"));
+            }
+        }
+        if let (Some(undef), Some(mut alt), Some(d)) = (undefined, before, dbus) {
+            // DPE3 to DPE4: the loop holds only if DP passes D through, and
+            // the word has no other use of the undefined bits.
+            let d_alt = W36::wrap(d.get() | undef);
+            let alt_out = alt.step(&c, alu::d_input(d_alt));
+            let passes = alu::word(out.y) == d && alu::word(alt_out.y) == d_alt;
+            let other_use = ram_write
+                || ir_load
+                || xr_load
+                || mem
+                || spec_en != 0
+                || disp >> 3 != 7
+                || get(mw, u::SKIP) >> 3 != 7;
+            if !passes || other_use {
+                return Err(
+                    self.unmodelled("a byte loop of DBM where DP is not D or has another use")
+                );
+            }
+            self.byte_loop_alu = Some(alt);
+        }
         let dp = alu::word(out.y);
         let jfcl = self.jfcl(dbm_flags);
         let next = self.next_address(mw, scad, &out, jfcl)?;
@@ -1197,19 +1252,34 @@ impl Machine {
         };
         match dbm {
             0 => self.dbm_apr(mw, dp),
-            1 => Ok(bytes(self.scad_output(mw, dp)?)),
+            1 => {
+                let b = bytes(self.scad_output(mw, dp)?).get();
+                Ok(W36::wrap(b | u64::from(self.dp_bit(dp, 35)?)))
+            }
+            2 => self.dbm_exp(mw, dp),
             // SPEC 1 to 5 insert a byte; 6 and 7 are "SAME AS ZERO" (ks10,
             // "MICROCODE FIELDS -- SPEC", the DBM table).
             3 if matches!(get(mw, u::SPEC) & 7, 0 | 6 | 7) => dp_word(self),
             // DPM1 E94 decodes SPEC 1 to 5 while DBM SEL 4 is 0 and DBM
             // SEL 1 is 1, and clears SEL 2 of that byte (E72, E86): the
             // byte takes input 1 **[manual]** (M8621-0-DPM1 rev B).
+            // If DP depends on D, DP and the DBus form a loop: only the
+            // inserted byte is defined. The model takes the other bits as
+            // 0 and checks that no result depends on them
+            // ([`Machine::step_word`]).
             3 => {
                 let (first, last) = BYTE_BITS[(get(mw, u::SPEC) & 7) as usize - 1];
-                let b = bytes(self.scad_output(mw, dp)?);
-                let w = dp_word(self)?;
-                let mask = ((1u64 << (last - first + 1)) - 1) << (35 - last);
-                Ok(W36::wrap((w.get() & !mask) | (b.get() & mask)))
+                let b = bytes(self.scad_output(mw, dp)?).get();
+                // Bit 35 of input 1 is DP 35: byte 5 keeps it.
+                let mask = (((1u64 << (last - first + 1)) - 1) << (35 - last)) & !1;
+                let w = match dp {
+                    Some(d) => alu::word(d).get(),
+                    None => {
+                        self.byte_loop = Some(!mask & 0o777777_777777);
+                        0
+                    }
+                };
+                Ok(W36::wrap((w & !mask) | (b & mask)))
             }
             4 => Ok(dp_word(self)?.swap()),
             // VMA FLAGS,,VMA.
@@ -1252,6 +1322,43 @@ impl Machine {
             .scad
             .insert((get(mw, u::SCAD), get(mw, u::SCADA), get(mw, u::SCADB)));
         self.scad(mw, dp.map(alu::word))
+    }
+
+    /// Bit `k` of DP, also if DP depends on the DBus but not that bit
+    /// ([`Machine::dp_bounds`]).
+    fn dp_bit(&self, dp: Option<W40>, k: u32) -> Result<bool, Stop> {
+        match (dp, self.dp_bounds) {
+            (Some(d), _) => Ok(alu::word(d).bit(k)),
+            (None, Some((lo, hi))) if lo.bit(k) == hi.bit(k) => Ok(lo.bit(k)),
+            _ => Err(self.unmodelled(format!("DBM needs DP {k}, which depends on the DBus"))),
+        }
+    }
+
+    /// DBM input 2, `EXP` **[manual]** (M8621-0-DPM1 and DPM2 rev B,
+    /// input 2D of each 74LS151): bit 00 is 0, bits 01–08 are SCAD 02–09,
+    /// bits 09–17 are DP 09–17, bits 18–23 are 0, bits 24–33 are DPMC MSEC
+    /// COUNT 24–33, and bits 34–35 are 0. The MSEC counter (DPMC E181,
+    /// E189, E180) counts 4.1 MHz in 12 bits, so it wraps about each
+    /// millisecond; its two low bits do not reach DBM. The model takes it
+    /// as the units of the time base since the last tick: one millisecond
+    /// is `INSTRUCTIONS_PER_MS` instructions and 2^12 units, the time base
+    /// of `emu/ks10-core-soft` (docs/microcode-model.md, "The lockstep run
+    /// and time").
+    fn dbm_exp(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
+        let scad = self.scad_output(mw, dp)?;
+        let dp_left = match (dp, self.dp_bounds) {
+            (Some(d), _) => alu::word(d).field(9, 17),
+            (None, Some((lo, hi))) if lo.field(9, 17) == hi.field(9, 17) => lo.field(9, 17),
+            _ => return Err(self.unmodelled("DBM EXP needs DP 09-17, which depends on the DBus")),
+        };
+        let exponent = u64::from(scad) & 0o377; // SCAD 02-09
+        let k = self
+            .instructions
+            .saturating_sub(self.last_tick)
+            .min(INSTRUCTIONS_PER_MS - 1);
+        let count = k * 4096 / INSTRUCTIONS_PER_MS;
+        let left = exponent << 9 | dp_left;
+        Ok(W36::wrap(left << 18 | (count & 0o7774)))
     }
 
     /// DBM input 0 **[manual]** (M8621-0-DPM1 and DPM2 rev B, input 0D of

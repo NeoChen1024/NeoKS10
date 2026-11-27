@@ -649,8 +649,9 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - a memory cycle above 512 Ki words; an I/O read of controller 0
   without bit 19 (the memory status register), and an I/O read that no
   controller answers;
-- DBM input 2; DP on the DBus where DP depends on D, and SCAD on DBM
-  where SCAD depends on DP;
+- DP on the DBus where DP depends on D, except the byte loop of DBM
+  ("DBus and DBM inputs"); SCAD on DBM where SCAD depends on DP; a byte
+  loop whose undefined bits reach a result;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
 - `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2 and 3
   (code 2 has no name in ks10);
@@ -996,15 +997,28 @@ insertion of DBM and the byte dispatch. All come from the schematics
   bits 00–06 and 09–12, PI NEW in 19–21, 1 in 22–25 (+3V), VMA 26–35
   (DPE5 E156, E176, which load with VMA), and 0 in the other bits.
 - **DBM input 1** (`BYTES`, M8621-0-DPM1 and DPM2 rev B): SCAD 01–07 in
-  turn, from bit 00; bit 35 is 0.
+  turn, from bit 00; bit 35 is DP 35 (DPM2 E188: input 1 is on the line
+  of input 3). So a 7-bit byte in byte 5 keeps bit 35 of the word.
 - **DBM input 0**: bits 00–16 as input 1, bit 17 SCAD 00, the page fail
   dispatch in 18–21, TRAP EN, PAGE EN, the APR flags in 24–31, APR INT
   REQ in 32. The inputs of bits 33–35 have no connection
   ([`unknowns.md`](unknowns.md)).
+- **DBM input 2** (`EXP`): bit 00 is 0, bits 01–08 are SCAD 02–09, bits
+  09–17 are DP 09–17, bits 18–23 are 0, bits 24–33 are DPMC MSEC COUNT
+  24–33, and bits 34–35 are 0. The MSEC counter (DPMC E181, E189, E180)
+  counts 4.1 MHz in 12 bits and wraps about each millisecond, as the 2^12
+  units of `TOCK`. Its two low bits do not reach DBM. The model counts it
+  on the time base of the devices ("The lockstep run and time").
 - **Byte insertion.** DPM1 E94 decodes `SPEC` 1 to 5 while DBM SEL 4 is 0
   and DBM SEL 1 is 1, and clears SEL 2 of that byte (E72, E86). With
   `DBM/DP`, byte n (bits 00–06, 07–13, 14–20, 21–27, 28–35) then takes
   input 1.
+- **Byte loop.** If DP depends on D, DP and the DBus form a loop with
+  byte insertion: only the inserted byte is defined (`[]_FE`: simple,
+  JFFO; extend, `EDNOP1`). The model computes the word twice, with the
+  other bits 0 and 1. It stops unless DP passes D through, the word has
+  no other use of DP, and the next word gives the same registers and
+  outputs from both. In both uses the next word masks the bits.
 - **Byte dispatch** (M8620-0-DPE3 rev B, E77, E47, E18, E10, E9). If S
   is 7 and P is 1, 8, 15, 22 or 29, BYTE DISP 09–11 are NOT DP 01, NOT DP
   02 and NOT DP 04; else 0. The codes agree with the dispatch table of
@@ -1033,6 +1047,25 @@ the timing of the bus or of interrupts, for these reasons:
   interrupts of `emu/ks10-core-soft` (`hold_interrupts`) and lets one
   through where the model starts one (label `PI`). There, both must
   accept the same level.
+
+More values of the microcode depend on the microcycle of a tick or a
+request. The lockstep run takes them from the model, and prints how
+often:
+
+- The PC sample table ("Stage 5"): at each sample of the model, the
+  sampled word (WORK[PCST] adds 1,,1).
+- The quantum counter of ITS: `TOCK` adds a tick only if no PI level is
+  in progress (inout, `TOCK`). After each `TOCK` of the model (WORK[TIME1]
+  changes), the counter of the model.
+- Bits 14–17 of a page fail word are the old VMA 14–17. VMA loads them
+  only with `EXT ADR` at a physical reference (DPM4; ks10, `VMA
+  PHYSICAL`), so they depend on the page table of the hardware. A page
+  fail word that differs only there comes from the model.
+
+The model runs the devices at `SPEC/NICOND`. `emu/ks10-core-soft` runs
+them at the start of its next step (`run_devices`). At an interrupt of
+the model and at the end, the run calls it first, so both see the same
+instant.
 
 The bus semantics come from the microcode and the schematics, and the
 DEC diagnostics check them. The timing in microcycles is for the
@@ -1106,14 +1139,21 @@ compare the words of the table; it prints how many differ.
 
 **[measured]** 2026-11-27, the ITS listing 262:
 
-- `emu/ks10-core-uop/tests/its_boot.rs`: the model and
-  `emu/ks10-core-soft` agree for 9 377 512 instructions, about 83.3
-  million microcycles, and in main memory except the PC sample table.
-  ITS turns on paging after 4 731 024 instructions. The run has 4
-  interrupts; the model takes each 1 or 2 instructions after
-  `emu/ks10-core-soft` could. 5 of the 6 PC samples differ by 1 in the
-  PC. The model then stops at 0121, the byte loop of JFFO (see "DEC
-  diagnostics on the model").
+- `emu/ks10-core-uop/tests/its_boot.rs`: ITS turns on paging after
+  4 731 024 instructions, and prints "DB ITS 1652 IN OPERATION" on the
+  CTY after 11 012 654 instructions, about 95.9 million microcycles. The
+  model and `emu/ks10-core-soft` agree after each instruction and in main
+  memory at the end. The run has 510 interrupts; the model takes each 1
+  or 2 instructions after `emu/ks10-core-soft` could. An earlier run to
+  40 000 000 instructions, with 3 842 interrupts, ITS logged in its
+  system job, also agreed.
+- On the way, the lockstep run found three errors of
+  `emu/ks10-core-soft` against the schematics and the microcode: GOEXEC
+  in executive mode takes PCU from bit 6 of the new flags word (DPE9
+  E46; KS10FPGA 5090e7a1, `pcflags.v`, agrees **[emulator]**); `IW`
+  (SETZM and others) starts a write test of E at AREAD, so a page fail
+  is a write (ks10, `IW`); RDTIME has the two low bits of the counter 0
+  (DPM2 E165, E188).
 - Before STOP MAIN MEMORY had the page fail term, `ABORT MEM CYCLE`
   wrote a valid tag and a stale word into the cache, and the fetch after
   the page fail of 146324 read the instruction before it. The lockstep
@@ -1133,14 +1173,11 @@ failure.
 
 **[measured]** 2026-11-27, the ITS listing 262:
 
-- Pass: DSKAA to DSKAH (PASCNT), DSKAI to DSKAL and DSKCF ("END PASS
-  64."). Under SUBSM, the instruction counts equal those of
+- Pass: DSKAA to DSKAH (PASCNT), DSKAI to DSKAM, DSKCF and DSKBA ("END
+  PASS n."). Under SUBSM, the instruction counts equal those of
   `emu/ks10-core-soft`.
-- PENDING: DSKCA to DSKCE stop at `DBM/EXP` with `SPEC/EXPTST` (DBM
-  input 2 and the FXU gate of DPE9 E206, [`unknowns.md`](unknowns.md)).
-  DSKAM and DSKBA stop at 0121, `[AR]_FE` (simple, JFFO): DBM inserts
-  SCAD into byte 5 of DP, and DP is `AD/D` of the DBus. The other bits of
-  that loop have no defined value; the next word masks them.
+- PENDING: DSKCA to DSKCE stop at `SPEC/EXPTST` (the FXU gate of DPE9
+  E206, [`unknowns.md`](unknowns.md)).
 - Not run: DSKCG, DSKEA, DSKEB and DSKEC, for the reasons of
   `emu/ks10-core-soft`. They are not tried on the model yet.
 
