@@ -600,7 +600,8 @@ Stage 2 adds the I/O cycles and the console ("Stage 2: I/O and the
 console"). Stage 3 adds the page table and the cache directory ("Stage
 3: the page table and the cache directory"). Stage 4 adds the APR, the
 interrupts and the byte functions ("Stage 4: the APR, interrupts and
-bytes").
+bytes"). Stage 5 adds the translation and the cache hit ("Stage 5:
+paging").
 
 A function is either modelled or a stop with "unmodelled". The model
 does not guess a value. A shift line that nothing drives is undefined; a
@@ -642,9 +643,9 @@ skip latch CRA2 E98 has the values of the cycle, except NOT I/O LATCH
 
 The rest stops (the `unmodelled` branches of `machine.rs`):
 
-- paging: PAGE EN with a virtual VMA and a memory cycle;
-- a page fail from INT OR ERR in a word with `SPEC/NICOND`; a page fail
-  dispatch with an entry that nothing wrote;
+- a virtual I/O cycle with PAGE EN; a page table entry or a cache tag
+  that nothing wrote, where the model needs it;
+- a page fail in a word with `SPEC/NICOND`;
 - a memory cycle above 512 Ki words; an I/O read of controller 0
   without bit 19 (the memory status register), and an I/O read that no
   controller answers;
@@ -1056,15 +1057,68 @@ co-simulation of the model with the logic in `rtl/`.
   ([`unknowns.md`](unknowns.md), DMUL).
 - `emu/ks10-core-uop/tests/its_boot.rs`: the 8080 BT command, then "its"
   and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`), to
-  both processors at the same instruction. The model and
-  `emu/ks10-core-soft` agree for 4 731 024 instructions, about 51.0
-  million microcycles, and in main memory. The 1 ms clock takes the page
-  fail path of `PF-INT` throughout. No device interrupt comes in this
-  part. ITS then turns on paging, and the model stops at the first
-  virtual memory cycle with PAGE EN. With the mutant "page fail without
-  the stack push", the first 1 ms page fail does not return, and the
-  model stays in the halt loop after 1 002 instructions. The test stops
-  a run that has no instruction for 10 million microcycles.
+  both processors at the same instruction. The model agreed up to the
+  first virtual memory cycle with PAGE EN; the boot continues in "Stage
+  5". With the mutant "page fail without the stack push", the first 1 ms
+  page fail does not return, and the model stays in the halt loop after
+  1 002 instructions. The test stops a run that has no instruction for
+  10 million microcycles.
+
+## Stage 5: paging
+
+Stage 5 translates virtual addresses with the page table, takes page
+fails from it, and reads hits from the cache. The microcode fills the
+page table on a page fail (itspag, `PFMAP`) with the page write of
+Stage 3. All come from the schematics **[manual]** (MP00540).
+
+- **PAGED REF** (DPM9 E38, E119; DPM8, DPM9 E153 to E179). In a virtual
+  memory cycle with PAGE EN, the bus address is the physical page 16–26
+  of the entry of VMA 18–26, and VMA 27–35 in the page. An AC reference
+  (VMA AC REF) does not use the page table.
+- **Page fail** (DPM6 E116, E124, E41, E72). With PAGING OK, the entry
+  page-fails if it is not valid, if its USER differs from VMA USER, or
+  for a write test of a page that is not writeable. PAGE FAIL EN is that
+  (E116 ANY) or INT OR ERR. The page fail takes place in the word that
+  completes the cycle, as in Stage 4.
+- **STOP MAIN MEMORY** (DPM5 E47) is AC REF OR PAGE FAIL (DPM6 E54) OR
+  CACHE HIT, in every word. Then no bus cycle takes place, and the RAM
+  file and the cache directory take no cache data (DPMA E22, E110). So
+  `ABORT MEM CYCLE` after a page fail, which is a MEM WAIT with MEMORY
+  CYCLE still 1, writes no tag.
+- **Cache hit** (DPM7 E114, E41, E163, E177, E185). A read without CACHE
+  INH of a valid, cacheable page that does not page-fail hits if CSL3
+  CACHE EN is 1 and the tag holds VALID, VMA USER and VMA 18–26. The
+  model has no parity bits, so the parity compare (E155, E163 A4) is
+  equal. A hit stops main memory and sets FORCE RAMFILE (DPM5 E14): the
+  DBus takes the word from the RAM file at 1000 + VMA 27–35.
+- **VMA JUST LOADED** is also in CACHE HIT (DPM7 E41). The model takes it
+  as 0 in the word that completes the cycle ([`unknowns.md`](unknowns.md)).
+
+**The PC sample table.** The ITS microcode stores a PC word at each
+millisecond in a table (itspag, `PF-INT`, `.IF/PCST`). It takes the
+sample in the 1 ms page fail, and backs up the PC if that cycle is not
+an instruction fetch. `emu/ks10-core-soft` samples at the instruction
+boundary. The PC word thus depends on the microcycle of the tick
+("Stage 4", "The lockstep run and time"). The lockstep run does not
+compare the words of the table; it prints how many differ.
+
+### Results
+
+**[measured]** 2026-11-27, the ITS listing 262:
+
+- `emu/ks10-core-uop/tests/its_boot.rs`: the model and
+  `emu/ks10-core-soft` agree for 9 377 512 instructions, about 83.3
+  million microcycles, and in main memory except the PC sample table.
+  ITS turns on paging after 4 731 024 instructions. The run has 4
+  interrupts; the model takes each 1 or 2 instructions after
+  `emu/ks10-core-soft` could. 5 of the 6 PC samples differ by 1 in the
+  PC. The model then stops at 0121, the byte loop of JFFO (see "DEC
+  diagnostics on the model").
+- Before STOP MAIN MEMORY had the page fail term, `ABORT MEM CYCLE`
+  wrote a valid tag and a stale word into the cache, and the fetch after
+  the page fail of 146324 read the instruction before it. The lockstep
+  run found this at instruction 4 731 025.
+- Unit test in `machine.rs`: each missing term of E114 gives no hit.
 
 ## DEC diagnostics on the model
 
@@ -1088,8 +1142,7 @@ failure.
   SCAD into byte 5 of DP, and DP is `AD/D` of the DBus. The other bits of
   that loop have no defined value; the next word masks them.
 - Not run: DSKCG, DSKEA, DSKEB and DSKEC, for the reasons of
-  `emu/ks10-core-soft`, and because the model has no paging and no cache
-  hit yet.
+  `emu/ks10-core-soft`. They are not tried on the model yet.
 
 ## Field tables
 

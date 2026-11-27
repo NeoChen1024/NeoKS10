@@ -40,7 +40,7 @@ const LIMIT: u64 = 40_000_000;
 /// The instructions that the model runs before its first stop
 /// (docs/microcode-model.md, "Stage 3", "Results"). A change that stops
 /// the model earlier fails the test.
-const PROGRESS: u64 = 4_731_024;
+const PROGRESS: u64 = 9_377_512;
 
 /// The words that the console halt writes (see above): the halt code,
 /// PC, and the halt status block of 16 registers and the VMA (inout,
@@ -96,6 +96,12 @@ fn boot_from_disk_in_step_with_the_software_processor() {
     // processors get them at the same instruction.
     let mut script: Vec<(&str, &[u8])> = vec![("DSKDMP", b"its\r"), ("its", b"\x1bg")];
     script.reverse();
+    // The words of the PC sample table: ks10-core-soft samples at the
+    // instruction boundary of each millisecond, the microcode at the
+    // memory cycle where it takes the 1 ms page fail (itspag, PF-INT,
+    // .IF/PCST). The PC word depends on that microcycle
+    // (docs/microcode-model.md, "The lockstep run and time").
+    let mut samples = std::collections::BTreeSet::new();
     let mut stop = None;
     let mut difference = None;
     let mut last_progress = (0, 0);
@@ -145,8 +151,12 @@ fn boot_from_disk_in_step_with_the_software_processor() {
             continue;
         }
         s.hold_interrupts = release.is_none();
+        let pcst = s.pcst;
         let r = s.step();
         s.hold_interrupts = true;
+        if s.pcst != pcst && pcst.bit(0) {
+            samples.insert(pcst.rh().get() as usize);
+        }
         if let Err(e) = r {
             difference = Some(format!("ks10-core-soft stops: {e:?}"));
             break;
@@ -185,7 +195,7 @@ fn boot_from_disk_in_step_with_the_software_processor() {
         }
     }
     let memory: Vec<String> = (0..m.memory.len())
-        .filter(|&a| m.memory[a] != s.mem[a] && !console_halt_word(a))
+        .filter(|&a| m.memory[a] != s.mem[a] && !console_halt_word(a) && !samples.contains(&a))
         .take(10)
         .map(|a| {
             format!(
@@ -203,6 +213,8 @@ fn boot_from_disk_in_step_with_the_software_processor() {
         m.instructions, m.cycles
     );
     println!("{interrupts} interrupts, longest wait {longest_wait} instructions");
+    let sample_diffs = samples.iter().filter(|&&a| m.memory[a] != s.mem[a]).count();
+    println!("{} PC samples, {sample_diffs} differ", samples.len());
     println!("CTY: {}", String::from_utf8_lossy(&s.console.output));
     assert_eq!(difference, None);
     assert_eq!(memory, Vec::<String>::new());

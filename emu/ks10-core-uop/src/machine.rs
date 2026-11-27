@@ -802,18 +802,33 @@ impl Machine {
         // DPM5 E30: MEMORY DELAY, the word that completes a cycle.
         let memory_delay = (mem_en || spec_mem_wait) && self.memory_cycle;
         let ac_ref = self.ac_ref();
-        // The page table, the cache hit and PAGED REF need PAGE EN and a
-        // virtual VMA (DPM6 E47, DPM7 E114, DPM9 E38). Stage 1 stops if
-        // they can act on a cycle.
+        let io_cycle = self.vma_flags.io || self.vma_flags.wru || self.vma_flags.vector;
+        // The page table entry of a virtual memory cycle with PAGE EN:
+        // PAGING OK (DPM6 E47) and PAGED REF (DPM9 E38).
         let page_en = self.apr_enables.bit(23);
-        if page_en && !self.vma_flags.physical && (self.memory_cycle || mem_en) {
-            return Err(self.unmodelled("paging (PAGE EN is 1)"));
+        let virtual_cycle = page_en && !self.vma_flags.physical && self.memory_cycle;
+        if virtual_cycle && io_cycle {
+            return Err(self.unmodelled("a virtual I/O cycle with PAGE EN"));
         }
-        let stop_main_memory = ac_ref;
-        // A page fail from INT OR ERR (DPM6 E15, E9) in the word that
-        // completes the cycle: DPM5 E21 PAGE FAIL DELAY, CSL5 E32 PAGE
-        // FAIL. Only the CRA clock runs in it.
-        if memory_delay && self.int_or_err() {
+        let int_or_err = self.int_or_err();
+        let entry = if virtual_cycle && !ac_ref {
+            Some(self.page_entry()?)
+        } else {
+            None
+        };
+        // PF ERR EN (DPM6 E116 ANY): PAGE FAIL 4 to 6 with PAGING OK.
+        let pf_err = !int_or_err && entry.is_some_and(|e| self.page_fails(e));
+        let cache_hit =
+            !int_or_err && entry.is_some_and(|e| !self.page_fails(e)) && self.cache_hit()?;
+        // STOP MAIN MEMORY (DPM5 E47): AC REF, DPM6 PAGE FAIL (E54, PAGE
+        // FAIL EN: PF ERR EN or INT OR ERR) or CACHE HIT, in every word:
+        // so ABORT MEM CYCLE after a page fail writes no cache data
+        // **[manual]** (M8621-0-DPM5 rev B; DPM6 rev C).
+        let stop_main_memory = ac_ref || pf_err || int_or_err || cache_hit;
+        // A page fail (DPM6 E72 PAGE FAIL EN: PF ERR EN or INT OR ERR) in
+        // the word that completes the cycle: DPM5 E21 PAGE FAIL DELAY,
+        // CSL5 E32 PAGE FAIL. Only the CRA clock runs in it.
+        if memory_delay && (pf_err || int_or_err) {
             if spec_en & 1 != 0 && spec_low == 5 {
                 return Err(self.unmodelled("page fail in a word with SPEC/NICOND"));
             }
@@ -825,8 +840,12 @@ impl Machine {
         // (DPM5 E46) and MEMORY CYCLE 0.
         let rpw = self.cycle.read && self.cycle.write && !stop_main_memory;
         let bus_cycle = memory_delay && !stop_main_memory;
-        let io_cycle = self.vma_flags.io || self.vma_flags.wru || self.vma_flags.vector;
-        let address = self.bus_address();
+        // PAGED REF (DPM8, DPM9 E153 to E179): the physical page from the
+        // entry, VMA 27–35 within the page.
+        let address = match entry {
+            Some(e) => usize::from(e.page) << 9 | self.vma.field(27, 35) as usize,
+            None => self.bus_address(),
+        };
         if bus_cycle && !io_cycle && address >= self.memory.len() {
             return Err(self.unmodelled(format!("nonexistent memory {address:o}")));
         }
@@ -839,11 +858,17 @@ impl Machine {
                 self.memory[address]
             };
         }
-        let force_ramfile = ac_ref && memory_delay && self.cycle.read;
+        // DPM5 E14: FORCE RAMFILE for an AC reference or a cache hit.
+        let force_ramfile = (ac_ref || cache_hit) && memory_delay && self.cycle.read;
         // DPMA E22, E54: the RAM file takes the DBus at the end of a
         // cycle: an AC write, or a memory cycle (the cache data).
-        let ramfile_write =
-            self.memory_cycle && mem_wait && (if ac_ref { !self.cycle.read } else { true });
+        let ramfile_write = self.memory_cycle
+            && mem_wait
+            && (if ac_ref {
+                !self.cycle.read
+            } else {
+                !stop_main_memory
+            });
         // CACHE WRITE at the end of a cycle that is not an AC reference, or
         // while VMA SWEEP **[manual]** (M8621-0-DPMA rev B, E22, E110).
         let cache_write =
@@ -1247,6 +1272,44 @@ impl Machine {
             | u64::from(self.apr_int_req()) << 3
             | 0o7;
         Ok(W36::wrap(left << 18 | right))
+    }
+
+    /// The page table entry of VMA 18–26 (DPM6), or a stop if nothing
+    /// wrote it since power on.
+    fn page_entry(&self) -> Result<PageEntry, Stop> {
+        let index = self.vma.field(19, 26) as usize;
+        let k = if self.vma.bit(18) { 256 | index } else { index };
+        self.page_table[k].ok_or_else(|| self.unmodelled("a page table entry that nothing wrote"))
+    }
+
+    /// The page fail conditions of DPM6 E116 for an entry: not valid,
+    /// USER differs (E124), a write test of a page that is not writeable
+    /// (E41) **[manual]** (M8621-0-DPM6 rev C).
+    fn page_fails(&self, e: PageEntry) -> bool {
+        !e.valid || e.user != self.vma_flags.user || (!e.writeable && self.cycle.write_test)
+    }
+
+    /// CACHE HIT **[manual]** (M8621-0-DPM7 rev B, E114, E41, E163, E177,
+    /// E185) for a cycle whose entry does not page-fail: a read without
+    /// CACHE INH of a valid, cacheable page, CSL3 CACHE EN, and a tag equal
+    /// to VALID, VMA USER and VMA 18–26. The model has no parity bits, so
+    /// the parity compare (E155, E163 A4) is equal. VMA JUST LOADED (E41)
+    /// is 0 in the word that completes the cycle ([`Machine::page_fail`]).
+    fn cache_hit(&self) -> Result<bool, Stop> {
+        let e = self.page_entry()?;
+        if !(self.cycle.read
+            && !self.cycle.cache_inhibit
+            && e.valid
+            && e.cacheable
+            && self.csl.cache_en)
+        {
+            return Ok(false);
+        }
+        let index = self.vma.field(28, 35) as usize;
+        let k = if self.vma.bit(27) { 256 | index } else { index };
+        let t =
+            self.cache_dir[k].ok_or_else(|| self.unmodelled("a cache tag that nothing wrote"))?;
+        Ok(t.valid && t.user == self.vma_flags.user && u64::from(t.page) == self.vma.field(18, 26))
     }
 
     /// INT OR ERR **[manual]** (M8621-0-DPM6 rev C, E15, E9): INT or 1MS
@@ -2068,5 +2131,64 @@ mod tests {
         // SCAD 00 1, SCAD 01-07 = 1000001, SCAD 08-09 = 11.
         let scad = 0b11_0000_0111;
         assert_eq!(bytes(scad), W36::wrap(0o406030_140602));
+    }
+
+    // CACHE HIT (DPM7 E114): a read of a valid, cacheable page with CSL3
+    // CACHE EN and a tag of VALID, VMA USER and VMA 18-26; each missing
+    // term gives no hit.
+    #[test]
+    fn a_cache_hit_needs_every_term_of_e114() {
+        let mut m = Machine::new(
+            vec![Microword::from_bits(0); CRAM_WORDS],
+            vec![0; DROM_WORDS],
+            W40::ZERO,
+        );
+        m.vma = W36::wrap(0o146324);
+        m.vma_flags = VmaFlags::default();
+        m.cycle.read = true;
+        m.csl.cache_en = true;
+        let entry = PageEntry {
+            valid: true,
+            writeable: true,
+            cacheable: true,
+            user: false,
+            page: 0o146,
+        };
+        let tag = CacheTag {
+            valid: true,
+            user: false,
+            page: 0o146,
+        };
+        let k = 0o324 & 0o377; // VMA 27 is 0
+        let mut hit = |e: PageEntry, t: CacheTag, read: bool, en: bool| {
+            m.page_table[0o146] = Some(e);
+            m.cache_dir[k] = Some(t);
+            m.cycle.read = read;
+            m.csl.cache_en = en;
+            m.cache_hit().unwrap()
+        };
+        assert!(hit(entry, tag, true, true));
+        assert!(!hit(
+            PageEntry {
+                cacheable: false,
+                ..entry
+            },
+            tag,
+            true,
+            true
+        ));
+        assert!(!hit(
+            entry,
+            CacheTag {
+                valid: false,
+                ..tag
+            },
+            true,
+            true
+        ));
+        assert!(!hit(entry, CacheTag { user: true, ..tag }, true, true));
+        assert!(!hit(entry, CacheTag { page: 0o147, ..tag }, true, true));
+        assert!(!hit(entry, tag, false, true));
+        assert!(!hit(entry, tag, true, false));
     }
 }

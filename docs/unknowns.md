@@ -109,7 +109,8 @@ schematics (MP00540):
 - The tick at which CSL5 E32 takes PAGE FAIL DELAY. VMA JUST LOADED is 1
   for one tick after a word that loads VMA (DPMC E10). The model takes it
   as 0 in the word that completes the cycle, so a page fail takes place
-  in that word also if the word before it loaded VMA **[estimate]**.
+  in that word also if the word before it loaded VMA **[estimate]**. The
+  same holds for CACHE HIT (DPM7 E41), which needs VMA JUST LOADED 0.
 - The content of the page table and the cache directory at power on,
   and its parity (DPM6, DPM7, DPM9). The model keeps no parity bits and
   marks an entry that nothing wrote. The ITS boot loader sweeps both
