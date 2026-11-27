@@ -110,6 +110,11 @@ generated `emu/ks10uop/src/fields.rs` has their positions. The exact
 logic of each mixer and condition is in the code of `ks10uop`, with its
 source. Bit numbers of a 36-bit word are those of DEC (bit 0 at the left).
 
+Schematic citations give the drawing, its revision and the chips. They
+are from the second copy of each board in MP00540 (PDF pages: DPE1 125,
+DPE2 126, DPE5 129, DPEA 134, CRA1 184, CRA2 185). After the first citation of a
+drawing, the text gives the board sheet only, for example "DPE5 E603".
+
 ### Cycle
 
 One microinstruction takes one processor cycle of 2 to 5 clock ticks
@@ -126,43 +131,85 @@ inside a cycle.
 
 ### Microsequencer
 
-The address of the next microinstruction is the `J` field, ORed with the
-outputs of the dispatch mixers and the skip condition **[manual]** (5.4.1,
-bits 57–68; 5.4.4).
+The address of the next microinstruction has 12 bits, 00 to 11. Each bit
+is the OR of the `J` field, the page fail signal, the dispatch mixers and,
+for bit 11, the skip mixers **[manual]** (M8622-0-CRA1 rev A1, the ORs
+E515 to E522 and E220 to E222, E214, E215).
 
-- **Skip.** `SKIP` has a select code in its right three bits and three
-  group enables in its left three bits. A group is enabled by a 0 bit: 3
-  (011) enables group 40 only, 5 (101) group 20 only, 6 (110) group 10
-  only, 0 all three, 7 none. If any enabled condition is true, bit 11 of
-  the address is set **[microcode]** (ks10, "MICROCODE FIELDS -- SKIP":
-  the table and every named value, for example `LE=42` is AD sign or
-  AD=0, and `IOLGL=04` uses all three groups) **[manual]** (5.4.1, bits
-  63–68).
-- **Dispatch.** `DISP` has the same form with active-low group enables.
-  "DISP EN 40 & DISP EN 10 ONLY CONTROL THE LOW 4 BITS OF THE JUMP
-  ADDRESS. DISP EN 20 ONLY CONTROLS THE HI 7 BITS" **[microcode]** (ks10,
-  "MICROCODE FIELDS -- DISPATCH", the note under the table). The manual
-  gives `J` bits 0–7 and 8–11 instead ([`discrepancies.md`](discrepancies.md)).
-- **Dispatch ROM.** The 9-bit opcode in IR selects a word. `DISP/DROM`
-  jumps to the DROM `J` field, which is in the range 1400–1777; the `J`
-  field of the microword is 0. `DISP/AREAD` dispatches on the DROM `A`
-  field to locations 40–57, or to the DROM `J` field if the DROM `I` bit
-  is 1 **[manual]** (5.4.1, bits 57–62; 5.4.2; 5.4.4.1) **[microcode]**
-  (ks10, "DISPATCH ROM DEFINITIONS").
-- **AC dispatch.** If the DROM `ACDISP` bit is 1, the dispatch goes to one
-  of 16 locations, DROM `J` plus the AC field **[microcode]** (simple,
-  label `JRST`: "DISPATCHES TO 1 OF 16 PLACES ON AC BITS", block `=0000`
-  at 1520). The four opcodes with `ACDISP` (254, 700, 701, 702) have a
-  DROM `J` with the low four bits 0 **[measured]** 2026-11-27 (the D words
-  of the ITS listing 262). Thus OR and addition give the same address.
-- **NICOND.** The dispatch at the start of the next instruction selects,
-  in order of priority, trap 3, trap 2, trap 1, halt, or the next
-  instruction. The signal NICOND 08 tells if a memory cycle is in
-  progress, that is, if the fetch has started **[manual]** (5.4.4.2).
+**Skip.** `SKIP` has three group enables in its left three bits and a
+select code in its right three bits. The enables are active low: the 4
+bit enables group 40, the 2 bit group 20, the 1 bit group 10. Bit 11 of
+the address is set if the selected input of an enabled group is true
+**[microcode]** (ks10, "MICROCODE FIELDS -- SKIP"; every named value fits
+this rule, for example `LLE=12` enables groups 40 and 20, `IOLGL=04` all
+three).
+
+| Select | Group 10 (CRA2 E114) | Group 20 (DPEA E203) | Group 40 (DPEA E202) |
+|---|---|---|---|
+| 0 | 0 | 0 | 0 |
+| 1 | TRAP CYCLE | CARRY 02 | CARRY OUT |
+| 2 | AD=0 | ADL SIGN | ADL=0 |
+| 3 | SC SIGN | ADR SIGN | ADR=0 |
+| 4 | EXECUTE | USER I/O | −USER |
+| 5 | −I/O LATCH | JFCL SKIP | FPD |
+| 6 | −CONTINUE | DP CRY1 | AC=0 |
+| 7 | −1 MSEC | TXXX | INTERRUPT REQ |
+
+**[manual]** (M8622-0-CRA2 rev A1, E114; M8620-0-DPEA rev A1, E202,
+E203). The inputs 4 to 7 of group 10 go through the latch E115.
+
+- ADL SIGN is the F SIGN pin of the leftmost 2901 (DPE1 E505). It is the
+  sign of the 40-bit ALU output F, not DP bit 0, and not the output Y.
+- ADL=0 and ADR=0 are the F=0 pins of the five slices of each half, so
+  they test 20 bits each. AD=0 is ADL=0 AND ADR=0 (DPEA E601): all 40
+  bits of F.
+- TXXX is DROM TXXX EN XOR AD=0 (DPEA E319).
+
+**Dispatch.** `DISP` has the same form: active-low enables for groups 40,
+20 and 10, and a select code. Group 40 (DPEA E120 to E123) and group 10
+(CRA1 E120 to E123) drive address bits 08 to 11. Group 20 (CRA1 E516,
+E517, E520, E521) drives bits 00 to 07; its 74LS153 mixers get only the
+low two select bits, so codes 4 to 7 act as 0 to 3.
+
+| Select | Group 40, bits 08–11 | Group 20, bits 00–07 | Group 10, bits 08–11 |
+|---|---|---|---|
+| 0 | 0 | DIAG ADR | DIAG ADR |
+| 1 | DP 18–21 | SBR RET | SBR RET |
+| 2 | J 08–11 | 0, 0, 1, 1, DROM J 00–03 | 0, FLAG QR 37, FK2, 0 |
+| 3 | AREAD 08–11 | 0, 0, A=J, A=J, AREAD 04–07 | EU1, FE2, FL2, FS2 |
+| 4 | AD=0, DP 08, DP 09, DP SIGN | as 0 | MEMORY CYCLE, NICOND 09–11 |
+| 5 | DP 32–35 | as 1 | 0, BYTE DISP 09–11 |
+| 6 | DROM A 00–03 | as 2 | −JRST 0, INDIRECT, XR=0, 0 |
+| 7 | DROM B 00–03 | as 3 | 0, 0, SCAD 00, 0 |
+
+**[manual]** (M8622-0-CRA1 rev A1; M8620-0-DPEA rev A1). EU1, FE2, FK2,
+FL2 and FS2 are backplane pins; [`unknowns.md`](unknowns.md) lists them.
+
+- **Dispatch ROM.** The 9-bit opcode in IR selects a word of three ROMs
+  (DPEA E113, E114, E115). The ROM `J` field has 8 bits; group 20 code 2
+  adds 1400. `DISP/DROM` (12) thus jumps to 1400 plus the ROM `J`.
+- **AREAD.** `DISP/AREAD` (13) uses code 3 in groups 40 and 20. If the
+  DROM `I` bit (A=J) is 0, the address is 40 plus the DROM `A` field. If
+  it is 1, the address is the same as for `DISP/DROM` (DPEA E119; CRA2
+  E420; CRA1 E517).
+- **AC dispatch.** If the DROM `ACDISP` bit is 1, AC 09–12 replace the
+  low four bits of the ROM `J` (DPEA E118) **[manual]**. The microcode
+  expects this: `JRST` "DISPATCHES TO 1 OF 16 PLACES ON AC BITS", block
+  `=0000` at 1520 **[microcode]** (simple, label `JRST`).
+- **Combinations.** The enables combine freely. `DISP/1` at 2724 enables
+  all three groups with code 1: the return address ORed with DP 18–21
+  **[microcode]** (simple, label `FIX1++`: "RETURN TO 1 OF 4 PLACES").
+- **NICOND.** A priority encoder (CRA2 E216) gives NICOND 09–11, the
+  number of its first active input: 0 EA1, 1 TRAP 3, 2 TRAP 2, 3 TRAP 1,
+  4 EF1, 5 not RUN, 6 EK1, 7 always. Bit 08 is MEMORY CYCLE (DPM6)
+  **[manual]** (CRA2 E216; CRA1 E120). TRAP CYCLE is NOT NICOND 09,
+  latched at `SPEC/NICOND` (CRA2 E108).
 - **Subroutine stack.** `CALL` saves the address of the current
-  microinstruction. `DISP/RETURN` ORs the saved address into `J` and pops
-  it. The stack holds 15 levels. A page fail also pushes **[manual]**
-  (5.4.5).
+  microinstruction; `DISP/RETURN` gives it back through `SBR RET` and pops
+  it. The stack holds 15 levels **[manual]** (5.4.5). The stack moves on
+  CALL, on RETURN (group 20 enabled with code 1), and on a page fail
+  (CRA2 E723).
+- **Page fail.** A page fail sets all 12 address bits (CRA1).
 
 ### Arithmetic unit
 
@@ -191,6 +238,19 @@ microword:
   unclocked half does not change at all. The carry into the left half can
   be inhibited (`SPEC/INHCRY18`). `CRY38` puts a carry into the right end
   **[manual]** (5.4.1, bits 45–50 and 72; 5.5.1).
+- The left half is the five slices of DPE1 (DP SIGN to DP 17), the right
+  half the five slices of DPE2 (DP 18 to DP 37). `RSRC` drives the source
+  pins of the right half only **[manual]** (M8620-0-DPE1 rev A1,
+  M8620-0-DPE2 rev A1, the 2901 pins I0–I2).
+- The carry runs through 2902 lookahead chips over all 40 bits (DPE2
+  E709, E710, E711, E719). The carry in at bit 37 is DPE5 CARRY IN. The
+  carry from bit 18 into bit 17 goes through the P2 input of E711, which
+  `SPEC/INHCRY18` turns off. CARRY OUT is the carry out of bit −2 (E709).
+  CARRY 02 is the carry out of bit 02 into bit 01 (E710) **[manual]**
+  (DPE2).
+- For a logic function, the carry outputs come from the G and P pins of
+  the 2901, which this project does not have a source for. The model
+  marks such a carry as undefined, and stops if a later step uses it.
 - Overflow comes from DP SIGN (the 40-bit sign) against DP bit 0. Carry 1
   is overflow XOR carry 0 **[manual]** (5.5.5).
 - `DEST` selects the 2901 output Y: the A register for `DEST/A`,
@@ -208,16 +268,47 @@ bits of `SPEC`) selects the connections at the ends of the register and
 of Q: NORM, ZERO, ONES, ROT, ASHC, LSHC, DIV, ROTC **[manual]** (5.5.1,
 Figure 5-22) **[microcode]** (ks10, `SHSTYLE`).
 
-- In a divide step (`DIVIDE`), the carry out of the previous step makes
-  the next step shift a 1 into Q (DIVIDE SHIFT) and subtract (carry in
-  and function bit 1) **[manual]** (5.5.1, Figure 5-22 note).
-- If `MULTI PREC` is 1, MULTI SHIFT is the flag FL02, and a carry out of
-  the lower word becomes a carry in. Otherwise MULTI SHIFT is 0
-  **[manual]** (5.5.1; Figure 5-22 note, where the dash is a negation)
-  **[emulator]** (KS10FPGA 5090e7a1, `alu.v`, the DPE5 flag logic).
-- Figure 5-22 gives the connections of each style. The connection of
-  each bit comes from the DPE1 schematic; until it is read, KS10FPGA
-  `alu.v` gives it **[emulator]** (5090e7a1).
+The 2901 has 40 bits in ten slices. The leftmost slice holds DP SIGN, DP
+SIGN SMEAR, DP 00 and DP 01 (DPE1 E505). The shift lines between DP 01
+and DP 02, and at the right end (bit 37), go through mixers selected by
+`SHSTYLE` (DPE1 E702 to E707). `DEST` bit 2 selects the direction: 0
+shifts left, 1 shifts right (DPE5 E403, E384). F names the main register
+shift lines and Q those of the Q register.
+
+| `SHSTYLE` | Right: into F 02 | Right: into Q 02 | Left: into F 01 | Left: into F 37 | Left: into Q 37 |
+|---|---|---|---|---|---|
+| 0 NORM | F 01 | Q 01 | F 02 | MULTI SHIFT | 0 |
+| 1 ZERO | 0 | 0 | DP SIGN | 0 | 0 |
+| 2 ONES | 1 | 1 | DP SIGN | 1 | 1 |
+| 3 ROT | F 37 | Q 37 | DP SIGN | F 02 | Q 02 |
+| 4 ASHC | F 01 | F 37 | DP SIGN | Q 02 | 0 |
+| 5 LSHC | 0 | F 37 | F 02 | Q 02 | 0 |
+| 6 DIV | 1 | F 37 | F 02 | Q 02 | DIVIDE SHIFT |
+| 7 ROTC | Q 37 | F 37 | DP SIGN | Q 02 | F 02 |
+
+**[manual]** (M8620-0-DPE1 rev A1, E703, E707, E706, E705, E704). In
+each direction the rest is fixed (DPE1 E702):
+
+- On a right shift, F SIGN gets ADL SIGN (the sign stays), Q SIGN gets 0,
+  and Q 01 shifts into Q 02 only through the table.
+- On a left shift, Q 02 shifts into Q 01.
+
+The table agrees with Figure 5-22 **[manual]** (5.5.1) and with KS10FPGA
+`alu.v` **[emulator]** (5090e7a1).
+
+**DIVIDE and MULTI PREC.** The register E603 (DPE5) stores, at the end of
+every cycle, the function bit 01, CARRY 02, CARRY OUT, F 02 (the bit
+shifted out to the left) and Q 37. The next cycle uses them **[manual]**
+(M8620-0-DPE5 rev A1, E603, E503, E602):
+
+- function bit 01 = `AD` bit 01 OR (`MULTI PREC` AND flag function 01) OR
+  (`DIVIDE` AND flag CARRY OUT);
+- carry in = `CRY38` OR (`MULTI PREC` AND flag CARRY 02) OR (`DIVIDE` AND
+  flag CARRY OUT);
+- DIVIDE SHIFT = `DIVIDE` AND flag CARRY OUT;
+- MULTI SHIFT = `MULTI PREC` AND flag F 02.
+
+The flag Q 37 is the input of the MUL dispatch (CRA1 E121).
 
 ### DBus and DBM
 

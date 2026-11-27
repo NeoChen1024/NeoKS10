@@ -75,15 +75,17 @@ disagree:
 the manual and the field definitions give. These connections need the
 schematics (MP00540):
 
-- The skip condition `DP0` ("AD SIGN" in the `SKIP` values, "ADL SIGN" in
-  the table): DP SIGN (bit −2 of the 40 bits) or DP bit 0 (DPEA).
-- The bits that `AD=0`, `ADL=0` and `ADR=0` test: 36 or 40 (DPEA).
 - How `MULTI SHIFT` repeats a step, and what changes FE at each repeat
   (CSL5, DPM4).
-- The conditions of the dispatch inputs `MUL`, `NORM`, `BYTE`, `EAMODE`
-  and `PAGE FAIL` bit by bit (CRA1, DPEA, DPE3).
-- The shift connections bit by bit for each `SHSTYLE` (DPE1), and the
-  DIVIDE and MULTI PREC flags (DPE5).
+- Backplane inputs of the microsequencer that the CRA sheets do not
+  trace: NICOND inputs 0, 4 and 6 (EA1, EF1, EK1), the MUL dispatch input
+  FK2, and the page fail dispatch inputs EU1, FE2, FL2, FS2. The ITS
+  microcode does not depend on them **[measured]** 2026-11-27 (the ITS
+  listing 262): the NICOND block (60–77) has its words at 61, 62, 63, 65,
+  67, 71, 72, 73, 75 and 77, and the assembler put other words at 60, 64,
+  66, 70, 74 and 76; every `DISP/MUL` word has `J` bit 10 set; no word
+  uses `DISP/PAGE FAIL`.
+- The byte dispatch inputs BYTE DISP 09–11 (DPE3).
 - The program flag logic (DPE9), and the SCAD mixers (DPM3).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS

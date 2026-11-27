@@ -250,7 +250,9 @@ two codes give the same function.
   DISP EN 20 controls "THE HI 7 BITS", and all 11 bits need two groups.
 - **[manual]** EK-OKS10-TM-002, 5.4.1, bits 57–62: the dispatch is ORed
   with `J` bits 0–7 or 8–11 or both.
+- **[manual]** M8622-0-CRA1 rev A1: group 20 drives address bits 00–07
+  (E516, E517, E520, E521). For codes 2 and 3, bits 00 and 01 are 0.
 
-The control RAM has 4000 (octal) words, which is 11 address bits. `J` has
-12 bits (0–11). The project uses the microcode: group 20 acts on `J` bits
-1–7. The CRA1 schematic can show the use of `J` bit 0.
+The project uses the schematic: group 20 drives bits 00–07. The
+microcode text counts 7 bits because bit 00 is outside the 4000 words of
+the control RAM.
