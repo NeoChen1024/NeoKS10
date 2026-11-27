@@ -186,6 +186,10 @@ fails.
 
 ## Publication and privacy
 
+- You can make a local commit without the permission of the owner. Run the
+  checks of "Build and verification" first.
+- A push needs the permission of the owner in that session.
+
 Do not put these items into a file of the repository or into a commit
 message: host names, user names, home directory paths, IP addresses, MAC
 addresses, serial numbers.
