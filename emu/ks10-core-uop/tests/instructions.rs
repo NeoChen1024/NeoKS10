@@ -23,7 +23,7 @@ mod common;
 use common::{FILLS, label, machine, run_until, symbol};
 use ks10_core_soft::flags::Flags;
 use ks10_core_uop::alu;
-use ks10_core_uop::machine::{Coverage, Machine};
+use ks10_core_uop::machine::Machine;
 use pdp10::{Half, W36};
 
 const CODE: usize = 0o1000;
@@ -91,7 +91,7 @@ fn halted(fill: alu::W40) -> Machine {
     m
 }
 
-fn model(fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Result<State, String> {
+fn model(fill: alu::W40, c: &Case) -> Result<State, String> {
     let haltlp = label("HALTLP");
     // A machine has its own bus with the devices, so each case runs the
     // power-up sequence (about 640 microcycles).
@@ -134,7 +134,6 @@ fn model(fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Result<State, Str
             return Err(format!("halt status block +{k:o}: {:o}, not {v:o}", hsb(k)));
         }
     }
-    coverage.merge(&m.coverage);
     Ok(State {
         pc: m.memory[1].get() & 0o777777,
         flags: common::ks10_flags(m.flags),
@@ -855,11 +854,10 @@ fn single_instructions_agree_with_the_software_processor() {
     let mut differences = Vec::new();
     let mut known = std::collections::BTreeMap::new();
     let mut known_cases = 0;
-    let mut coverage = Coverage::default();
     for fill in FILLS {
         for c in all_cases() {
             let want = reference(&c).expect(&c.name);
-            let got = model(fill, &c, &mut coverage);
+            let got = model(fill, &c);
             match got {
                 Ok(got) if got == want => {}
                 Ok(got) if agree(KNOWN, &c, &got, &want).0 => {
@@ -889,7 +887,6 @@ fn single_instructions_agree_with_the_software_processor() {
     for (why, count) in &known {
         println!("KNOWN, applied to {count}: {why}");
     }
-    println!("{coverage}");
     for s in &stops {
         println!("STOP {s}");
     }
@@ -990,9 +987,8 @@ fn the_flag_rules_of_the_microcode() {
             Flags::AROV | Flags::CRY1 | Flags::TRAP1,
         ),
     ];
-    let mut coverage = Coverage::default();
     for (c, want) in cases {
-        let got = model(FILLS[0], &c, &mut coverage).expect(&c.name);
+        let got = model(FILLS[0], &c).expect(&c.name);
         assert_eq!(got.flags, want, "{}", c.name);
     }
 }

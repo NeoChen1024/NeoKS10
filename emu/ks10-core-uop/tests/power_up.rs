@@ -19,7 +19,6 @@ fn the_power_up_sequence_computes_the_powers_of_ten() {
         let mut m = machine(fill);
         let r = run_until(&mut m, 100_000, |m| m.upc == pwron);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
-        println!("{}", m.coverage);
         // The table: 10^n as two words, the high word 10^n >> 35 and the
         // low word with bit 0 clear (extend, DBSLOW and ADDCRY: "KEEP LOW
         // WORD POSITIVE").

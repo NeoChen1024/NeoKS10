@@ -25,7 +25,7 @@ use ks10_core_uop::alu;
 use ks10_core_uop::machine::Machine;
 use ks10_machine::boot::Processor;
 use ks10_machine::console::Script;
-use ks10_machine::sav::{self, Packing};
+use ks10_machine::sav;
 
 /// The most microcycles without an instruction: no instruction of the
 /// diagnostics takes so long, and the halt loop counts none.
@@ -38,7 +38,7 @@ fn dir() -> Option<PathBuf> {
 fn load(m: &mut Machine, d: &Path, name: &str) {
     let bytes =
         std::fs::read(d.join(format!("diagnostics..{name}.sav"))).expect("read the .SAV file");
-    let s = sav::parse(&sav::words(&bytes, Packing::Ansi5)).expect("a SAV file");
+    let s = sav::parse(&sav::words(&bytes)).expect("a SAV file");
     for (addr, ws) in &s.blocks {
         for (k, w) in ws.iter().enumerate() {
             m.memory[addr.get() as usize + k] = *w;

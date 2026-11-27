@@ -207,7 +207,7 @@ microcode-test: $(if $(KS10_ITS_DISK),$(MICROCODE_LISTING))
 	@test -n "$(KS10_ITS_DISK)" || { echo "microcode: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	$(PYTHON) spec/micro.py --its $(ITS_TREE) --compare $(MICROCODE_LISTING)
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" \
-	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --tests -- --nocapture
+	    $(NICE) $(CARGO) test --locked -p ks10-core-uop --test ram_file --test its_boot -- --nocapture
 
 # The DEC KS10 processor diagnostics (docs/emulator.md, "Diagnostics").
 # The tape comes from `make references`. t10backup of tapeutils (the

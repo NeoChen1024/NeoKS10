@@ -5,8 +5,6 @@
 //! A function has one of two states: modelled, or a stop with
 //! [`Stop::Unmodelled`]. The model never guesses a value.
 
-use std::collections::BTreeSet;
-
 use ks10_machine::INSTRUCTIONS_PER_MS;
 use ks10_machine::boot;
 use ks10_machine::console::{self as cty, Console as Cty};
@@ -212,69 +210,6 @@ pub struct Bus {
     pub reply: Option<W36>,
 }
 
-/// The codes that a run executed, for the coverage report.
-#[derive(Clone, Debug, Default)]
-pub struct Coverage {
-    pub ad: BTreeSet<u32>,
-    pub dest: BTreeSet<u32>,
-    /// `SHSTYLE` with the direction: (style, left).
-    pub shift: BTreeSet<(u32, bool)>,
-    pub skip: BTreeSet<u32>,
-    pub disp: BTreeSet<u32>,
-    pub dbus: BTreeSet<u32>,
-    pub dbm: BTreeSet<u32>,
-    pub ramadr: BTreeSet<u32>,
-    pub scad: BTreeSet<(u32, u32, u32)>,
-    pub spec: BTreeSet<u32>,
-}
-
-impl Coverage {
-    /// Add the codes of another run.
-    pub fn merge(&mut self, o: &Coverage) {
-        self.ad.extend(&o.ad);
-        self.dest.extend(&o.dest);
-        self.shift.extend(&o.shift);
-        self.skip.extend(&o.skip);
-        self.disp.extend(&o.disp);
-        self.dbus.extend(&o.dbus);
-        self.dbm.extend(&o.dbm);
-        self.ramadr.extend(&o.ramadr);
-        self.scad.extend(&o.scad);
-        self.spec.extend(&o.spec);
-    }
-}
-
-impl std::fmt::Display for Coverage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let oct = |s: &BTreeSet<u32>| {
-            s.iter()
-                .map(|v| format!("{v:o}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        writeln!(f, "AD: {}", oct(&self.ad))?;
-        writeln!(f, "DEST: {}", oct(&self.dest))?;
-        let sh: Vec<_> = self
-            .shift
-            .iter()
-            .map(|(s, l)| format!("{s}{}", if *l { "L" } else { "R" }))
-            .collect();
-        writeln!(f, "SHSTYLE: {}", sh.join(" "))?;
-        writeln!(f, "SKIP: {}", oct(&self.skip))?;
-        writeln!(f, "DISP: {}", oct(&self.disp))?;
-        writeln!(f, "DBUS: {}", oct(&self.dbus))?;
-        writeln!(f, "DBM: {}", oct(&self.dbm))?;
-        writeln!(f, "RAMADR: {}", oct(&self.ramadr))?;
-        let sc: Vec<_> = self
-            .scad
-            .iter()
-            .map(|(a, b, c)| format!("{a}/{b}/{c}"))
-            .collect();
-        writeln!(f, "SCAD/SCADA/SCADB: {}", sc.join(" "))?;
-        write!(f, "SPEC: {}", oct(&self.spec))
-    }
-}
-
 /// The microcode-level machine.
 pub struct Machine {
     pub cram: Vec<Microword>,
@@ -375,7 +310,6 @@ pub struct Machine {
     /// completes a read).
     pub cache_hits: u64,
     pub ticks: u64,
-    pub coverage: Coverage,
 }
 
 fn get(mw: Microword, f: Field) -> u32 {
@@ -487,7 +421,6 @@ impl Machine {
             cycles: 0,
             cache_hits: 0,
             ticks: 0,
-            coverage: Coverage::default(),
         }
     }
 
@@ -793,15 +726,6 @@ impl Machine {
             multi_shift: multi_prec && flag_fl_02,
             divide_shift: divide && flag_carry_out,
         };
-        let cov = &mut self.coverage;
-        cov.ad.insert(ad);
-        cov.dest.insert(dest);
-        if dest >= 4 {
-            cov.shift.insert((spec_low, dest & 2 == 0));
-        }
-        cov.spec.insert(spec);
-        cov.skip.insert(get(mw, u::SKIP));
-        cov.disp.insert(get(mw, u::DISP));
 
         // DP before the clock, where it does not depend on the DBus.
         let dp_early = self.alu.y_without_d(&c);
@@ -915,7 +839,6 @@ impl Machine {
             None
         };
         let ram_addr = if ram_write {
-            self.coverage.ramadr.insert(get(mw, u::RAMADR));
             Some(self.ram_address(mw, dp_early)?)
         } else {
             None
@@ -927,9 +850,6 @@ impl Machine {
         let disp = get(mw, u::DISP);
         let scad_needed = load_sc || load_fe || (disp >> 3 & 1 == 0 && disp & 7 == 7);
         let scad = if scad_needed {
-            self.coverage
-                .scad
-                .insert((get(mw, u::SCAD), get(mw, u::SCADA), get(mw, u::SCADB)));
             let dp = dp_early.or_else(|| dbus.map(|d| self.alu.y(&c, alu::d_input(d))));
             Some(self.scad(mw, dp.map(alu::word))?)
         } else {
@@ -941,7 +861,7 @@ impl Machine {
         let ash_test = spec_en & 4 != 0 && spec_low == 4;
         let exp_test = spec_en & 4 != 0 && spec_low == 5;
         let exp_scad = if exp_test {
-            Some(self.scad_output(mw, dp_early)?)
+            Some(self.scad(mw, dp_early.map(alu::word))?)
         } else {
             None
         };
@@ -1212,7 +1132,6 @@ impl Machine {
     /// RAM file select (M8620-0-DPE3 rev B, E70).
     fn dbus(&mut self, mw: Microword, dp: Option<W40>, force_ramfile: bool) -> Result<W36, Stop> {
         let mut sel = get(mw, u::DBUS);
-        self.coverage.dbus.insert(sel);
         if force_ramfile && sel == 3 {
             sel = 2;
         }
@@ -1224,7 +1143,6 @@ impl Machine {
             0 => Ok(self.dbus_pc_flags()),
             1 => dp_word(self),
             2 => {
-                self.coverage.ramadr.insert(get(mw, u::RAMADR));
                 let a = self.ram_address(mw, dp)?;
                 Ok(self.ram_file[a])
             }
@@ -1262,7 +1180,6 @@ impl Machine {
     /// The DBM mixer (M8621-0-DPM1 and DPM2 rev B).
     fn dbm(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
         let dbm = get(mw, u::DBM);
-        self.coverage.dbm.insert(dbm);
         let dp_word = |m: &Self| {
             dp.map(alu::word)
                 .ok_or_else(|| m.unmodelled("DP depends on the DBus, which selects DP"))
@@ -1270,7 +1187,7 @@ impl Machine {
         match dbm {
             0 => self.dbm_apr(mw, dp),
             1 => {
-                let b = bytes(self.scad_output(mw, dp)?).get();
+                let b = bytes(self.scad(mw, dp.map(alu::word))?).get();
                 Ok(W36::wrap(b | u64::from(self.dp_bit(dp, 35)?)))
             }
             2 => self.dbm_exp(mw, dp),
@@ -1286,7 +1203,7 @@ impl Machine {
             // ([`Machine::step_word`]).
             3 => {
                 let (first, last) = BYTE_BITS[(get(mw, u::SPEC) & 7) as usize - 1];
-                let b = bytes(self.scad_output(mw, dp)?).get();
+                let b = bytes(self.scad(mw, dp.map(alu::word))?).get();
                 // Bit 35 of input 1 is DP 35: byte 5 keeps it.
                 let mask = (((1u64 << (last - first + 1)) - 1) << (35 - last)) & !1;
                 let w = match dp {
@@ -1333,14 +1250,6 @@ impl Machine {
         }
     }
 
-    /// The SCAD output for a DBM input, with the coverage.
-    fn scad_output(&mut self, mw: Microword, dp: Option<W40>) -> Result<u16, Stop> {
-        self.coverage
-            .scad
-            .insert((get(mw, u::SCAD), get(mw, u::SCADA), get(mw, u::SCADB)));
-        self.scad(mw, dp.map(alu::word))
-    }
-
     /// Bit `k` of DP, also if DP depends on the DBus but not that bit
     /// ([`Machine::dp_bounds`]).
     fn dp_bit(&self, dp: Option<W40>, k: u32) -> Result<bool, Stop> {
@@ -1359,10 +1268,10 @@ impl Machine {
     /// millisecond; its two low bits do not reach DBM. The model takes it
     /// as the units of the time base since the last tick: one millisecond
     /// is `INSTRUCTIONS_PER_MS` instructions and 2^12 units, the time base
-    /// of `emu/ks10-core-soft` (docs/microcode-model.md, "The lockstep run
-    /// and time").
+    /// of `emu/ks10-core-soft` (docs/microcode-model.md, "Time and the boot
+    /// of ITS").
     fn dbm_exp(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
-        let scad = self.scad_output(mw, dp)?;
+        let scad = self.scad(mw, dp.map(alu::word))?;
         let dp_left = match (dp, self.dp_bounds) {
             (Some(d), _) => alu::word(d).field(9, 17),
             (None, Some((lo, hi))) if lo.field(9, 17) == hi.field(9, 17) => lo.field(9, 17),
@@ -1385,7 +1294,7 @@ impl Machine {
     /// inputs of bits 33–35 are open: the model takes them as 1
     /// **[estimate]** (docs/unknowns.md).
     fn dbm_apr(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
-        let scad = self.scad_output(mw, dp)?;
+        let scad = self.scad(mw, dp.map(alu::word))?;
         let mut left = bytes(scad).lh().get() & !1;
         left |= u64::from((scad >> 9) & 1);
         let e = self.apr_enables;

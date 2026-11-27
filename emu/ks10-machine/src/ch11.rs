@@ -12,8 +12,8 @@
 //!   number of bits. RCL clears the receiver for the next message.
 //! - Interrupts: receive done with REN, transmit done with TEN.
 //!
-//! The host side: messages go to `sent`, and messages in `incoming`
-//! arrive. With loop back (LUP) a message comes back to the receiver. The
+//! In this version no network is connected: with loop back (LUP) a message
+//! comes back to the receiver, and without it the message is dropped. The
 //! check word is not computed (docs/unknowns.md).
 
 use std::collections::VecDeque;
@@ -43,8 +43,6 @@ pub struct Ch11 {
     pub rcv_bits: u16,
     pub lost: u16,
     pub busy: bool,
-    pub sent: Vec<Vec<u16>>,
-    pub incoming: VecDeque<Vec<u16>>,
     pub rx_irq: bool,
     pub tx_irq: bool,
 }
@@ -63,8 +61,6 @@ impl Ch11 {
             rcv_bits: 0o7777,
             lost: 0,
             busy: false,
-            sent: Vec::new(),
-            incoming: VecDeque::new(),
             rx_irq: false,
             tx_irq: false,
         }
@@ -162,10 +158,6 @@ impl Ch11 {
                     self.rcv.clear();
                     self.rcv_bits = 0o7777;
                     self.lost = 0;
-                    if let Some(m) = self.incoming.pop_front() {
-                        let (d, src) = m.split_at(m.len().saturating_sub(1));
-                        self.receive(d, src.first().copied().unwrap_or(0));
-                    }
                 }
                 if v & c::csr::TCL as u16 != 0 {
                     self.xmt.clear();
@@ -199,8 +191,6 @@ impl Ch11 {
         let msg = std::mem::take(&mut self.xmt);
         if self.csr & c::csr::LUP as u16 != 0 {
             self.receive(&msg, self.address);
-        } else {
-            self.sent.push(msg);
         }
         self.update_irq();
     }

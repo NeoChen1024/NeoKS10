@@ -14,7 +14,7 @@
 //! The CTY output is printed at the end.
 
 use ks10_core_soft::{Machine, Stop};
-use ks10_machine::sav::{self, Packing};
+use ks10_machine::sav;
 use pdp10::{Half, W36};
 
 fn main() {
@@ -64,7 +64,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        let s = match sav::parse(&sav::words(&bytes, Packing::Ansi5)) {
+        let s = match sav::parse(&sav::words(&bytes)) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{f}: {e:?}");

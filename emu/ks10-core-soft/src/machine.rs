@@ -970,9 +970,8 @@ mod tests {
 
     // SETZM is `IW` in the DROM: AREAD starts a write test of E, so the
     // page fail word has the write bit (ks10, `IW`; itspag, PFMAP: a write
-    // test becomes WRITE CYCLE). The microcode-level model gives the same
-    // (the lockstep boot of ITS, emu/ks10-core-uop/tests/its_boot.rs,
-    // instruction 13 885 002).
+    // test becomes WRITE CYCLE). The microcode-level model gave the same at
+    // instruction 13 885 002 of a boot of ITS in step with it (2026-11-27).
     #[test]
     fn setzm_page_fails_as_a_write() {
         let mut m = paged();
@@ -1049,8 +1048,8 @@ mod tests {
     }
 
     // GOEXEC in executive mode keeps bit 6 of the new flags word (DPE9
-    // E46); the microcode-level model gives the same (the lockstep boot of
-    // ITS, emu/ks10-core-uop/tests/its_boot.rs, instruction 10 856 504).
+    // E46); the microcode-level model gave the same at instruction
+    // 10 856 504 of a boot of ITS in step with it (2026-11-27).
     #[test]
     fn goexec_in_executive_mode_takes_pcu_from_the_word() {
         let mut m = Machine::new();

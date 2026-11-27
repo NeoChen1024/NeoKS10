@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use ks10_core_soft::{Machine, Stop};
 use ks10_machine::console::Script;
-use ks10_machine::sav::{self, Packing};
+use ks10_machine::sav;
 use pdp10::Half;
 
 fn dir() -> Option<PathBuf> {
@@ -32,7 +32,7 @@ fn dir() -> Option<PathBuf> {
 fn load(m: &mut Machine, d: &std::path::Path, name: &str) {
     let bytes =
         std::fs::read(d.join(format!("diagnostics..{name}.sav"))).expect("read the .SAV file");
-    let s = sav::parse(&sav::words(&bytes, Packing::Ansi5)).expect("a SAV file");
+    let s = sav::parse(&sav::words(&bytes)).expect("a SAV file");
     for (addr, ws) in &s.blocks {
         for (k, w) in ws.iter().enumerate() {
             m.deposit(addr.get() as u32 + k as u32, *w)

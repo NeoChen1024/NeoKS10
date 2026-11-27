@@ -4,10 +4,7 @@
 //! 0, so a sum of two words fits in the `u64` with its carry. The guest word
 //! is [`W36`]; a half word is [`Half`]. `Word<64>` does not compile.
 //!
-//! Signed values: the methods without a prefix use two's complement, the
-//! representation of the PDP-10. The methods `ones_*` use one's complement
-//! (negation inverts all bits, and the sum has an end-around carry), for
-//! machines and data formats that use it.
+//! Signed values use two's complement, the representation of the PDP-10.
 //!
 //! Bit numbers follow DEC (AGENTS.md, "Conventions"): bit 0 is the most
 //! significant bit, bit N-1 the least significant bit.
@@ -37,16 +34,6 @@ impl<const N: u32> Sum<N> {
     pub const fn overflow(self) -> bool {
         self.cry0 != self.cry1
     }
-}
-
-/// The result of a one's complement addition or subtraction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OnesSum<const N: u32> {
-    pub word: Word<N>,
-    /// The carry out of bit 0, which was added back at bit N-1.
-    pub end_around: bool,
-    /// The operands had the same sign and the result has the other sign.
-    pub overflow: bool,
 }
 
 impl<const N: u32> Word<N> {
@@ -148,57 +135,6 @@ impl<const N: u32> Word<N> {
             cry0: full >> Self::BITS != 0,
             cry1: into_bit0 >> (Self::BITS - 1) != 0,
         }
-    }
-
-    /// The value as a one's complement number. Both zeros give 0.
-    pub const fn ones_signed(self) -> i64 {
-        if self.0 & Self::SIGN != 0 {
-            -((!self.0 & Self::MASK) as i64)
-        } else {
-            self.0 as i64
-        }
-    }
-
-    /// The one's complement word of `v`, or `None` if `v` does not fit
-    /// (|v| < 2^(N-1)). 0 gives +0.
-    pub const fn from_ones_signed(v: i64) -> Option<Self> {
-        let limit = (Self::SIGN - 1) as i64;
-        if v > limit || v < -limit {
-            None
-        } else if v < 0 {
-            Some(Word(!((-v) as u64) & Self::MASK))
-        } else {
-            Some(Word(v as u64))
-        }
-    }
-
-    /// All bits set: the negative zero of one's complement.
-    pub const fn is_minus_zero(self) -> bool {
-        self.0 == Self::MASK
-    }
-
-    /// One's complement negation: all bits inverted.
-    pub const fn ones_neg(self) -> Self {
-        self.not()
-    }
-
-    /// One's complement `self + other`: the carry out of bit 0 is added
-    /// at bit N-1 (end-around carry).
-    pub const fn ones_add(self, other: Self) -> OnesSum<N> {
-        let full = self.0 + other.0;
-        let carry = full >> Self::BITS;
-        let word = Word((full + carry) & Self::MASK);
-        let same = (self.0 ^ other.0) & Self::SIGN == 0;
-        OnesSum {
-            word,
-            end_around: carry != 0,
-            overflow: same && (word.0 ^ self.0) & Self::SIGN != 0,
-        }
-    }
-
-    /// One's complement `self - other`, as `self + (-other)`.
-    pub const fn ones_sub(self, other: Self) -> OnesSum<N> {
-        self.ones_add(other.ones_neg())
     }
 
     /// Bitwise operations.
@@ -357,60 +293,6 @@ mod tests {
         check_all::<4>();
         check_all::<5>();
         check_all::<7>();
-    }
-
-    // One's complement: every pair of words, both zeros included; the
-    // expected values come from integer arithmetic.
-    fn check_ones<const N: u32>() {
-        let m = 1u64 << N;
-        let limit = (m / 2 - 1) as i64;
-        for a in 0..m {
-            for b in 0..m {
-                let (x, y) = (Word::<N>::wrap(a), Word::<N>::wrap(b));
-                for (op, r, want) in [
-                    ("+", x.ones_add(y), x.ones_signed() + y.ones_signed()),
-                    ("-", x.ones_sub(y), x.ones_signed() - y.ones_signed()),
-                ] {
-                    let fits = (-limit..=limit).contains(&want);
-                    assert_eq!(r.overflow, !fits, "overflow {a}{op}{b}");
-                    if fits {
-                        assert_eq!(r.word.ones_signed(), want, "value {a}{op}{b}");
-                    }
-                }
-                let s = x.ones_add(y);
-                assert_eq!(s.end_around, a + b >= m, "end-around {a}+{b}");
-            }
-            let x = Word::<N>::wrap(a);
-            assert_eq!(x.ones_neg().ones_signed(), -x.ones_signed());
-            if !x.is_minus_zero() {
-                assert_eq!(Word::<N>::from_ones_signed(x.ones_signed()), Some(x));
-            }
-        }
-        assert_eq!(Word::<N>::from_ones_signed(limit + 1), None);
-        assert_eq!(Word::<N>::from_ones_signed(-limit - 1), None);
-    }
-
-    #[test]
-    fn ones_complement_small_widths() {
-        check_ones::<2>();
-        check_ones::<4>();
-        check_ones::<5>();
-        check_ones::<7>();
-    }
-
-    #[test]
-    fn ones_complement_36_bits() {
-        let five = W36::from_ones_signed(5).unwrap();
-        assert_eq!(five.ones_neg().get(), 0o777777777772);
-        // x + (-x) gives -0 without an end-around carry.
-        let z = five.ones_add(five.ones_neg());
-        assert!(z.word.is_minus_zero() && !z.end_around && !z.overflow);
-        // -1 + -1 = -2 with an end-around carry.
-        let m1 = W36::from_ones_signed(-1).unwrap();
-        let s = m1.ones_add(m1);
-        assert_eq!((s.word.ones_signed(), s.end_around), (-2, true));
-        let max = W36::from_ones_signed((1 << 35) - 1).unwrap();
-        assert!(max.ones_add(W36::wrap(1)).overflow);
     }
 
     #[test]
