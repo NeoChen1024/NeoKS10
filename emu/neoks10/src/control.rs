@@ -243,6 +243,24 @@ fn remote_units(c: &mut Client) -> Units {
             }
         }
     }
+    if let Ok(v) = c.send("dz show")
+        && let Some(list) = v["result"]["lines"].as_array()
+    {
+        for x in list {
+            let Some(n) = x["line"].as_u64() else {
+                continue;
+            };
+            let l = x["listen"].as_str().unwrap_or("no listener");
+            let c = if x["peer"].is_null() {
+                ""
+            } else {
+                ", connected"
+            };
+            if let Some(e) = u.line.get_mut(n as usize) {
+                e.1 = format!("{l}{c}");
+            }
+        }
+    }
     u
 }
 

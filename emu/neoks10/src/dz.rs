@@ -93,15 +93,20 @@ pub fn escape(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A listener of one line. Dropping it stops the listener.
+/// A listener of one line. Dropping it stops the listener and waits for
+/// its thread, so that the address is free again at once.
 pub struct Listener {
     pub addr: SocketAddr,
     stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
     }
 }
 
@@ -112,7 +117,7 @@ pub fn listen(line: usize, addr: &str, tx: Sender<Request>) -> Result<Listener, 
     l.set_nonblocking(true).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
-    std::thread::spawn(move || {
+    let thread = std::thread::spawn(move || {
         while !flag.load(Ordering::SeqCst) {
             match l.accept() {
                 Ok((s, peer)) => {
@@ -126,7 +131,11 @@ pub fn listen(line: usize, addr: &str, tx: Sender<Request>) -> Result<Listener, 
             }
         }
     });
-    Ok(Listener { addr: local, stop })
+    Ok(Listener {
+        addr: local,
+        stop,
+        thread: Some(thread),
+    })
 }
 
 fn connection(line: usize, mut s: TcpStream, peer: SocketAddr, tx: Sender<Request>) {
@@ -212,6 +221,17 @@ mod tests {
         t.feed(&[WILL], &mut out);
         t.feed(&[SGA, b'e'], &mut out);
         assert_eq!(out, b"e");
+    }
+
+    // A new listener on the address of a listener that has just stopped.
+    #[test]
+    fn listen_again() {
+        let (tx, _rx) = channel();
+        let a = listen(0, "127.0.0.1:0", tx.clone()).unwrap();
+        let addr = a.addr.to_string();
+        drop(a);
+        let b = listen(0, &addr, tx).unwrap();
+        assert_eq!(b.addr.to_string(), addr);
     }
 
     #[test]

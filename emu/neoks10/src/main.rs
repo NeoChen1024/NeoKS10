@@ -139,7 +139,10 @@ fn run(args: &[String]) -> Result<i32, String> {
     let mut e = Engine::new(Options {
         ns_per_instruction: cfg.machine.time_per_instruction_ns,
         pace: a.pace.unwrap_or(
-            if a.script.is_none() && a.replay.is_none() && (interactive || !a.no_control) {
+            if a.script.is_none()
+                && a.replay.is_none()
+                && (interactive || !a.no_control || cfg.dz11.is_some())
+            {
                 if a.record.is_some() {
                     Pace::Idle
                 } else {

@@ -308,8 +308,8 @@ that record on `soft` then repeats the run in software.
 | `idle` | The time of the idle passes | Ahead while ITS works, at wall speed while it is idle | Low while ITS is idle | Yes |
 | `realtime` | Until the wall clock reaches the virtual time | At wall speed; work is limited to 1 instruction for each `time_per_instruction_ns` | Low | Yes |
 
-- `run` with a terminal or a control socket uses `normal`, if it has no
-  `--script` and no `--replay`; with `--record` it uses `idle`. Other
+- `run` with a terminal, a control socket or `[dz11]` uses `normal`, if
+  it has no `--script` and no `--replay`; with `--record` it uses `idle`. Other
   runs use `fast`.
 - SIMH sleeps while the guest is idle and runs at full speed while it
   works **[emulator]**. Its clock comes from the wall clock (`kx10_cpu.c`:
@@ -601,10 +601,16 @@ connects to the same port again thus gets the same ITS terminal.
   listener on another interface needs the permission of the owner
   (AGENTS.md).
 
-**[measured]** 2026-11-27: with `[dz11] listen = "127.0.0.1:10004"`, a
-Telnet client on line 0 typed Ctrl-Z, `:login` and `:listf sys;`, and
-got the listing. ITS sent 7-bit characters. After a new connection to
-the same port, a CR gave `Flushed` and the DDT prompt of the same job.
+**[measured]** 2026-11-27, with `[dz11] listen = "127.0.0.1:10004"`:
+
+- A client on line 0 typed Ctrl-Z, `:login` and `:listf sys;`, and got
+  the listing. ITS sent 7-bit characters. After a new connection to the
+  same port, a CR gave `Flushed` and the DDT prompt of the same job.
+- The `telnet` program of the host, in a pseudo terminal: each typed
+  character came back once, and Enter gave one new line. The session
+  logged in and copied a file (`:copy`).
+- That run with `--pace fast --record`, and its replay on a fresh copy
+  of the disk: the same CTY output and the same disk image.
 
 ### Configuration file
 
@@ -786,7 +792,7 @@ Differences from the microcode:
    DSKDMP). Done.
 5. The RH11 with the RP06: boot ITS from `rp0.dsk`. Done.
 6. `neoks10`: the configuration, the operator console, the control
-   socket, scripts. Then the host side of the DZ11 lines, the
+   socket, scripts, the host side of the DZ11 lines. Done. Then the
    diagnostics, the ITS build.
 7. Step 6 of README.md: the CH11 and the IMP.
 
@@ -822,13 +828,15 @@ Decided on 2026-11-27:
 13. The emulator detects the idle loop of ITS (the owner proposed an
    idle detection as in SIMH). See [Time](#time).
 14. `--pace normal` is the mode for daily use and the default of a run
-   with a terminal or a control socket. Its clock comes from the wall
-   clock, as in SIMH. Only the modes for tests must be repeatable, and
-   the record and replay layer must exist for them (AGENTS.md).
+   with a terminal, a control socket or DZ11 listeners. Its clock comes
+   from the wall clock, as in SIMH. Only the modes for tests must be
+   repeatable, and the record and replay layer must exist for them
+   (AGENTS.md).
+15. The DZ11 lines use Telnet, with one listener port for each line.
 
 Open:
 
-15. The IMP interface for step 6. The choices include the emulator-only
+16. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.

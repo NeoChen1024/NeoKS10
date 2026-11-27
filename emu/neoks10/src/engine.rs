@@ -479,12 +479,16 @@ impl Engine {
             Input::DzConnect(l) | Input::DzHangup(l) if l >= 8 => {
                 Err(format!("dz line {l}: no such line"))
             }
+            // The notices come from the inputs, so that a replay prints
+            // them too.
             Input::DzConnect(l) => {
                 self.m.io.dz.lines[l].carrier = true;
+                self.notice(format!("neoks10: dz line {l}: connected"));
                 Ok(format!("dz line {l}: connected"))
             }
             Input::DzHangup(l) => {
                 self.m.io.dz.lines[l].carrier = false;
+                self.notice(format!("neoks10: dz line {l}: disconnected"));
                 Ok(format!("dz line {l}: disconnected"))
             }
             Input::DzData { line, data } => match self.m.io.dz.lines.get_mut(line) {
@@ -876,7 +880,6 @@ impl Engine {
                     self.input(Input::DzConnect(line)).map(|_| {
                         self.dz_next += 1;
                         self.dz[line].conn = Some((self.dz_next, peer, out));
-                        self.notice(format!("neoks10: dz line {line}: {peer} connected"));
                         self.dz_next
                     })
                 };
@@ -891,7 +894,6 @@ impl Engine {
                 if self.dz[line].conn.as_ref().is_some_and(|c| c.0 == id) {
                     self.dz[line].conn = None;
                     let _ = self.input(Input::DzHangup(line));
-                    self.notice(format!("neoks10: dz line {line}: disconnected"));
                 }
             }
         }
