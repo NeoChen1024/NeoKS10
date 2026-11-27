@@ -447,18 +447,40 @@ completes it. A read gives the word through `DBM/MEM`; a write takes the
 DBus of the `MEM WAIT` word (`MEM_[]` is `DBUS/DP, RAMADR/VMA`)
 **[microcode]** (ks10, the macros after `MEM CYCLE`).
 
-**Paging.** The ITS microcode has no mode without paging. A virtual
-reference goes through the page table of DPM7 and DPM8. A page fail
-jumps to 3777 (`PAGE-FAIL`), and the microcode fills the entry from the
-page tables in memory that `WORK[DBR1]` to `WORK[DBR4]` point to
-**[microcode]** (itspag, `PAGE-FAIL`, `PFMAP`, `GOTDBR`). Stage 1 thus
-needs the page table of DPM7 and DPM8, the page fail logic, and a page
-table in memory, as ITS sets one up.
+**Paging.** A virtual reference goes through the page table of DPM6
+only if DPM8 PAGE EN is 1: PAGED REF is BUS REQUEST AND PAGE EN AND NOT
+VMA PHYSICAL (M8621-0-DPM9 rev B, E38, E119). PAGE EN is DP 23 at
+`SPEC/APR EN` (M8621-0-DPMB rev B, E123), and TRAP EN is DP 22 there. A
+cache hit also needs PAGE EN (M8621-0-DPM7 rev B, E114). The power-up
+sequence gives `SPEC/APR EN` with DP 0 (`[FLG]_0, SET APR ENABLES`), so
+after power-up there is no paging, no cache and no trap **[manual]**
+**[microcode]** (simple, "POWER UP SEQUENCE"). The address then is VMA:
+bits 18–35, and bits 14–17 only with VMA EXTENDED (DPM8 E111, E119,
+E127; DPM9 E153).
+
+With PAGE EN 1, a page fail jumps to 3777 (`PAGE-FAIL`), and the ITS
+microcode fills the entry from the page tables in memory that
+`WORK[DBR1]` to `WORK[DBR4]` point to **[microcode]** (itspag,
+`PAGE-FAIL`, `PFMAP`, `GOTDBR`). The page table (M8621-0-DPM6 rev C) has
+512 entries by VMA 18–26: VALID, WRITEABLE, CACHEABLE and USER, and the
+physical page 16–26 from DP 18, 21, 22, VMA USER and DP 25–35.
+
+Other DPM readings (M8621-0-DPMA rev B) **[manual]**:
+
+- An AC write: RAMFILE WRITE is AC REF AND NOT MEM READ AND MEMORY CYCLE
+  AND MEM WAIT (E22, E54). The write takes place at `MEM WAIT`.
+- PXCT: `SPEC/PXCT EN` loads E71: PXCT ON gets NOT `SPEC/PXCT OFF`, and
+  the bits B09–B12 get DP 09–12. PREVIOUS EN is the bit that the `PXCT`
+  field selects (E63), with PXCT ON. XR PREV loads from PREVIOUS EN.
+- A pending interrupt or the 1 ms timer makes a page fail on a memory
+  cycle (M8621-0-DPM6 rev C, E9, E16): the microcode takes interrupts
+  through `PAGE-FAIL`.
 
 ## Stage 1
 
-Stage 1 runs the instructions that need no I/O: a memory of 512 Ki words,
-no cache, and exec page tables in memory that map each page to itself. A test runs one
+Stage 1 runs the instructions that need no I/O, in the state after
+power-up: PAGE EN, TRAP EN and the APR enables 0, so no paging, no cache
+and no trap. The console inputs are fixed: no 1 ms tick, no interrupt. A test runs one
 instruction from a state and compares the result with `emu/ks10` for the
 same state. The model is `emu/ks10uop/src/alu.rs` and `machine.rs`.
 
