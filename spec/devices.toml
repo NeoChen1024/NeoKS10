@@ -1,0 +1,562 @@
+# The registers of the KS10 I/O devices: the Unibus adapters, the memory
+# status register, and the Unibus devices (RH11 with RP06, RH11 with TM03,
+# DZ11).
+#
+# This is the only definition of these registers in the repository
+# (AGENTS.md, "Sources of truth"). spec/gen_devices.py writes the Rust
+# constants (emu/ks10/src/devregs.rs) and docs/devices.md from it.
+# `gen_devices.py --check --its DIR` compares every entry that has an
+# `its` name with the value of that symbol in the ITS system sources
+# (src/system/ of the ITS tree).
+#
+# Addresses and offsets are octal. A Unibus register offset is in bytes
+# from the base address of the device. Fields: `lsb` is the number of the
+# low bit (0 = the low bit of the 16-bit register), `width` the number of
+# bits (default 1). `bp = true`: the ITS symbol is the left half of a byte
+# pointer (position, size) and not a mask. `lh = true`: the ITS symbol is a
+# left half value.
+
+[[device]]
+name = "uba"
+title = "Unibus adapter"
+source = "ksdefs.194"
+# The adapter registers are at KS10 I/O addresses, one register for each
+# address (not Unibus byte addresses).
+registers = [
+  { name = "PAGE", its = "UBAPAG", addr = 0o763000, count = 64, title = "Paging RAM (UBALEN entries)" },
+  { name = "STA", its = "UBASTA", addr = 0o763100, title = "Status" },
+  { name = "MNT", its = "UBAMNT", addr = 0o763101, title = "Maintenance" },
+]
+
+[[device.fields]]
+register = "PAGE"
+# A paging RAM entry as written (left side) and as read (right side) have
+# different formats (ksdefs.194, %UQ and %UP). Bit numbers here are of the
+# 36-bit word, from bit 35 = lsb 0.
+fields = [
+  { name = "W_RPW", lsb = 17, its = "%UQRPW", title = "Written: force read-pause-write" },
+  { name = "W_16B", lsb = 16, its = "%UQ16B", title = "Written: disable the upper two Unibus bits" },
+  { name = "W_FST", lsb = 15, its = "%UQFST", title = "Written: fast mode" },
+  { name = "W_VAL", lsb = 14, its = "%UQVAL", title = "Written: entry is valid" },
+  { name = "W_PAGE", lsb = 0, width = 11, title = "Written: DEC page number (ITS page and half page)" },
+  { name = "R_PAR", lsb = 31, its = "%UPPAR", lh = true, title = "Read: RAM parity bit" },
+  { name = "R_RPW", lsb = 30, its = "%UPRPW", lh = true, title = "Read: force read-pause-write" },
+  { name = "R_16B", lsb = 29, its = "%UP16B", lh = true, title = "Read: disable the upper two Unibus bits" },
+  { name = "R_FST", lsb = 28, its = "%UPFST", lh = true, title = "Read: fast mode" },
+  { name = "R_VAL", lsb = 27, its = "%UPVAL", lh = true, title = "Read: entry is valid" },
+  { name = "R_PVL", lsb = 26, its = "%UPPVL", lh = true, title = "Read: parity is valid" },
+  { name = "R_PAGE", lsb = 9, width = 11, title = "Read: DEC page number (bits 3.2 to 2.1)" },
+]
+
+[[device.fields]]
+register = "STA"
+fields = [
+  { name = "TIM", lsb = 17, its = "%UBTIM", title = "Unibus timeout (R/C)" },
+  { name = "BAD", lsb = 16, its = "%UBBAD", title = "Bad memory data on an NPR transfer (R/C)" },
+  { name = "PAR", lsb = 15, its = "%UBPAR", title = "KS10 bus parity error (R/C)" },
+  { name = "NXD", lsb = 14, its = "%UBNXD", title = "CPU addressed a nonexistent device (R/C)" },
+  { name = "HIG", lsb = 11, its = "%UBHIG", title = "Interrupt request on BR7 or BR6 (R)" },
+  { name = "LOW", lsb = 10, its = "%UBLOW", title = "Interrupt request on BR5 or BR4 (R)" },
+  { name = "PWR", lsb = 9, its = "%UBPWR", title = "Power low (R, cleared by any write)" },
+  { name = "DXF", lsb = 7, its = "%UBDXF", title = "Disable transfer on uncorrectable data (R/W)" },
+  { name = "INI", lsb = 6, its = "%UBINI", title = "Issue Unibus init (W)" },
+  { name = "PIH", lsb = 3, width = 3, its = "%UBPIH", title = "PI level for BR7 and BR6 (R/W)" },
+  { name = "PIL", lsb = 0, width = 3, its = "%UBPIL", title = "PI level for BR5 and BR4 (R/W)" },
+]
+
+[[device]]
+name = "memctl"
+title = "Memory controller"
+source = "ksdefs.194"
+registers = [
+  { name = "STATUS", its = "KSECCS", addr = 0o100000, title = "Memory status register (controller 0, adapter 0)" },
+]
+
+[[device.fields]]
+register = "STATUS"
+fields = [
+  { name = "HLD", lsb = 35, its = "%KEHLD", lh = true, title = "Error held (R/C)" },
+  { name = "UNC", lsb = 34, its = "%KEUNC", lh = true, title = "Uncorrectable error (R)" },
+  { name = "REF", lsb = 33, its = "%KEREF", lh = true, title = "Refresh error (R/C)" },
+  { name = "PAR", lsb = 32, its = "%KEPAR", lh = true, title = "Parity error (R/W)" },
+  { name = "ENA", lsb = 31, its = "%KEENA", lh = true, title = "ECC enabled (R)" },
+  { name = "ECC", lsb = 24, width = 7, its = "%KEECC", lh = true, title = "ECC bits (R)" },
+  { name = "PWR", lsb = 23, its = "%KEPWR", lh = true, title = "Backup power low (R/C)" },
+]
+
+[[device]]
+name = "rh11"
+title = "RH11 Massbus controller and RP06 disk drive"
+source = "rh11.defs48"
+# Register addresses in the ITS source include the base of the disk RH11;
+# the check subtracts the base of the instance "disk".
+base_instance = "disk"
+registers = [
+  { name = "CS1", its = "%HRCS1", offset = 0o0, title = "Control and status 1" },
+  { name = "WC", its = "%HRWC", offset = 0o2, title = "Word count" },
+  { name = "BA", its = "%HRBA", offset = 0o4, title = "Unibus address" },
+  { name = "DA", its = "%HRADR", offset = 0o6, title = "Desired address (track, sector)" },
+  { name = "CS2", its = "%HRCS2", offset = 0o10, title = "Control and status 2" },
+  { name = "DS", its = "%HRSTS", offset = 0o12, title = "Drive status" },
+  { name = "ER1", its = "%HRER1", offset = 0o14, title = "Error 1" },
+  { name = "AS", its = "%HRATN", offset = 0o16, title = "Attention summary" },
+  { name = "LA", its = "%HRLAH", offset = 0o20, title = "Look ahead" },
+  { name = "DB", its = "%HRBUF", offset = 0o22, title = "Data buffer" },
+  { name = "MR", its = "%HRMNT", offset = 0o24, title = "Maintenance" },
+  { name = "DT", its = "%HRTYP", offset = 0o26, title = "Drive type" },
+  { name = "SN", its = "%HRSER", offset = 0o30, title = "Serial number" },
+  { name = "OF", its = "%HROFS", offset = 0o32, title = "Offset" },
+  { name = "DC", its = "%HRCYL", offset = 0o34, title = "Desired cylinder" },
+  { name = "CC", its = "%HRCCY", offset = 0o36, title = "Current cylinder" },
+  { name = "ER2", its = "%HRER2", offset = 0o40, title = "Error 2" },
+  { name = "ER3", its = "%HRER3", offset = 0o42, title = "Error 3" },
+]
+
+[[device.fields]]
+register = "CS1"
+fields = [
+  { name = "SC", lsb = 15, its = "%HXSC", title = "Special condition" },
+  { name = "TRE", lsb = 14, its = "%HXTRE", title = "Transfer error" },
+  { name = "MCPE", lsb = 13, its = "%HXMCP", title = "Massbus control bus parity error" },
+  { name = "DVA", lsb = 11, its = "%HXDVA", title = "Drive available" },
+  { name = "PSEL", lsb = 10, its = "%HXPSE", title = "Port select" },
+  { name = "A17", lsb = 9, its = "%HXA17", title = "Unibus address bit 17" },
+  { name = "A16", lsb = 8, its = "%HXA16", title = "Unibus address bit 16" },
+  { name = "RDY", lsb = 7, its = "%HXRDY", title = "Ready" },
+  { name = "IE", lsb = 6, its = "%HXIE", title = "Interrupt enable" },
+  { name = "CMD", lsb = 0, width = 6, its = "$HXCMD", title = "Function code with GO" },
+  { name = "GO", lsb = 0, its = "%HXGO", title = "Go" },
+]
+
+# The masks of rh11.defs48 are the sizes of the RP07; the RP06 uses fewer
+# bits of them (rh11.defs48, %HRADR).
+[[device.fields]]
+register = "DA"
+fields = [
+  { name = "TRK", lsb = 8, width = 6, its = "$HATRK", title = "Track" },
+  { name = "SEC", lsb = 0, width = 7, its = "$HASEC", title = "Sector" },
+]
+
+[[device.fields]]
+register = "CS2"
+fields = [
+  { name = "DLT", lsb = 15, its = "%HYDLT", title = "Data late" },
+  { name = "WCE", lsb = 14, its = "%HYWCE", title = "Write check error" },
+  { name = "PE", lsb = 13, its = "%HYPE", title = "Parity error" },
+  { name = "NED", lsb = 12, its = "%HYNED", title = "Nonexistent drive" },
+  { name = "NEM", lsb = 11, its = "%HYNEM", title = "Nonexistent memory on DMA" },
+  { name = "PGE", lsb = 10, its = "%HYPGE", title = "Program error" },
+  { name = "MXF", lsb = 9, its = "%HYMXF", title = "Missed transfer" },
+  { name = "MDPE", lsb = 8, its = "%HYMDP", title = "Massbus data bus parity error" },
+  { name = "OR", lsb = 7, its = "%HYOR", title = "Output ready" },
+  { name = "IR", lsb = 6, its = "%HYIR", title = "Input ready" },
+  { name = "CLR", lsb = 5, its = "%HYCLR", title = "Controller clear" },
+  { name = "PAT", lsb = 4, its = "%HYPAT", title = "Parity test" },
+  { name = "BAI", lsb = 3, its = "%HYBAI", title = "Unibus address increment inhibit" },
+  { name = "UNIT", lsb = 0, width = 3, its = "$HYDSK", title = "Unit select" },
+]
+
+[[device.fields]]
+register = "DS"
+fields = [
+  { name = "ATA", lsb = 15, its = "%HSATN", title = "Attention active" },
+  { name = "ERR", lsb = 14, its = "%HSERR", title = "Error" },
+  { name = "PIP", lsb = 13, its = "%HSPIP", title = "Positioning in progress" },
+  { name = "MOL", lsb = 12, its = "%HSMOL", title = "Medium on-line" },
+  { name = "WRL", lsb = 11, its = "%HSWRL", title = "Write locked" },
+  { name = "LST", lsb = 10, its = "%HSLST", title = "Last sector transferred" },
+  { name = "PGM", lsb = 9, its = "%HSPGM", title = "Programmable" },
+  { name = "DPR", lsb = 8, its = "%HSDPR", title = "Drive present" },
+  { name = "DRY", lsb = 7, its = "%HSRDY", title = "Drive ready" },
+  { name = "VV", lsb = 6, its = "%HSVV", title = "Volume valid" },
+]
+
+[[device.fields]]
+register = "ER1"
+fields = [
+  { name = "DCK", lsb = 15, its = "%H1ECC", title = "Data check" },
+  { name = "UNS", lsb = 14, its = "%H1UNS", title = "Unsafe" },
+  { name = "OPI", lsb = 13, its = "%H1OPI", title = "Operation incomplete" },
+  { name = "DTE", lsb = 12, its = "%H1DTE", title = "Drive timing error" },
+  { name = "WLE", lsb = 11, its = "%H1WLK", title = "Write lock error" },
+  { name = "IAE", lsb = 10, its = "%H1IAE", title = "Invalid address error" },
+  { name = "AOE", lsb = 9, its = "%H1AOE", title = "Address overflow error" },
+  { name = "HCRC", lsb = 8, its = "%H1CRC", title = "Header CRC error" },
+  { name = "HCE", lsb = 7, its = "%H1HCE", title = "Header compare error" },
+  { name = "ECH", lsb = 6, its = "%H1ECH", title = "ECC hard error" },
+  { name = "WCF", lsb = 5, its = "%H1WCF", title = "Write clock fail" },
+  { name = "FER", lsb = 4, its = "%H1FER", title = "Format error" },
+  { name = "PAR", lsb = 3, its = "%H1PAR", title = "Parity error" },
+  { name = "RMR", lsb = 2, its = "%H1RMR", title = "Register modification refused" },
+  { name = "ILR", lsb = 1, its = "%H1ILR", title = "Illegal register" },
+  { name = "ILF", lsb = 0, its = "%H1ILF", title = "Illegal function" },
+]
+
+[[device.fields]]
+register = "ER3"
+fields = [
+  { name = "OCYL", lsb = 15, its = "%H3OFC", title = "Off cylinder" },
+  { name = "SKI", lsb = 14, its = "%H3SKI", title = "Seek incomplete" },
+]
+
+# The functions of CS1 bits 0 to 5, with GO (rh11.defs48).
+[[device.values]]
+register = "CS1"
+field = "CMD"
+values = [
+  { name = "NOP", its = "%HMNOP", value = 0o0 },
+  { name = "UNLOAD", its = "%HMUNL", value = 0o3 },
+  { name = "SEEK", its = "%HMSEK", value = 0o5 },
+  { name = "RECAL", its = "%HMREC", value = 0o7 },
+  { name = "DCLR", its = "%HMCLR", value = 0o11 },
+  { name = "RELEASE", its = "%HMRLS", value = 0o13 },
+  { name = "OFFSET", its = "%HMOFS", value = 0o15 },
+  { name = "CENTER", its = "%HMCEN", value = 0o17 },
+  { name = "PRESET", its = "%HMRDP", value = 0o21 },
+  { name = "PACK_ACK", its = "%HMACK", value = 0o23 },
+  { name = "SEARCH", its = "%HMSRC", value = 0o31 },
+  { name = "WCHK", its = "%HMWCH", value = 0o51 },
+  { name = "WCHK_HD", its = "%HMWCF", value = 0o53 },
+  { name = "WRITE", its = "%HMWRT", value = 0o61 },
+  { name = "WRITE_HD", its = "%HMWHD", value = 0o63 },
+  { name = "READ", its = "%HMRED", value = 0o71 },
+  { name = "READ_HD", its = "%HMRHD", value = 0o73 },
+]
+
+[[device]]
+name = "rp06"
+title = "RP06 disk geometry"
+source = "rp06.defs1"
+constants = [
+  { name = "CYLINDERS", its = "NCYLS+XCYLS", value = 815, title = "Cylinders (812 used, 3 extra)" },
+  { name = "TRACKS", its = "NHEDS", value = 19, title = "Tracks for each cylinder" },
+  { name = "SECTORS", its = "NSECS", value = 20, title = "Sectors for each track" },
+  { name = "WORDS_PER_SECTOR", value = 128, title = "36-bit words in a sector (docs/emulator.md, image formats)" },
+]
+
+[[device]]
+name = "tm03"
+title = "RH11 Massbus controller and TM03 formatter"
+source = "tm03s.defs5"
+base_instance = "tape"
+registers = [
+  { name = "CS1", its = "%TMCS1", offset = 0o0, title = "Control and status 1" },
+  { name = "WC", its = "%TMWC", offset = 0o2, title = "Word count" },
+  { name = "BA", its = "%TMBA", offset = 0o4, title = "Unibus address" },
+  { name = "FC", its = "%TMFC", offset = 0o6, title = "Frame count" },
+  { name = "CS2", its = "%TMCS2", offset = 0o10, title = "Control and status 2" },
+  { name = "FS", its = "%TMFS", offset = 0o12, title = "Formatter status" },
+  { name = "ER", its = "%TMERR", offset = 0o14, title = "Error" },
+  { name = "AS", its = "%TMASN", offset = 0o16, title = "Attention summary" },
+  { name = "CC", its = "%TMCCR", offset = 0o20, title = "Check character" },
+  { name = "DB", its = "%TMBUF", offset = 0o22, title = "Data buffer" },
+  { name = "MR", its = "%TMMNT", offset = 0o24, title = "Maintenance" },
+  { name = "DT", its = "%TMTYP", offset = 0o26, title = "Drive type" },
+  { name = "SN", its = "%TMSER", offset = 0o30, title = "Serial number" },
+  { name = "TC", its = "%TMTC", offset = 0o32, title = "Tape control" },
+]
+
+[[device.fields]]
+register = "CS1"
+fields = [
+  { name = "SC", lsb = 15, its = "%TM1SC", title = "Special condition" },
+  { name = "TRE", lsb = 14, its = "%TM1TE", title = "Transfer error" },
+  { name = "MCPE", lsb = 13, its = "%TM1MP", title = "Massbus control bus parity error" },
+  { name = "DVA", lsb = 11, its = "%TM1DA", title = "Drive available" },
+  { name = "A17", lsb = 9, its = "%TM1A7", title = "Unibus address bit 17" },
+  { name = "A16", lsb = 8, its = "%TM1A6", title = "Unibus address bit 16" },
+  { name = "RDY", lsb = 7, its = "%TM1RY", title = "Ready" },
+  { name = "IE", lsb = 6, its = "%TM1IE", title = "Interrupt enable" },
+  { name = "CMD", lsb = 0, width = 6, its = "$TM1CM", title = "Function code with GO" },
+  { name = "GO", lsb = 0, its = "%TM1GO", title = "Go" },
+]
+
+[[device.fields]]
+register = "CS2"
+fields = [
+  { name = "DLT", lsb = 15, its = "%TM2DL", title = "Data late" },
+  { name = "UPE", lsb = 13, its = "%TM2UP", title = "Unibus parity error" },
+  { name = "NEF", lsb = 12, its = "%TM2NF", title = "Nonexistent formatter" },
+  { name = "NEM", lsb = 11, its = "%TM2NM", title = "Nonexistent memory on DMA" },
+  { name = "PGE", lsb = 10, its = "%TM2PE", title = "Program error" },
+  { name = "MXF", lsb = 9, its = "%TM2MT", title = "Missed transfer" },
+  { name = "MDPE", lsb = 8, its = "%TM2MP", title = "Massbus data bus parity error" },
+  { name = "OR", lsb = 7, its = "%TM2OR", title = "Output ready" },
+  { name = "IR", lsb = 6, its = "%TM2IR", title = "Input ready" },
+  { name = "CLR", lsb = 5, its = "%TM2CC", title = "Controller clear" },
+  { name = "PAT", lsb = 4, its = "%TM2PT", title = "Parity test" },
+  { name = "BAI", lsb = 3, its = "%TM2AI", title = "Unibus address increment inhibit" },
+  { name = "UNIT", lsb = 0, width = 3, title = "Formatter select" },
+]
+
+[[device.fields]]
+register = "FS"
+fields = [
+  { name = "ATA", lsb = 15, its = "%TMSAA", title = "Attention active" },
+  { name = "ERR", lsb = 14, its = "%TMSES", title = "Error summary" },
+  { name = "PIP", lsb = 13, its = "%TMSPP", title = "Positioning in progress" },
+  { name = "MOL", lsb = 12, its = "%TMSOL", title = "Medium on-line" },
+  { name = "WRL", lsb = 11, its = "%TMSWL", title = "Write locked" },
+  { name = "EOT", lsb = 10, its = "%TMSET", title = "End of tape" },
+  { name = "DPR", lsb = 8, its = "%TMSFP", title = "Formatter present" },
+  { name = "DRY", lsb = 7, its = "%TMSFR", title = "Formatter ready" },
+  { name = "SSC", lsb = 6, its = "%TMSSC", title = "Slave status change" },
+  { name = "PES", lsb = 5, its = "%TMSPE", title = "Phase encoded (1600 BPI)" },
+  { name = "SDWN", lsb = 4, its = "%TMSSD", title = "Slowing down" },
+  { name = "IDB", lsb = 3, its = "%TMSIB", title = "PE identification burst" },
+  { name = "TM", lsb = 2, its = "%TMSTM", title = "Tape mark detected" },
+  { name = "BOT", lsb = 1, its = "%TMSBT", title = "Beginning of tape" },
+  { name = "SLA", lsb = 0, its = "%TMSSA", title = "Slave attention" },
+]
+
+[[device.fields]]
+register = "ER"
+fields = [
+  { name = "CORCRC", lsb = 15, its = "%TMECE", title = "Correctable data or CRC error" },
+  { name = "UNS", lsb = 14, its = "%TMEUS", title = "Unsafe" },
+  { name = "OPI", lsb = 13, its = "%TMEOI", title = "Operation incomplete" },
+  { name = "DTE", lsb = 12, its = "%TMECT", title = "Controller timing error" },
+  { name = "NEF", lsb = 11, its = "%TMENX", title = "Non-executable function" },
+  { name = "CS", lsb = 10, its = "%TMECS", title = "Correctable skew or illegal tape mark" },
+  { name = "FCE", lsb = 9, its = "%TMEFC", title = "Frame count error" },
+  { name = "NSG", lsb = 8, its = "%TMENG", title = "Non-standard gap" },
+  { name = "PEF", lsb = 7, its = "%TMEFL", title = "PE format or LRC error" },
+  { name = "INC", lsb = 6, its = "%TMEIC", title = "Incorrectable data or hard error" },
+  { name = "MDPE", lsb = 5, its = "%TMEMD", title = "Massbus data parity error" },
+  { name = "FMT", lsb = 4, its = "%TMEFS", title = "Format select error" },
+  { name = "MCPE", lsb = 3, its = "%TMEMC", title = "Massbus control parity error" },
+  { name = "RMR", lsb = 2, its = "%TMERM", title = "Register modification refused" },
+  { name = "ILR", lsb = 1, its = "%TMEIR", title = "Illegal register" },
+  { name = "ILF", lsb = 0, its = "%TMEIF", title = "Illegal function" },
+]
+
+[[device.fields]]
+register = "TC"
+fields = [
+  { name = "ACCL", lsb = 15, its = "%TMTAC", title = "Acceleration (not up to speed)" },
+  { name = "FCS", lsb = 14, its = "%TMTFC", title = "Frame count not zero" },
+  { name = "TCW", lsb = 13, its = "%TMTSA", title = "Selected slave changed" },
+  { name = "EAODTE", lsb = 12, its = "%TMTEA", title = "Abort on data transfer error" },
+  { name = "DEN", lsb = 8, width = 3, its = "%TMTDS", title = "Density select" },
+  { name = "FMT", lsb = 4, width = 4, its = "%TMTFS", title = "Format select" },
+  { name = "EVPAR", lsb = 3, its = "%TMTEP", title = "Even parity" },
+  { name = "SLAVE", lsb = 0, width = 3, its = "%TMTTS", title = "Transport select" },
+]
+
+[[device.values]]
+register = "CS1"
+field = "CMD"
+values = [
+  { name = "NOP", its = "%TMNOP", value = 0o1 },
+  { name = "UNLOAD", its = "%TMUNL", value = 0o3 },
+  { name = "REWIND", its = "%TMREW", value = 0o7 },
+  { name = "CLEAR", its = "%TMCLR", value = 0o11 },
+  { name = "ERASE", its = "%TMER3", value = 0o25 },
+  { name = "WTM", its = "%TMWTM", value = 0o27 },
+  { name = "SPACEF", its = "%TMSPF", value = 0o31 },
+  { name = "SPACER", its = "%TMSPR", value = 0o33 },
+  { name = "WCHKF", its = "%TMWCF", value = 0o51 },
+  { name = "WCHKR", its = "%TMWCR", value = 0o57 },
+  { name = "WRITE", its = "%TMWRT", value = 0o61 },
+  { name = "READF", its = "%TMRDF", value = 0o71 },
+  { name = "READR", its = "%TMRDR", value = 0o77 },
+]
+
+[[device.values]]
+register = "TC"
+field = "FMT"
+values = [
+  { name = "CORE_DUMP", its = "%TMFCD", value = 0 },
+  { name = "INDUSTRY", its = "%TMFIC", value = 3 },
+]
+
+[[device]]
+name = "dz11"
+title = "DZ11 asynchronous multiplexer (8 lines)"
+source = "dz11.10"
+registers = [
+  { name = "CSR", its = "%DZRCS", offset = 0o0, title = "Control and status" },
+  { name = "RBUF", its = "%DZRDR", offset = 0o2, title = "Receiver buffer (read); line parameters (write)" },
+  { name = "TCR", its = "%DZRTC", offset = 0o4, title = "Transmitter control, data terminal ready" },
+  { name = "MSR", its = "%DZRMS", offset = 0o6, title = "Modem status (read); transmitter data (write)" },
+]
+
+[[device.fields]]
+register = "CSR"
+fields = [
+  { name = "MAINT", lsb = 3, its = "%DZCMN", title = "Maintenance" },
+  { name = "CLR", lsb = 4, its = "%DZCCL", title = "Clear" },
+  { name = "MSE", lsb = 5, its = "%DZCMS", title = "Master scan enable" },
+  { name = "RIE", lsb = 6, its = "%DZCRE", title = "Receiver interrupt enable" },
+  { name = "RDONE", lsb = 7, its = "%DZCRD", title = "Receiver done" },
+  { name = "TLINE", lsb = 8, width = 3, its = "%DZLM", title = "Transmit line number" },
+  { name = "SAE", lsb = 12, its = "%DZCSE", title = "Silo alarm enable" },
+  { name = "SA", lsb = 13, its = "%DZCSA", title = "Silo alarm" },
+  { name = "TIE", lsb = 14, its = "%DZCTE", title = "Transmitter interrupt enable" },
+  { name = "TRDY", lsb = 15, its = "%DZCTR", title = "Transmitter ready" },
+]
+
+[[device.fields]]
+register = "RBUF"
+fields = [
+  { name = "CHAR", lsb = 0, width = 8, its = "%DZDCM", title = "Character" },
+  { name = "LINE", lsb = 8, width = 3, its = "%DZLM", title = "Line number" },
+  { name = "PE", lsb = 12, its = "%DZDPE", title = "Parity error" },
+  { name = "FE", lsb = 13, its = "%DZDFE", title = "Framing error (break)" },
+  { name = "OVR", lsb = 14, its = "%DZDOR", title = "Overrun" },
+  { name = "VALID", lsb = 15, its = "%DZDDV", title = "Data valid" },
+  { name = "LPR_LINE", lsb = 0, width = 3, its = "%DZLLM", title = "LPR: line number" },
+  { name = "LPR_LEN", lsb = 3, width = 2, title = "LPR: character length" },
+  { name = "LPR_STOP", lsb = 5, its = "%DZLSC", title = "LPR: stop code" },
+  { name = "LPR_PAR", lsb = 6, its = "%DZLPY", title = "LPR: parity enable" },
+  { name = "LPR_ODD", lsb = 7, its = "%DZLOP", title = "LPR: odd parity" },
+  { name = "LPR_SPEED", lsb = 8, width = 4, title = "LPR: speed code" },
+  { name = "LPR_RXON", lsb = 12, its = "%DZLRO", title = "LPR: receiver on" },
+]
+
+[[device.fields]]
+register = "MSR"
+fields = [
+  { name = "RI", lsb = 0, width = 8, its = "%DZMRI", title = "Ring detect" },
+  { name = "CD", lsb = 8, width = 8, its = "%DZMCD", title = "Carrier detect" },
+  { name = "TDR_CHAR", lsb = 0, width = 8, its = "%DZTCM", title = "TDR: character" },
+  { name = "TDR_BRK", lsb = 8, width = 8, its = "%DZTBM", title = "TDR: break" },
+]
+
+[[device]]
+name = "ch11"
+title = "CH11 Chaosnet interface"
+source = "ch11.defs1"
+base_instance = "chaos"
+registers = [
+  { name = "CSR", its = "CAICSR", offset = 0o0, adapter_in_its = true, title = "Command and status" },
+  { name = "MYN", its = "CAIMYN", offset = 0o2, adapter_in_its = true, title = "My host number (read); write buffer (write)" },
+  { name = "RBF", its = "CAIRBF", offset = 0o4, adapter_in_its = true, title = "Read buffer" },
+  { name = "RBC", its = "CAIRBC", offset = 0o6, adapter_in_its = true, title = "Receive bit count" },
+  { name = "XMT", its = "CAIXMT", offset = 0o12, adapter_in_its = true, title = "Read: start the transmission; gives my host number" },
+]
+
+[[device.fields]]
+register = "CSR"
+fields = [
+  { name = "BSY", lsb = 0, its = "%CABSY", title = "Transmit busy (R)" },
+  { name = "LUP", lsb = 1, its = "%CALUP", title = "Loop back (R/W)" },
+  { name = "SPY", lsb = 2, its = "%CASPY", title = "Receive messages for any destination (R/W)" },
+  { name = "RCL", lsb = 3, its = "%CARCL", title = "Clear the receiver (W)" },
+  { name = "REN", lsb = 4, its = "%CAREN", title = "Receive interrupt enable (R/W)" },
+  { name = "TEN", lsb = 5, its = "%CATEN", title = "Transmit interrupt enable (R/W)" },
+  { name = "TAB", lsb = 6, its = "%CATAB", title = "Transmit aborted (R)" },
+  { name = "TDN", lsb = 7, its = "%CATDN", title = "Transmit done (R)" },
+  { name = "TCL", lsb = 8, its = "%CATCL", title = "Clear the transmitter (W)" },
+  { name = "LOS", lsb = 9, width = 4, its = "$CALOS", bp = true, title = "Lost count (R)" },
+  { name = "RST", lsb = 13, its = "%CARST", title = "I/O reset (W)" },
+  { name = "ERR", lsb = 14, its = "%CAERR", title = "CRC error (R)" },
+  { name = "RDN", lsb = 15, its = "%CARDN", title = "Receive done (R)" },
+]
+
+[[device]]
+name = "lhdh"
+title = "ACC LH/DH IMP interface (input and output side)"
+source = "lhdh.defs5"
+base_instance = "imp"
+registers = [
+  { name = "ICS", its = "%LHICS", offset = 0o0, title = "Input control and status" },
+  { name = "IDB", its = "%LHIDB", offset = 0o2, title = "Input data buffer" },
+  { name = "ICA", its = "%LHICA", offset = 0o4, title = "Input current word address" },
+  { name = "IWC", its = "%LHIWC", offset = 0o6, title = "Input word count" },
+  { name = "OCS", its = "%LHOCS", offset = 0o10, title = "Output control and status" },
+  { name = "ODB", its = "%LHODB", offset = 0o12, title = "Output data buffer" },
+  { name = "OCA", its = "%LHOCA", offset = 0o14, title = "Output current word address" },
+  { name = "OWC", its = "%LHOWC", offset = 0o16, title = "Output word count" },
+]
+
+[[device.fields]]
+register = "ICS"
+fields = [
+  { name = "ERR", lsb = 15, its = "%LHERR", title = "Error present" },
+  { name = "NXM", lsb = 14, its = "%LHNXM", title = "Nonexistent memory on DMA" },
+  { name = "EOM", lsb = 13, its = "%LHEOM", title = "End of message from the IMP" },
+  { name = "HR", lsb = 11, its = "%LHHR", title = "Host ready (relay closed)" },
+  { name = "INR", lsb = 10, its = "%LHINR", title = "IMP not ready" },
+  { name = "MRE", lsb = 9, its = "%LHMRE", title = "Master ready error" },
+  { name = "IBF", lsb = 8, its = "%LHIBF", title = "Input buffer full" },
+  { name = "RDY", lsb = 7, its = "%LHRDY", title = "Device ready" },
+  { name = "IE", lsb = 6, its = "%LHIE", title = "Interrupt enable" },
+  { name = "A17", lsb = 5, its = "%LHA17", title = "Address bit 17" },
+  { name = "A16", lsb = 4, its = "%LHA16", title = "Address bit 16" },
+  { name = "SE", lsb = 3, its = "%LHSE", title = "Store enable" },
+  { name = "HRC", lsb = 2, its = "%LHHRC", title = "Host ready relay control" },
+  { name = "RST", lsb = 1, its = "%LHRST", title = "Interface reset" },
+  { name = "GO", lsb = 0, its = "%LHGO", title = "Start the DMA transfer" },
+]
+
+[[device.fields]]
+register = "OCS"
+fields = [
+  { name = "ERR", lsb = 15, its = "%LHERR", title = "Error present" },
+  { name = "NXM", lsb = 14, its = "%LHNXM", title = "Nonexistent memory on DMA" },
+  { name = "WC0", lsb = 13, its = "%LHWC0", title = "Output word count is zero" },
+  { name = "MRE", lsb = 9, its = "%LHMRE", title = "Master ready error" },
+  { name = "OBE", lsb = 8, its = "%LHOBE", title = "Output buffer empty" },
+  { name = "RDY", lsb = 7, its = "%LHRDY", title = "Device ready" },
+  { name = "IE", lsb = 6, its = "%LHIE", title = "Interrupt enable" },
+  { name = "A17", lsb = 5, its = "%LHA17", title = "Address bit 17" },
+  { name = "A16", lsb = 4, its = "%LHA16", title = "Address bit 16" },
+  { name = "BB", lsb = 3, its = "%LHBB", title = "Bus back (loop back)" },
+  { name = "ELB", lsb = 2, its = "%LHELB", title = "Send end of message at the end" },
+  { name = "RST", lsb = 1, its = "%LHRST", title = "Interface reset" },
+  { name = "GO", lsb = 0, its = "%LHGO", title = "Start the DMA transfer" },
+]
+
+# The devices of the configuration DB (docs/emulator.md, "Unibus
+# devices"): adapter, base address, vector, and the request line.
+[[instance]]
+name = "disk"
+device = "rh11"
+adapter = 1
+base = 0o776700
+vector = 0o254
+br = 6
+sources = "rh11.defs48: %HRCS1, PHVEC (\"level 6 (high priority) on UBA #1\"); its.1652: UBAQIT"
+its_base = { symbol = "%HRCS1", file = "rh11.defs48" }
+its_vector = { symbol = "PHVEC", file = "rh11.defs48" }
+
+[[instance]]
+name = "tape"
+device = "tm03"
+adapter = 3
+base = 0o772440
+vector = 0o224
+br = 6
+sources = "tm03s.defs5: %TMBAS, %TMVEC (\"level 6 (high priority) on UBA #3\"); its.1652: UBAIIT"
+its_base = { symbol = "%TMBAS", file = "tm03s.defs5" }
+its_vector = { symbol = "%TMVEC", file = "tm03s.defs5" }
+
+[[instance]]
+name = "dz0"
+device = "dz11"
+adapter = 3
+base = 0o760010
+vector = 0o340
+br = 5
+sources = "config.202: DZ0BA; its.1652: UBAIIT (340 receive, 344 transmit); ITS sets TTYCHN as the low PI level of UBA 3 (its.1652, IOWRI TT,UBASTA)"
+
+[[instance]]
+name = "chaos"
+device = "ch11"
+adapter = 3
+base = 0o764140
+vector = 0o270
+br = 5
+sources = "ch11.defs1: CAICSR; its.1652: UBAIIT (270, and 230); ITS sets TTYCHN as the low PI level of UBA 3, for Chaos and TTYs (its.1652)"
+
+[[instance]]
+name = "imp"
+device = "lhdh"
+adapter = 3
+base = 0o767600
+vector = 0o250
+br = 6
+sources = "lhdh.defs5: %LHBAS, %LHVEC (input; output at +4), %LHPRI==6; its.1652: UBAIIT"
+its_base = { symbol = "%LHBAS", file = "lhdh.defs5" }
+its_vector = { symbol = "%LHVEC", file = "lhdh.defs5" }

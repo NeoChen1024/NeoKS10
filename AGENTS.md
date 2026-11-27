@@ -30,6 +30,7 @@ source.
 3. The behaviour of other emulators (KLH10, the `pdp10-ks` simulator).
 4. Inside this repository:
    - `spec/instructions.*` is the only definition of the instruction set.
+   - `spec/devices.*` is the only definition of the I/O device registers.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
    - The software processor in `emu/` is the model for the logic in `rtl/`.
 
@@ -80,7 +81,8 @@ directory that `.gitignore` excludes.
 
 `make gen` writes files from `spec/`: `rtl/gen/`, `tb/gen/`,
 `emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
-`docs/regmap.md` and `docs/instructions.md`. These files are in git, so that a build does not need
+`emu/ks10/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
+`docs/devices.md`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
 fails.
 

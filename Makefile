@@ -21,6 +21,7 @@ COSIM_SEEDS ?= 1 2 3 4 5 6
 gen:
 	$(PYTHON) spec/gen_regmap.py
 	$(PYTHON) spec/gen_instructions.py
+	$(PYTHON) spec/gen_devices.py
 
 # Format, lint, unit tests, and a check that the generated files are current.
 check: check-gen check-py check-rust check-rtl
@@ -31,6 +32,7 @@ ITS_TREE = 3rdparty/its
 check-gen:
 	$(PYTHON) spec/gen_regmap.py --check
 	$(PYTHON) spec/gen_instructions.py --check --its $(ITS_TREE)
+	$(PYTHON) spec/gen_devices.py --check --its $(ITS_TREE)
 
 check-py:
 	$(PYTHON) -m unittest discover -s spec
