@@ -74,6 +74,17 @@ impl Console {
         }
     }
 
+    /// The first instruction count at which [`Console::poll`] can do
+    /// something, if the KS10 does not change `ctyin` (the word
+    /// `CTYIN`) or ring the doorbell.
+    pub fn deadline(&self, ctyin: W36) -> u64 {
+        let mut t = self.service_at.unwrap_or(u64::MAX);
+        if !self.input.is_empty() && ctyin == W36::ZERO {
+            t = t.min(self.next_input_at);
+        }
+        t
+    }
+
     /// The work of the 8080 at instruction `now`. `word` reads a
     /// communication word.
     pub fn poll(&mut self, now: u64, word: impl Fn(u32) -> W36) -> Option<Effect> {
@@ -150,6 +161,11 @@ impl Script {
     pub fn answer(&mut self, prompt: &str, text: &str) {
         self.answers
             .push_back((prompt.as_bytes().to_vec(), text.as_bytes().to_vec()));
+    }
+
+    /// The instruction count of the next answer, if a prompt has come.
+    pub fn due(&self) -> Option<u64> {
+        self.due
     }
 
     /// Call between instructions, at instruction count `now`.

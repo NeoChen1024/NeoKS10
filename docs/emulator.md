@@ -286,8 +286,61 @@ that record on `soft` then repeats the run in software.
   timing.
 - `--realtime` makes the emulator wait so that virtual time does not run
   ahead of the wall clock. It does not change the result of a run, only its
-  speed.
+  speed. While it waits, a command from the terminal or the socket comes
+  in at once.
+- `run` on a terminal without `--script` uses `--realtime`. Other runs
+  (a script, a replay, no terminal) use `--fast`: no wait.
 - The wall clock (for the date of ITS) is a host input of the host layer.
+
+**The idle loop.** If no job can run, ITS runs the null job **[its]**
+(its.1652, NULJOB). The null job puts `AOJA 0,17` into AC 17 and jumps
+there in user mode. The loop adds 1 to AC 0 and jumps to itself until an
+interrupt comes. The `DB` configuration of the `pdp10-ks` build does not
+set `KLH10P`, so its null job has no `IOWRI` to the KLH10 HOST device
+**[its]** (build/pdp10-ks/config.202, `DB` and the defaults).
+
+`Machine::step_idle` does one step. If that step was a pass of the loop,
+it also does the next passes at once, up to the first instruction count
+at which the timer, the 8080 or a device can do something. A pass only
+adds 1 to the AC and to the count, so the state after the passes is the
+same as after the same number of steps. It is not a guess about the
+guest, and the virtual time does not change.
+
+- A pass that sets a flag (the AC at 377777,,777777 or 777777,,777777)
+  is a step.
+- After a step that printed on the CTY, no passes follow. Thus a script
+  and `expect` see the text at the same count as with steps.
+- `Machine::step` has no such shortcut. It stays the model for the RTL.
+- `--no-idle` does steps only. It is for a comparison.
+
+Other emulators **[emulator]**: SIMH (`pdp10-ks`, commit 9556eca0,
+`kx10_cpu.c`) takes an `AOJ` in the ACs as idle and waits for the next
+clock tick of the host. KLH10 (commit 6d733f2a, `dvhost.c`) has a HOST
+device: an ITS with `KLH10P` writes to it in the null job, and the
+emulator waits. Both take the wall clock into the virtual time;
+`neoks10` does not.
+
+**[measured]** 2026-11-27, x86-64 host, release build:
+
+- `cpu halt` and `cpu show` on an idle ITS after the login: PC 17 in user
+  mode, AC 17 `344000,,000017` (`AOJA 0,17`), AC 0 `254200,,031500`, and
+  `254200,,000000` (`JRST 4,`) in ACs 1 to 16.
+- The ITS test `idle_skip_boots_its_the_same` (`emu/ks10/tests/idle.rs`)
+  boots ITS twice and lists `SYS;`. 118406612 of 138001000 instructions
+  were idle passes. The state of the two machines was the same at each
+  check, and the two disk images were the same at the end.
+- The boot script of [Scripts](#scripts), with `--fast`: 6.13 s wall
+  time with `--no-idle`, 1.01 s with the idle loop. The record files of
+  the two runs and of the run before this change were the same, and so
+  was the CTY output.
+- The same script without `quit`, with 30 s of idle ITS after the
+  listing, with `--realtime`: 167.5 s wall time in both runs (the virtual
+  time). The CPU time in user mode was 8.52 s with `--no-idle` and 1.50 s
+  with the idle loop, 5.1 % and 0.9 % of one core. Method: GNU `time`.
+- Most of the boot time of ITS is a wait: the system job tries to get
+  the time from the network (`NETIME`), and no host answers. With
+  `--realtime`, the boot thus takes about 136 s of wall time. That is the
+  virtual time of the boot.
 
 ### Command line
 
@@ -295,8 +348,8 @@ The program `neoks10` has subcommands.
 
 ```
 neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
-            [--replay FILE] [--script FILE] [--realtime]
-            [--trace FILE] [--cpu soft|pl]
+            [--replay FILE] [--script FILE] [--realtime | --fast]
+            [--no-idle] [--trace FILE] [--cpu soft|pl]
 neoks10 console [--control PATH]
 neoks10 ctl [--control PATH] [--json] COMMAND...
 neoks10 help [--markdown]

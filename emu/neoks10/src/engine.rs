@@ -167,6 +167,8 @@ struct Expect {
 pub struct Options {
     pub ns_per_instruction: u64,
     pub realtime: bool,
+    /// Do the passes of the idle loop at once (`Machine::step_idle`).
+    pub idle: bool,
     pub record: Option<PathBuf>,
     pub replay: Option<PathBuf>,
 }
@@ -188,6 +190,8 @@ pub struct Engine {
     /// `--realtime`.
     base: (Instant, u64),
     script: Option<ScriptRun>,
+    /// The passes of the idle loop done at once.
+    skipped: u64,
     pub quit: bool,
     /// The exit status of `run`: 1 after a script error.
     pub exit: i32,
@@ -236,6 +240,7 @@ impl Engine {
             images: Default::default(),
             base: (Instant::now(), 0),
             script: None,
+            skipped: 0,
             quit: false,
             exit: 0,
         })
@@ -587,11 +592,18 @@ impl Engine {
                 self.stopped.as_deref().unwrap_or("not started")
             )
         };
+        let acs: Vec<String> = m.ac.iter().map(|w| w.halves_text()).collect();
+        let ac_text: String = acs
+            .chunks(4)
+            .enumerate()
+            .map(|(k, c)| format!("\nAC {:02o}: {}", 4 * k, c.join("  ")))
+            .collect();
         let text = format!(
-            "PC {}  flags {:06o}  {state}\ninstructions {}  paging {}  PI {}\nEBR {}  UBR {}",
+            "PC {}  flags {:06o}  {state}\ninstructions {} ({} idle passes at once)  paging {}  PI {}\nEBR {}  UBR {}{ac_text}",
             m.pc,
             m.flags.0,
             m.count,
+            self.skipped,
             if m.paging { "on" } else { "off" },
             m.pi.word().halves_text(),
             m.ebr.halves_text(),
@@ -605,6 +617,8 @@ impl Engine {
                 "running": self.running,
                 "stopped": self.stopped,
                 "instructions": m.count,
+                "idle_skipped": self.skipped,
+                "ac": acs,
                 "paging": m.paging,
             }),
         )
@@ -924,7 +938,12 @@ impl Engine {
             let watch = self.script.as_ref().is_some_and(|r| r.wait.is_some());
             while self.m.count < end {
                 let before = self.m.console.output.len();
-                if let Err(s) = self.m.step() {
+                let r = if self.opts.idle {
+                    self.m.step_idle(end).map(|n| self.skipped += n)
+                } else {
+                    self.m.step()
+                };
+                if let Err(s) = r {
                     self.note_stop(s);
                     break;
                 }
@@ -938,8 +957,22 @@ impl Engine {
                 let ns = (self.m.count - self.base.1).saturating_mul(self.opts.ns_per_instruction);
                 let due = self.base.0 + Duration::from_nanos(ns);
                 let now = Instant::now();
+                // Wait for the wall clock, or for the next request.
                 if due > now {
-                    std::thread::sleep(due - now);
+                    if !connected {
+                        std::thread::sleep(due - now);
+                        continue;
+                    }
+                    match rx.recv_timeout(due - now) {
+                        Ok(r) => {
+                            self.request(r);
+                            if self.quit {
+                                return;
+                            }
+                        }
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => connected = false,
+                    }
                 }
             }
         }
@@ -1029,6 +1062,7 @@ mod tests {
         Options {
             ns_per_instruction: 1000,
             realtime: false,
+            idle: true,
             record,
             replay,
         }

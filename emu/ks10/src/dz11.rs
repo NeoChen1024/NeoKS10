@@ -196,6 +196,21 @@ impl Dz11 {
         self.update_tx(now, events);
     }
 
+    /// The first instruction count at which [`Dz11::poll`] can change
+    /// the state, if the processor does no I/O: the next receive poll,
+    /// or the end of a busy transmitter that the scanner waits for.
+    pub fn deadline(&self) -> u64 {
+        let mut t = self.last_poll + CHAR_TIME;
+        if self.csr & d::csr::TRDY as u16 == 0 && self.csr & d::csr::MSE as u16 != 0 {
+            for (n, l) in self.lines.iter().enumerate() {
+                if self.tcr & (1 << n) != 0 {
+                    t = t.min(l.busy_until);
+                }
+            }
+        }
+        t
+    }
+
     pub fn read(&mut self, off: u32) -> u16 {
         match off {
             d::CSR => self.csr,

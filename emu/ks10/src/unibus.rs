@@ -348,6 +348,16 @@ impl Io {
         }
     }
 
+    /// The first instruction count at which [`Io::poll`] or
+    /// [`Io::run_events`] can change the state, if the processor does no
+    /// I/O.
+    pub fn deadline(&self) -> u64 {
+        self.events
+            .iter()
+            .map(|e| e.0)
+            .fold(self.dz.deadline(), u64::min)
+    }
+
     /// Device work between instructions: the DZ11 receivers.
     pub fn poll(&mut self, now: u64) {
         self.dz.poll(now, &mut self.events);

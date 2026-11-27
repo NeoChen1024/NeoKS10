@@ -751,6 +751,81 @@ impl Machine {
         Ok(())
     }
 
+    /// The idle loop, if the processor is in it: the AC that the loop
+    /// counts in, and the value of that AC.
+    ///
+    /// The loop is the one of the ITS null job **[its]** (its.1652,
+    /// NULJOB): `MOVE 17,[AOJA 17]` and a jump to 17, so that AC 17 holds
+    /// `AOJA 0,17`, which adds 1 to AC 0 and jumps to itself. The test
+    /// takes any `AOJA` in the ACs that jumps to itself and does not count
+    /// in its own AC.
+    fn idle_loop(&self) -> Option<(usize, W36)> {
+        let pc = self.pc.get() as usize;
+        if pc >= 16
+            || self.oneproc != OneProc::Off
+            || self.flags.0 & (Flags::TRAP1 | Flags::TRAP2) != 0
+        {
+            return None;
+        }
+        let w = self.ac[pc];
+        let i = Inst::new(w);
+        // Bits 13 to 17: no indirect, no index; E is the PC.
+        let jumps_to_itself = w.field(13, 17) == 0 && w.rh().get() as usize == pc;
+        (ins::OPS[usize::from(i.op)].name == "AOJA" && jumps_to_itself && i.ac != pc)
+            .then(|| (i.ac, self.ac[i.ac]))
+    }
+
+    /// One [`Machine::step`]. If the step was a pass of the idle loop
+    /// ([`Machine::idle_loop`]), also do the next passes up to the first
+    /// instruction count at which the timer, the 8080 or a device can do
+    /// something, and at most to `limit`. Returns the number of passes done
+    /// at once.
+    ///
+    /// The state after it is the same as after the same number of steps:
+    /// each pass only adds 1 to the AC and to the count. Passes that would
+    /// set a flag (the AC at 377777,,777777 or 777777,,777777) are done as
+    /// steps. The step before the passes makes sure that the devices have
+    /// seen the last I/O of the processor. The RTL has no such shortcut;
+    /// `step` stays the model for it.
+    pub fn step_idle(&mut self, limit: u64) -> Result<u64, Stop> {
+        let before = self.idle_loop();
+        let start = self.count;
+        let printed = self.console.output.len();
+        self.step()?;
+        // A step that printed is not followed by passes, so that a reader
+        // of the CTY output (a script, `expect`) sees the text at the same
+        // count as with steps.
+        if self.console.output.len() != printed {
+            return Ok(0);
+        }
+        let Some((a, x)) = before else {
+            return Ok(0);
+        };
+        // The step was the pass if it added 1 to the AC and the loop is
+        // still there. Then no interrupt request can be acceptable: the
+        // step tested the same requests before the pass, and the pass
+        // changes none.
+        let x = W36::wrap(x.get() + 1);
+        if self.count != start + 1 || self.idle_loop() != Some((a, x)) {
+            return Ok(0);
+        }
+        let deadline = limit
+            .min(self.timer.last_tick + timer::INSTRUCTIONS_PER_MS)
+            .min(
+                self.console
+                    .deadline(self.mem[crate::console::CTYIN as usize]),
+            )
+            .min(self.io.deadline());
+        let to_flag = |top: u64| top.wrapping_sub(x.get()) & W36::MASK;
+        let n = deadline
+            .saturating_sub(self.count)
+            .min(to_flag(W36::SIGN - 1))
+            .min(to_flag(W36::MASK));
+        self.ac[a] = W36::wrap(x.get() + n);
+        self.count += n;
+        Ok(n)
+    }
+
     /// Do instructions until the processor stops or `limit` steps are
     /// done.
     pub fn run(&mut self, limit: u64) -> Stop {
@@ -1082,5 +1157,132 @@ mod tests {
             m.ac[1],
             W36::from_halves(Half::wrap(0o777770), Half::wrap(0o1777))
         );
+    }
+
+    /// The state that a pass of the idle loop can change, and the state of
+    /// the timer, the 8080 and the DZ11 that a skipped pass must not miss.
+    fn idle_state(m: &Machine) -> String {
+        let z = &m.io.dz;
+        let lines: Vec<_> = z
+            .lines
+            .iter()
+            .map(|l| (l.input.len(), l.busy_until))
+            .collect();
+        format!(
+            "{} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {} {} {:?} {} {} {} {:?}",
+            m.count,
+            m.pc,
+            m.flags,
+            m.ac,
+            m.apr,
+            m.pi,
+            m.timer,
+            m.io.events,
+            m.console,
+            m.mem[crate::console::CTYIN as usize],
+            z.csr,
+            z.tcr,
+            z.silo,
+            z.rx_irq,
+            z.tx_irq,
+            z.tick_pending,
+            lines
+        )
+    }
+
+    /// The ITS null job loop (its.1652, NULJOB): AOJA 0,17 in AC 17. AC 0
+    /// overflows after 40000 passes. The sources of work have times that
+    /// differ, so that each one ends a skip: the timer ticks at 1300 +
+    /// 1000 k, the DZ11 polls at 1000 k (line 4 has input), the transmitter
+    /// of line 2 is busy to 3500, and a tape event is at 2650.
+    fn idle_machine() -> Machine {
+        use crate::devregs::dz11 as d;
+        let mut m = Machine::new();
+        m.ac[0o17] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o17));
+        m.ac[0] = W36::wrap(W36::SIGN - 40_000);
+        m.pc = Half::wrap(0o17);
+        m.timer.period = W36::wrap(5 << 12);
+        m.timer.ttg = m.timer.period;
+        m.timer.last_tick = 300;
+        m.io.events.push((2650, crate::unibus::Event::Tape(999)));
+        let z = &mut m.io.dz;
+        z.csr = d::csr::MSE as u16;
+        z.tcr = 1 << 2;
+        z.lines[2].busy_until = 3500;
+        z.lines[4].lpr = d::rbuf::LPR_RXON as u16;
+        z.lines[4].input.extend(b"xyz");
+        m
+    }
+
+    // A skipped pass gives the same state as a step: compare a machine
+    // that steps with one that skips, at each count where the skipping one
+    // stops. The CTY input starts at the first stop (700), and at each
+    // stop both take the CTY character, so that the 8080 gives the next
+    // one INPUT_GAP (1000) after the last: at 700 + 1000 k, times that no
+    // other source has. The other limits are at 700 + 1777 k.
+    #[test]
+    fn idle_skip_is_exact() {
+        let mut a = idle_machine();
+        let mut b = idle_machine();
+        let mut skipped = 0;
+        let mut limit = 700;
+        let mut printed = 0;
+        let mut bell = 2450;
+        let ctyin = crate::console::CTYIN as usize;
+        while b.count < 60_000 {
+            let n = b.step_idle(limit).unwrap();
+            skipped += n;
+            if b.console.output.len() != printed {
+                printed = b.console.output.len();
+                assert_eq!(n, 0, "passes after the step that printed");
+            }
+            while a.count < b.count {
+                a.step().unwrap();
+            }
+            assert_eq!(idle_state(&a), idle_state(&b));
+            a.mem[ctyin] = W36::ZERO;
+            b.mem[ctyin] = W36::ZERO;
+            if b.count == 700 {
+                a.console.input.extend(b"abcdefghijklmnopqrstuvwxyz");
+                b.console.input.extend(b"abcdefghijklmnopqrstuvwxyz");
+            }
+            // The doorbell about every 5000 steps: the 8080 prints a
+            // character OUTPUT_DELAY after it.
+            if b.count >= bell {
+                bell = b.count + 5000;
+                for m in [&mut a, &mut b] {
+                    m.mem[crate::console::CTYOT as usize] = W36::wrap(1 << 8 | 0o101);
+                    m.console.doorbell(m.count);
+                }
+            }
+            if b.count >= limit {
+                limit += 1777;
+            }
+        }
+        // The pass that overflows AC 0 is a step: it sets the flags. After
+        // it, TRAP1 stays set (paging is off) and no pass is skipped.
+        assert!(b.flags.has(Flags::AROV));
+        assert!(skipped > 39_000, "{skipped} passes skipped");
+        assert!(b.io.dz.lines[4].input.is_empty());
+        assert!(b.console.input.is_empty());
+        assert!(b.io.events.is_empty());
+        assert!(printed > 5, "{printed} characters printed");
+    }
+
+    // Not the idle loop: an AOJA that counts in its own AC, and an AOJA
+    // at the PC that jumps elsewhere.
+    #[test]
+    fn idle_skip_needs_the_loop() {
+        let mut m = Machine::new();
+        m.ac[0o17] = W36::from_halves(Half::wrap(0o344740), Half::wrap(0o17));
+        m.pc = Half::wrap(0o17);
+        assert_eq!(m.step_idle(1000).unwrap(), 0);
+        let mut m = Machine::new();
+        m.ac[0o16] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o17));
+        m.ac[0o17] = W36::from_halves(Half::wrap(0o344000), Half::wrap(0o16));
+        m.pc = Half::wrap(0o17);
+        assert_eq!(m.step_idle(1000).unwrap(), 0);
+        assert_eq!(m.step_idle(1000).unwrap(), 0);
+        assert_eq!(m.count, 2);
     }
 }
