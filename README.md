@@ -66,8 +66,11 @@ parts of this project is not a proof that one of them is correct.
 1. **External references.** The ITS microcode sources, the DEC manuals, the
    DEC KS10 diagnostics, other emulators, and ITS itself: the system must
    boot and must build itself from source.
-2. **The software processor.** It must agree with the external references.
-3. **The logic.** It must agree with the software processor at each
+2. **The microcode-level model.** It runs the microcode and the 8080
+   program of the external references on a model of the data path.
+3. **The software processor.** It must agree with the microcode-level
+   model and with the external references.
+4. **The logic.** It must agree with the microcode-level model at each
    completed instruction in co-simulation.
 
 | When | Tests |

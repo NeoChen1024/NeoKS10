@@ -56,18 +56,18 @@ tapes"). Not known yet:
 ## Instructions that the differential run does not check
 
 The differential run (docs/emulator.md, "Differential runs") does not
-compare these with SIMH. For each one, the result of `emu/ks10` has no
-second implementation yet:
+compare these with a reference emulator, or the two reference emulators
+disagree:
 
 - Floating point instructions with unnormalized operands, and FAD with an
   exponent difference of 61 or more. The KS10 microcode handles them in
-  its own way (`flt.5`), and SIMH follows the KL10.
-- FDV and its forms: with normalized operands, `emu/ks10` and SIMH differ
-  in bit 35 of 744 of 2075 quotients (docs/discrepancies.md, "FDV: the
-  quotient"). Which side follows `flt.5` (FDV6 to SNORM) is not known.
-  DSKCB checks some quotients; its test that SIMH fails has an
-  unnormalized divisor.
-- CIRC: only one unit test, with a value from `simple.42`.
+  its own way (`flt.5`). SIMH follows the KL10; KLH10 is not yet run
+  with such operands.
+- FDV and its forms with normalized operands: `emu/ks10` and KLH10 agree,
+  and SIMH differs in bit 35 of 744 of 2075 quotients
+  (docs/discrepancies.md, "FDV: the quotient"). Emulators do not decide
+  the case. Which side follows `flt.5` (FDV6 to SNORM) is not known until
+  the microcode-level model runs it.
 
 ## The microcode-level model
 

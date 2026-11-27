@@ -1,9 +1,11 @@
 //! The random differential run against the reference emulator
 //! (docs/emulator.md, "Differential runs").
 //!
-//! KS10_ORACLE names the `pdp10-ks` program of SIMH with the trace hook of
-//! oracle/sims-trace.patch (`make oracle` builds it). Without it, the test
-//! prints that it did not run, and passes.
+//! The reference emulators have the trace hooks of oracle/ (`make oracle`
+//! builds them). KS10_ORACLE names the `pdp10-ks` program of SIMH, and
+//! KS10_ORACLE_KLH10 the `kn10-ks-its` program of KLH10. The test runs
+//! the cases against each one that is named. Without either, it prints
+//! that it did not run, and passes.
 //!
 //! Each case is one instruction at 1000, then two HALTs (for a skip). The
 //! ACs, the word at E and the word at E + 1 get values first, in both
@@ -127,15 +129,12 @@ fn excluded(op: &ins::Op) -> bool {
     const SPACES: [&str; 8] = [
         "XCTR", "XCTRI", "UMOVE", "UMOVEM", "IORDI", "IORD", "IOWR", "IOWRI",
     ];
-    // SIMH has no CIRC for the KS10 (docs/discrepancies.md, "CIRC").
-    const MISSING: [&str; 1] = ["CIRC"];
     op.class != Class::Inst
         || op.dram.a == ins::a::IOT
         || op.dram.j == "IOT710"
         || JUMPS.contains(&op.dram.j)
         || POINTERS.contains(&op.dram.j)
         || SPACES.contains(&op.dram.j)
-        || MISSING.contains(&op.dram.j)
 }
 
 /// The floating point instructions, by microcode entry: their operands
@@ -168,9 +167,53 @@ fn count(e: u32) -> i32 {
     if e & 0o400000 != 0 { low - 256 } else { low }
 }
 
-/// Cases where SIMH does not do what the microcode does, from the
-/// inputs. Each arm has its entry in docs/discrepancies.md.
-fn skip(c: &Case) -> Option<&'static str> {
+/// Cases where a reference emulator does not do what the microcode does,
+/// from the inputs. Each arm has its entry in docs/discrepancies.md.
+fn skip(c: &Case, r: Ref) -> Option<&'static str> {
+    match r {
+        Ref::Simh => skip_simh(c),
+        Ref::Klh10 => skip_klh10(c),
+    }
+}
+
+fn skip_klh10(c: &Case) -> Option<&'static str> {
+    let op = &ins::OPS[(c.inst >> 27) as usize];
+    let e = (c.inst & 0o777777) as u32;
+    let a = ((c.inst >> 23) & 0o17) as usize;
+    let word = |x: u32| {
+        if x < 0o20 {
+            c.ac[x as usize]
+        } else {
+            c.mem[&x]
+        }
+    };
+    match op.dram.j {
+        // "HLLE in KLH10": a positive source with a bit of 1 to 3 set.
+        // HLLEI has the source 0,,E.
+        // "DIV in KLH10: a high word equal to the divisor" (the special
+        // case of kn10ops.c, ddivstep).
+        "DIV" => {
+            let signed = |w: u64| (w as i64) << 28 >> 28;
+            let lo = c.ac[(a + 1) & 0o17];
+            let d = (i128::from(signed(c.ac[a])) << 35) | i128::from(lo & 0o377777_777777);
+            let v = if op.code & 0o3 == 1 {
+                u64::from(e)
+            } else {
+                word(e)
+            };
+            let dv = i128::from(signed(v)).abs();
+            let high = d.abs() >> 35;
+            (dv != 0 && high == dv).then_some("DIV high word equal to the divisor")
+        }
+        "HLLE" if op.code != 0o531 => {
+            let src = if op.code == 0o532 { c.ac[a] } else { word(e) };
+            (src >> 35 == 0 && (src >> 32) & 0o7 != 0).then_some("HLLE bits 1 to 3")
+        }
+        _ => None,
+    }
+}
+
+fn skip_simh(c: &Case) -> Option<&'static str> {
     let op = &ins::OPS[(c.inst >> 27) as usize];
     let e = (c.inst & 0o777777) as u32;
     let a = ((c.inst >> 23) & 0o17) as usize;
@@ -187,17 +230,19 @@ fn skip(c: &Case) -> Option<&'static str> {
         }
     };
     match op.dram.j {
+        // "CIRC".
+        "CIRC" => Some("CIRC"),
         // "FDV: the quotient".
         "FDV" => Some("FDV"),
-        // "IMUL: a negative product that does not fit".
         // "IDIV of -2^35 by 1 or -1".
         "IDIV" => (c.ac[a] == 1 << 35 && signed(operand()).unsigned_abs() == 1)
             .then_some("IDIV -2^35 by 1 or -1"),
-        // "DIV of -2^70".
+        // "DIV of -2^70 by 0".
         "DIV" => {
             (c.ac[a] == 1 << 35 && c.ac[(a + 1) & 0o17] & 0o377777_777777 == 0 && operand() == 0)
                 .then_some("DIV of -2^70 by 0")
         }
+        // "IMUL: a negative product that does not fit".
         "IMUL" => {
             let p = i128::from(signed(c.ac[a])) * i128::from(signed(operand()));
             let m = p.unsigned_abs();
@@ -212,6 +257,7 @@ fn skip(c: &Case) -> Option<&'static str> {
     }
 }
 
+#[derive(Clone)]
 struct Case {
     seed: u64,
     inst: u64,
@@ -243,7 +289,10 @@ impl Case {
             let acs = [a as u32, ((a + 1) & 0o17) as u32];
             let overlap = float_kind(op).is_some()
                 && (acs.contains(&y) || acs.contains(&((y + 1) & 0o777777)));
-            if !(CODE - 1..CODE + 3).contains(&y) && !overlap {
+            // The HALT writes the halt status block at 500 to 520
+            // (`Machine::halt`; inout.50, WRTHSB). KLH10 does not.
+            let hsb = |x: u32| (0o500..=0o520).contains(&x);
+            if !(CODE - 1..CODE + 3).contains(&y) && !overlap && !hsb(y) && !hsb(y + 1) {
                 break y;
             }
         };
@@ -366,41 +415,146 @@ fn ours(c: &Case) -> Result<Run, String> {
     Ok(Run { records, mem })
 }
 
-/// Run a batch of cases in one run of SIMH. The trace starts at the first
-/// fetch from 1000; a case starts at each record with PC 1000.
-fn simh(simh: &Path, dir: &Path, batch: &[Case]) -> Result<Vec<Run>, String> {
-    let ini = dir.join("batch.ini");
-    let trace = dir.join("batch.trace");
-    let _ = std::fs::remove_file(&trace);
-    let mut s = String::from("set cpu its\n");
-    for c in batch {
-        for (k, a) in c.ac.iter().enumerate() {
-            s += &format!("dep {k:o} {a:o}\n");
-        }
-        for (a, w) in &c.memory() {
-            s += &format!("dep {a:o} {w:o}\n");
-        }
-        s += &format!("dep flags 0\ndep pc {CODE:o}\ngo\necho =end\n");
-        for a in c.mem.keys() {
-            s += &format!("ex {a:o}\n");
+/// A reference emulator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ref {
+    Simh,
+    Klh10,
+}
+
+impl Ref {
+    const ALL: [Ref; 2] = [Ref::Simh, Ref::Klh10];
+
+    fn name(self) -> &'static str {
+        match self {
+            Ref::Simh => "SIMH",
+            Ref::Klh10 => "KLH10",
         }
     }
-    s += "quit\n";
-    std::fs::write(&ini, s).map_err(|e| e.to_string())?;
-    let mut child = Command::new(simh)
+
+    /// The variable that names the program.
+    fn var(self) -> &'static str {
+        match self {
+            Ref::Simh => "KS10_ORACLE",
+            Ref::Klh10 => "KS10_ORACLE_KLH10",
+        }
+    }
+
+    /// The commands for a batch. After each case, the words at E and
+    /// E + 1 are examined.
+    fn script(self, batch: &[Case]) -> String {
+        let mut s = String::new();
+        match self {
+            Ref::Simh => {
+                s += "set cpu its\n";
+                for c in batch {
+                    for (k, a) in c.ac.iter().enumerate() {
+                        s += &format!("dep {k:o} {a:o}\n");
+                    }
+                    for (a, w) in &c.memory() {
+                        s += &format!("dep {a:o} {w:o}\n");
+                    }
+                    s += &format!("dep flags 0\ndep pc {CODE:o}\ngo\necho =end\n");
+                    for a in c.mem.keys() {
+                        s += &format!("ex {a:o}\n");
+                    }
+                }
+                s += "quit\n";
+            }
+            Ref::Klh10 => {
+                // `reset` clears the flags (kn10cpu.c, apr_init).
+                for c in batch {
+                    s += "reset\n";
+                    for (k, a) in c.ac.iter().enumerate() {
+                        s += &format!("deposit {k:o} {a:o}\n");
+                    }
+                    for (a, w) in &c.memory() {
+                        s += &format!("deposit {a:o} {w:o}\n");
+                    }
+                    s += &format!("go {CODE:o}\n");
+                    for a in c.mem.keys() {
+                        s += &format!("examine {a:o}\n");
+                    }
+                }
+                s += "really-quit\n";
+            }
+        }
+        s
+    }
+
+    /// The examined words of each case, from the output.
+    fn mems(self, out: &str) -> Vec<BTreeMap<u32, u64>> {
+        let mut mems = Vec::new();
+        match self {
+            Ref::Simh => {
+                // "ADDR:\tWORD" after each "=end".
+                for part in out.split("=end").skip(1) {
+                    let mut mem = BTreeMap::new();
+                    for line in part.lines() {
+                        if let Some((a, w)) = line.split_once(":\t")
+                            && let (Ok(a), Ok(w)) = (
+                                u32::from_str_radix(a.trim(), 8),
+                                u64::from_str_radix(w.trim(), 8),
+                            )
+                        {
+                            mem.insert(a, w);
+                        }
+                    }
+                    mems.push(mem);
+                }
+            }
+            Ref::Klh10 => {
+                // " ADDR/ WORD" (WORD is N or LH,,RH, then a tab and the
+                // instruction) after each "Starting KN10".
+                for part in out.split("Starting KN10").skip(1) {
+                    let mut mem = BTreeMap::new();
+                    for line in part.lines() {
+                        let Some((a, w)) = line.split_once("/ ") else {
+                            continue;
+                        };
+                        let w = w.split('\t').next().unwrap_or("").trim();
+                        let w = match w.split_once(",,") {
+                            Some((l, r)) => u64::from_str_radix(l, 8)
+                                .ok()
+                                .zip(u64::from_str_radix(r, 8).ok())
+                                .map(|(l, r)| (l << 18) | r),
+                            None => u64::from_str_radix(w, 8).ok(),
+                        };
+                        if let (Ok(a), Some(w)) = (u32::from_str_radix(a.trim(), 8), w) {
+                            mem.insert(a, w);
+                        }
+                    }
+                    mems.push(mem);
+                }
+            }
+        }
+        mems
+    }
+}
+
+/// Run a batch of cases in one run of a reference emulator. The trace
+/// starts at the first fetch from 1000; a case starts at each record with
+/// PC 1000.
+fn reference(r: Ref, prog: &Path, dir: &Path, batch: &[Case]) -> Result<Vec<Run>, String> {
+    let ini = dir.join(format!("{}.ini", r.name()));
+    let trace = dir.join(format!("{}.trace", r.name()));
+    let _ = std::fs::remove_file(&trace);
+    std::fs::write(&ini, r.script(batch)).map_err(|e| e.to_string())?;
+    let mut child = Command::new(prog)
         .arg(&ini)
+        .current_dir(dir)
         .env("KS10_TRACE", &trace)
         .env("KS10_TRACE_FROM", format!("{CODE:o}"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("{}: {e}", simh.display()))?;
+        .map_err(|e| format!("{}: {e}", prog.display()))?;
     let mut stdout = child.stdout.take().expect("piped");
     let reader = std::thread::spawn(move || {
-        let mut out = String::new();
-        let _ = std::io::Read::read_to_string(&mut stdout, &mut out);
-        out
+        let mut out = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut out);
+        String::from_utf8_lossy(&out).into_owned()
     });
     let start = Instant::now();
     loop {
@@ -410,27 +564,12 @@ fn simh(simh: &Path, dir: &Path, batch: &[Case]) -> Result<Vec<Run>, String> {
         if start.elapsed() > Duration::from_secs(60) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("SIMH did not end in 60 s".into());
+            return Err(format!("{} did not end in 60 s", r.name()));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     let out = reader.join().map_err(|_| "reader")?;
-    // The memory: the lines "ADDR:\tWORD" after each "=end".
-    let mut mems = Vec::new();
-    for part in out.split("=end").skip(1) {
-        let mut mem = BTreeMap::new();
-        for line in part.lines() {
-            if let Some((a, w)) = line.split_once(":\t")
-                && let (Ok(a), Ok(w)) = (
-                    u32::from_str_radix(a.trim(), 8),
-                    u64::from_str_radix(w.trim(), 8),
-                )
-            {
-                mem.insert(a, w);
-            }
-        }
-        mems.push(mem);
-    }
+    let mems = r.mems(&out);
     let text = std::fs::read_to_string(&trace).map_err(|e| format!("trace: {e}"))?;
     let mut runs: Vec<Vec<Record>> = Vec::new();
     for line in text.lines() {
@@ -438,18 +577,19 @@ fn simh(simh: &Path, dir: &Path, batch: &[Case]) -> Result<Vec<Run>, String> {
         if f.len() != 17 {
             return Err(format!("trace line {line:?}"));
         }
-        let mut r = [0; 17];
+        let mut rec = [0; 17];
         for (k, f) in f.iter().enumerate() {
-            r[k] = u64::from_str_radix(f, 8).map_err(|_| format!("trace line {line:?}"))?;
+            rec[k] = u64::from_str_radix(f, 8).map_err(|_| format!("trace line {line:?}"))?;
         }
-        if r[0] & 0o777777 == u64::from(CODE) || runs.is_empty() {
+        if rec[0] & 0o777777 == u64::from(CODE) || runs.is_empty() {
             runs.push(Vec::new());
         }
-        runs.last_mut().expect("a run").push(r);
+        runs.last_mut().expect("a run").push(rec);
     }
     if runs.len() != batch.len() || mems.len() != batch.len() {
         return Err(format!(
-            "SIMH ran {} cases and printed {} memory dumps, of {}",
+            "{} ran {} cases and printed {} memory dumps, of {}",
+            r.name(),
             runs.len(),
             mems.len(),
             batch.len()
@@ -468,7 +608,8 @@ fn octal(w: u64) -> String {
 
 /// The first difference of two runs, as text. The first line names the
 /// instruction in parentheses.
-fn difference(c: &Case, a: &Run, b: &Run) -> Option<String> {
+fn difference(c: &Case, a: &Run, b: &Run, r: Ref) -> Option<String> {
+    let them = r.name();
     let op = &ins::OPS[(c.inst >> 27) as usize];
     let mut t = format!("seed {}: {} ({})\n", c.seed, octal(c.inst), op.name);
     let names = [
@@ -478,7 +619,7 @@ fn difference(c: &Case, a: &Run, b: &Run) -> Option<String> {
     let mut differ = a.records.len() != b.records.len();
     if differ {
         t += &format!(
-            "  records: ks10 {}, SIMH {}\n",
+            "  records: ks10 {}, {them} {}\n",
             a.records.len(),
             b.records.len()
         );
@@ -489,7 +630,7 @@ fn difference(c: &Case, a: &Run, b: &Run) -> Option<String> {
             let mark = if x[j] != y[j] { "*" } else { " " };
             differ |= x[j] != y[j];
             t += &format!(
-                "{mark} {n:>3} before {:>14} ks10 {:>14} SIMH {:>14}\n",
+                "{mark} {n:>3} before {:>14} ks10 {:>14} {them} {:>14}\n",
                 octal(before[j]),
                 octal(x[j]),
                 octal(y[j])
@@ -503,7 +644,7 @@ fn difference(c: &Case, a: &Run, b: &Run) -> Option<String> {
         let mark = if x != y { "*" } else { " " };
         differ |= x != y;
         t += &format!(
-            "{mark} {addr:06o} before {:>14} ks10 {:>14} SIMH {:>14}\n",
+            "{mark} {addr:06o} before {:>14} ks10 {:>14} {them} {:>14}\n",
             octal(*w0),
             x.map(|w| octal(*w)).unwrap_or_default(),
             y.map(|w| octal(*w)).unwrap_or_default()
@@ -512,8 +653,8 @@ fn difference(c: &Case, a: &Run, b: &Run) -> Option<String> {
     differ.then_some(t)
 }
 
-/// The cases of tests/oracle/cases: differences that were found, one
-/// line each: the instruction, the 16 ACs, then ADDR:WORD for E and E + 1,
+/// The cases of tests/oracle/cases: differences that were found, and
+/// directed cases, one line each: the instruction, the 16 ACs, then ADDR:WORD for E and E + 1,
 /// in octal. They do not depend on the generator.
 fn saved_cases() -> Vec<Case> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/oracle/cases");
@@ -563,10 +704,16 @@ fn case_line(c: &Case) -> String {
 
 #[test]
 fn random_instructions() {
-    let Some(sim) = std::env::var_os("KS10_ORACLE").map(PathBuf::from) else {
-        eprintln!("KS10_ORACLE is not set: the differential run did not run");
+    let refs: Vec<(Ref, PathBuf)> = Ref::ALL
+        .iter()
+        .filter_map(|&r| std::env::var_os(r.var()).map(|p| (r, PathBuf::from(p))))
+        .collect();
+    if refs.is_empty() {
+        eprintln!(
+            "KS10_ORACLE and KS10_ORACLE_KLH10 are not set: the differential run did not run"
+        );
         return;
-    };
+    }
     // KS10_ORACLE_CASES cases from the seed KS10_ORACLE_SEED (decimal).
     let count: u64 = std::env::var("KS10_ORACLE_CASES")
         .ok()
@@ -576,50 +723,12 @@ fn random_instructions() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let mut cases = saved_cases();
-    let saved = cases.len();
-    let mut skipped: BTreeMap<&str, usize> = BTreeMap::new();
+    let all: Vec<Case> = saved_cases()
+        .into_iter()
+        .chain((first..first + count).map(Case::new))
+        .collect();
     // KS10_ORACLE_NOSKIP: run the cases of `skip` too (to count them).
     let noskip = std::env::var_os("KS10_ORACLE_NOSKIP").is_some();
-    for s in first..first + count {
-        let c = Case::new(s);
-        match skip(&c).filter(|_| !noskip) {
-            Some(why) => *skipped.entry(why).or_default() += 1,
-            None => cases.push(c),
-        }
-    }
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("oracle");
-    std::fs::create_dir_all(&dir).expect("temporary directory");
-    let mut failures = Vec::new();
-    let mut records = 0;
-    for chunk in cases.chunks(BATCH) {
-        let theirs = simh(&sim, &dir, chunk).unwrap_or_else(|e| panic!("SIMH: {e}"));
-        for (c, b) in chunk.iter().zip(&theirs) {
-            match ours(c) {
-                Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
-                Ok(a) => {
-                    records += a.records.len();
-                    if let Some(d) = difference(c, &a, b) {
-                        failures.push((c, d));
-                    }
-                }
-            }
-        }
-    }
-    let mut err = std::io::stderr();
-    let _ = writeln!(
-        err,
-        "{} cases ({saved} saved), {records} records, {} differences; not run: {skipped:?}",
-        cases.len(),
-        failures.len()
-    );
-    assert!(records >= 2 * cases.len(), "too few records");
-    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
-    for (c, _) in &failures {
-        *by.entry(ins::OPS[(c.inst >> 27) as usize].name)
-            .or_default() += 1;
-    }
-    let _ = writeln!(err, "differences by instruction: {by:?}");
     // KS10_ORACLE_SHOW: how many to print; KS10_ORACLE_ONLY: only these
     // instructions (names with commas).
     let shown: usize = std::env::var("KS10_ORACLE_SHOW")
@@ -627,14 +736,68 @@ fn random_instructions() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
     let only = std::env::var("KS10_ORACLE_ONLY").unwrap_or_default();
-    let pick = |(c, _): &&(&Case, String)| {
-        only.is_empty()
-            || only
-                .split(',')
-                .any(|n| ins::OPS[(c.inst >> 27) as usize].name == n)
-    };
-    for (c, f) in failures.iter().filter(pick).take(shown) {
-        let _ = writeln!(err, "{f}  case: {}", case_line(c));
+    let name = |c: &Case| ins::OPS[(c.inst >> 27) as usize].name;
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("oracle");
+    std::fs::create_dir_all(&dir).expect("temporary directory");
+    let mut err = std::io::stderr();
+    // The cases that no named emulator compares. With all emulators,
+    // there must be none: each skip of one emulator is checked by another.
+    let uncompared = all
+        .iter()
+        .filter(|c| !noskip && refs.iter().all(|(r, _)| skip(c, *r).is_some()))
+        .count();
+    let _ = writeln!(err, "cases that no emulator compares: {uncompared}");
+    if refs.len() == Ref::ALL.len() {
+        assert_eq!(uncompared, 0, "cases that no emulator compares");
     }
-    assert!(failures.is_empty(), "{} cases differ", failures.len());
+    let mut total = 0;
+    for (r, prog) in &refs {
+        let r = *r;
+        let mut skipped: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut cases = Vec::new();
+        for c in &all {
+            match skip(c, r).filter(|_| !noskip) {
+                Some(why) => *skipped.entry(why).or_default() += 1,
+                None => cases.push(c),
+            }
+        }
+        let mut failures: Vec<(&Case, String)> = Vec::new();
+        let mut records = 0;
+        for chunk in cases.chunks(BATCH) {
+            let batch: Vec<Case> = chunk.iter().map(|c| (*c).clone()).collect();
+            let theirs =
+                reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
+            for (c, b) in chunk.iter().zip(&theirs) {
+                match ours(c) {
+                    Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
+                    Ok(a) => {
+                        records += a.records.len();
+                        if let Some(d) = difference(c, &a, b, r) {
+                            failures.push((c, d));
+                        }
+                    }
+                }
+            }
+        }
+        let _ = writeln!(
+            err,
+            "{}: {} cases, {records} records, {} differences; not run: {skipped:?}",
+            r.name(),
+            cases.len(),
+            failures.len()
+        );
+        assert!(records >= 2 * cases.len(), "{}: too few records", r.name());
+        let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+        for (c, _) in &failures {
+            *by.entry(name(c)).or_default() += 1;
+        }
+        let _ = writeln!(err, "{}: differences by instruction: {by:?}", r.name());
+        let pick =
+            |(c, _): &&(&Case, String)| only.is_empty() || only.split(',').any(|n| name(c) == n);
+        for (c, f) in failures.iter().filter(pick).take(shown) {
+            let _ = writeln!(err, "{f}  case: {}", case_line(c));
+        }
+        total += failures.len();
+    }
+    assert!(total == 0, "{total} cases differ");
 }

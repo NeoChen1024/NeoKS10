@@ -1,0 +1,7 @@
+# The second reference emulator: KLH10, target kn10-ks-its.
+# It is the submodule tools/klh10 of the ITS tree (3rdparty/its), at the
+# commit that the ITS tree pins. `make oracle` checks the commit, applies
+# klh10-trace.patch to a copy in the build output and builds the copy
+# with the configuration of the ITS tree (its Makefile, target $(KLH10)).
+url https://github.com/PDP-10/klh10
+commit 6d733f2a47644964492fd864454cbe1331655e53

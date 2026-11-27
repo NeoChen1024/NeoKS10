@@ -1,0 +1,93 @@
+diff -ruN a/src/kn10cpu.c b/src/kn10cpu.c
+--- a/src/kn10cpu.c
++++ b/src/kn10cpu.c
+@@ -56,6 +56,7 @@
+ 
+ /* Exported functions */
+ #include "kn10cpu.h"
++#include "ks10trace.h"
+ 
+ /* Pre-declarations */
+ static void trap_xct(void);
+@@ -185,7 +186,7 @@
+     clk_resume();				/* Resume internal clock */
+ 
+     /* Determine which APR loop to start or re-enter! */
+-    if (cpu.mr_bkpt || cpu.mr_dotrace || cpu.mr_1step
++    if (cpu.mr_bkpt || cpu.mr_dotrace || cpu.mr_1step || ks10_trace_wanted()
+ #if KLH10_SYS_T20 && KLH10_CPU_KS
+ 		|| cpu.fe.fe_iowait || cpu.io_ctydelay
+ #endif
+@@ -238,6 +239,7 @@
+ 		return HALT_BKPT;
+ 	}
+ 
++	ks10_trace();
+ 	/* Fetch next instruction from new PC (may page fault) */
+ 	instr = vm_fetch(PC_VADDR);
+ 
+diff -ruN a/src/ks10trace.h b/src/ks10trace.h
+--- a/src/ks10trace.h
++++ b/src/ks10trace.h
+@@ -0,0 +1,61 @@
++/* The trace hook of NeoKS10 (oracle/klh10-trace.patch in NeoKS10).
++
++   At each instruction fetch of the debug loop (apr_walk), one line: the
++   PC word (flags in the left half, PC in the right half) and the 16 ACs
++   of the current block, in octal. Interrupts and traps are handled in
++   apr_check, so their instructions have no record.
++
++   KS10_TRACE names the file; without it, nothing is written, and KLH10
++   uses its fast loop as before. With it, apr_run takes the debug loop.
++   KS10_TRACE_FROM (octal) is a PC: the trace starts at the first fetch
++   from it. */
++
++#ifndef KS10TRACE_H
++#define KS10TRACE_H
++
++#include <stdio.h>
++#include <stdlib.h>
++
++static FILE *ks10_trace_file;
++static int ks10_trace_open;
++static int ks10_trace_on;
++static long ks10_trace_from = -1;
++
++static int ks10_trace_wanted(void)
++{
++    if (!ks10_trace_open) {
++        const char *name = getenv("KS10_TRACE");
++        const char *from = getenv("KS10_TRACE_FROM");
++        ks10_trace_open = 1;
++        if (from != NULL)
++            ks10_trace_from = strtol(from, NULL, 8);
++        if (name != NULL)
++            ks10_trace_file = fopen(name, "w");
++    }
++    return ks10_trace_file != NULL;
++}
++
++static void ks10_trace(void)
++{
++    int k;
++
++    if (!ks10_trace_wanted())
++        return;
++    if (!ks10_trace_on) {
++        if (ks10_trace_from >= 0 && (long)PC_INSECT != ks10_trace_from)
++            return;
++        ks10_trace_on = 1;
++    }
++    fprintf(ks10_trace_file, "%06lo%06lo",
++            (unsigned long)(cpu.mr_pcflags & H10MASK),
++            (unsigned long)(PC_INSECT & H10MASK));
++    for (k = 0; k < 16; k++) {
++        w10_t w = ac_get(k);
++        fprintf(ks10_trace_file, " %06lo%06lo",
++                (unsigned long)LHGET(w), (unsigned long)RHGET(w));
++    }
++    fputc('\n', ks10_trace_file);
++    fflush(ks10_trace_file);
++}
++
++#endif

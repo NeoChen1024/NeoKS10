@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot diag oracle
+.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot diag oracle oracle-sims oracle-klh10
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -45,16 +45,19 @@ check-rust:
 	cd emu && $(NICE) $(CARGO) clippy --locked --all-targets -- -D warnings
 	cd emu && $(NICE) $(CARGO) test --locked
 
-# 2000 random instructions against SIMH (emu/ks10/tests/oracle.rs). The
-# run needs `make oracle`; without its program, the target says so and
-# does not fail.
+# 2000 random instructions against each reference emulator that `make
+# oracle` built (emu/ks10/tests/oracle.rs). Without one, the target says
+# SKIPPED for it and does not fail.
 ORACLE_CASES ?= 2000
 check-oracle:
-	@if [ -x $(ORACLE_SIMH) ]; then \
-	    cd emu && KS10_ORACLE=$(ORACLE_SIMH) KS10_ORACLE_CASES=$(ORACLE_CASES) \
+	@vars=""; \
+	if [ -x $(ORACLE_SIMH) ]; then vars="$$vars KS10_ORACLE=$(ORACLE_SIMH)"; \
+	else echo "check-oracle: SIMH SKIPPED, $(ORACLE_SIMH) is missing (make oracle)"; fi; \
+	if [ -x $(ORACLE_KLH10) ]; then vars="$$vars KS10_ORACLE_KLH10=$(ORACLE_KLH10)"; \
+	else echo "check-oracle: KLH10 SKIPPED, $(ORACLE_KLH10) is missing (make oracle)"; fi; \
+	if [ -n "$$vars" ]; then \
+	    cd emu && env $$vars KS10_ORACLE_CASES=$(ORACLE_CASES) \
 	        $(NICE) $(CARGO) test -q --locked --release -p ks10 --test oracle -- --nocapture; \
-	else \
-	    echo "check-oracle: SKIPPED, $(ORACLE_SIMH) is missing (make oracle)"; \
 	fi
 
 check-rtl:
@@ -181,20 +184,37 @@ diag:
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10 \
 	    --test diag -- --nocapture
 
-# The reference emulator with the trace hook (oracle/). The submodule
-# tools/sims of 3rdparty/its must be at the commit of oracle/sims.pin. The
-# build works on a copy in the build output; the submodule stays clean.
+# The reference emulators with their trace hooks (oracle/). Each source is
+# a submodule of 3rdparty/its, which must be at the commit of its pin
+# file. The build works on a copy in the build output; the submodules stay
+# clean.
 ORACLE_DIR = $(abspath $(BUILD_DIR))/oracle
 SIMS = $(ITS_TREE)/tools/sims
 SIMS_COMMIT = $(shell sed -n 's/^commit //p' oracle/sims.pin)
 ORACLE_SIMH = $(ORACLE_DIR)/sims/BIN/pdp10-ks
-oracle:
+KLH10_SRC = $(ITS_TREE)/tools/klh10
+KLH10_COMMIT = $(shell sed -n 's/^commit //p' oracle/klh10.pin)
+ORACLE_KLH10 = $(ORACLE_DIR)/klh10/tmp/bld-ks-its/kn10-ks-its
+oracle: oracle-sims oracle-klh10
+
+oracle-sims:
 	@test -f $(SIMS)/makefile || { echo "oracle: run git -C $(ITS_TREE) submodule update --init tools/sims" >&2; exit 2; }
 	@test "$$(git -C $(SIMS) rev-parse HEAD)" = "$(SIMS_COMMIT)" || { echo "oracle: tools/sims is not at the commit of oracle/sims.pin" >&2; exit 2; }
 	rm -rf $(ORACLE_DIR)/sims && mkdir -p $(ORACLE_DIR)/sims
 	git -C $(SIMS) archive HEAD | tar -x -C $(ORACLE_DIR)/sims
 	cd $(ORACLE_DIR)/sims && patch -p1 < $(CURDIR)/oracle/sims-trace.patch
 	$(NICE) $(MAKE) -C $(ORACLE_DIR)/sims pdp10-ks
+
+# The configuration of the ITS tree (its Makefile, target $(KLH10)).
+oracle-klh10:
+	@test -f $(KLH10_SRC)/configure.ac || { echo "oracle: run git -C $(ITS_TREE) submodule update --init tools/klh10" >&2; exit 2; }
+	@test "$$(git -C $(KLH10_SRC) rev-parse HEAD)" = "$(KLH10_COMMIT)" || { echo "oracle: tools/klh10 is not at the commit of oracle/klh10.pin" >&2; exit 2; }
+	rm -rf $(ORACLE_DIR)/klh10 && mkdir -p $(ORACLE_DIR)/klh10/tmp
+	git -C $(KLH10_SRC) archive HEAD | tar -x -C $(ORACLE_DIR)/klh10
+	cd $(ORACLE_DIR)/klh10 && patch -p1 < $(CURDIR)/oracle/klh10-trace.patch
+	cd $(ORACLE_DIR)/klh10 && ./autogen.sh
+	cd $(ORACLE_DIR)/klh10/tmp && CONFFLAGS_USR="-DKLH10_DEV_DPTM03=0" ../configure
+	$(NICE) $(MAKE) -C $(ORACLE_DIR)/klh10/tmp/bld-ks-its
 
 # Third-party files (third-party.lock) into references/, which git ignores.
 # bitsavers.org has an rsync server; pdp-10.trailing-edge.com is read with

@@ -673,22 +673,32 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
 
 ### Differential runs
 
-The reference emulator is SIMH `pdp10-ks`, the submodule `tools/sims` of
-`3rdparty/its` at the commit of `oracle/sims.pin`. `make oracle` copies it
-into `build/oracle/`, applies `oracle/sims-trace.patch` and builds it. The
-patch adds one record for each instruction fetch outside an interrupt or a
-UUO cycle: the PC word and the 16 ACs. `KS10_TRACE` names the file.
-`KS10_TRACE_FROM` is the PC of the first record, because SIMH runs a loop
-at 100 at start-up to measure its speed.
+The reference emulators are submodules of `3rdparty/its`, at the
+commits of the pin files in `oracle/`:
 
-`emu/ks10/tests/oracle.rs` runs if `KS10_ORACLE` names the program.
-`make check` runs 2000 cases if `make oracle` was run, and says SKIPPED
-if not.
+| Emulator | Pin | Patch | Program | Variable |
+|---|---|---|---|---|
+| SIMH `pdp10-ks` | `sims.pin` | `sims-trace.patch` | `build/oracle/sims/BIN/pdp10-ks` | `KS10_ORACLE` |
+| KLH10 `kn10-ks-its` | `klh10.pin` | `klh10-trace.patch` | `build/oracle/klh10/tmp/bld-ks-its/kn10-ks-its` | `KS10_ORACLE_KLH10` |
+
+`make oracle` copies each one into `build/oracle/`, applies its patch and
+builds it; KLH10 gets the configuration of the ITS tree. A patch adds one
+record for each instruction fetch outside an interrupt or a UUO cycle: the
+PC word and the 16 ACs. `KS10_TRACE` names the file. `KS10_TRACE_FROM`
+is the PC of the first record, because SIMH runs a loop at 100 at
+start-up to measure its speed. KLH10 takes its debug loop (`apr_walk`)
+when `KS10_TRACE` is set.
+
+`emu/ks10/tests/oracle.rs` runs the cases against each emulator that a
+variable names. `make check` runs 2000 cases against each emulator that
+`make oracle` built, and says SKIPPED for a missing one.
 
 1. A seed gives one case: one instruction at 1000, two HALTs, the 16 ACs,
    and the words at E and E + 1. E is a direct address outside the code.
 2. Both emulators run the case from executive mode, with flags 0, no
-   paging and no interrupts. SIMH runs 500 cases in one process.
+   paging and no interrupts. A reference emulator runs 500 cases in one
+   process. E and E + 1 are not in the halt status block (500 to 520),
+   which the HALT of `emu/ks10` writes.
 3. The test compares the records before the instruction and before the
    HALT, the record count, and the words at E and E + 1.
 4. A case that found a difference goes into `tests/oracle/cases` as
@@ -699,14 +709,20 @@ in the cases:
 
 - Jumps, XCT, EXTEND, the stack and byte instructions, BLT, the
   instructions of the previous context and the I/O instructions.
-- CIRC, because SIMH does not have it on the KS10. FDV and its forms,
-  because SIMH fails a DSKCB test and differs in bit 35 for many
-  normalized operands; which side is right is open
-  (`docs/discrepancies.md`, `docs/unknowns.md`).
-- Some operands, from the inputs only (`skip`): ASH and ASHC left shifts
-  of many places, the shift count -256, IMUL products of magnitude
-  2^35 + 1 to 2^36 - 1 with a negative sign, IDIV of -2^35 by 1 or -1,
-  DIV of -2^70 by 0 (`docs/discrepancies.md`).
+- For SIMH (`skip_simh`): CIRC, which SIMH does not have on the KS10;
+  FDV and its forms, because SIMH fails a DSKCB test and differs in bit
+  35 for many normalized operands; ASH and ASHC left shifts of many
+  places, the shift count -256, IMUL products of magnitude 2^35 + 1 to
+  2^36 - 1 with a negative sign, IDIV of -2^35 by 1 or -1, DIV of -2^70
+  by 0.
+- For KLH10 (`skip_klh10`): HLLE of a positive source with a bit of 1 to
+  3 set; DIV with a high word of the magnitude equal to the divisor.
+- Each of these has its entry in `docs/discrepancies.md`, and `skip`
+  decides from the inputs only. The test counts the cases that no named
+  emulator compares; with both emulators, the count must be 0.
+- `tests/oracle/cases` also has directed cases for operands that the
+  generator does not reach: ASHC of -1 by 70 and 71 places, and the
+  shift count -256.
 - Unnormalized floating point operands. The operands of FAD, FSB, FMP,
   FIX, FSC and of the double forms are normalized, with exponents that
   differ by 60 or less (`docs/unknowns.md`).
@@ -714,11 +730,15 @@ in the cases:
 Paging, traps and interrupts are not compared. The diagnostics, the ITS
 boot and the unit tests check them.
 
-**[measured]** 2026-11-27, x86-64 host: 97646 cases, 0 differences, 226
-s; 2000 cases take 5 s. `KS10_ORACLE_NOSKIP` also runs the cases of
-`skip`: then 807 of 100001 cases differ, 744 of them FDV. The run found one fault of `emu/ks10`: IMUL of
--2^35 by -2^35 gave 0, not 400000,,0 (`muldiv.rs`). Without the Overflow
-flag of an addition, 11 of 1958 cases differ.
+**[measured]** 2026-11-27, x86-64 host, 100000 seeds: SIMH 97257 cases
+and KLH10 99745 cases, 0 differences, 242 s for both (KLH10 takes 19 s).
+2000 cases take 5 s. `KS10_ORACLE_NOSKIP` also runs the cases of `skip`:
+then 807 of 100001 cases differ from SIMH, 744 of them FDV. The runs
+found two faults of `emu/ks10`: IMUL of -2^35 by -2^35 gave 0, not
+400000,,0 (`muldiv.rs`; SIMH), and ASH of a negative number by more than
+35 places set no Overflow (`shift.rs`; KLH10). Without the Overflow flag
+of an addition, 11 of 1958 cases differ from SIMH and 13 of 1995 from
+KLH10.
 
 ### Diagnostics
 
@@ -932,7 +952,6 @@ Open:
   the cases of `docs/unknowns.md` that no DEC vector decides; the first
   one is FDV with normalized operands. The DEC KS10 hardware documents
   for the data path must be found and put into `third-party.lock` first.
-- KLH10 as the second reference of the differential run (decision 18).
 
 ## Open items
 

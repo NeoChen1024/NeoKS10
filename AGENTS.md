@@ -112,11 +112,12 @@ fails.
 
 - `make check` is: format, lint, unit tests, a check that the generated
   files are current, and a short random differential run.
-- `make oracle` builds the reference emulator (SIMH `pdp10-ks`, pinned in
-  `oracle/sims.pin`) with the trace patch of `oracle/` into `build/`. The
-  short differential run of `make check` uses it, through the variable
-  `KS10_ORACLE` of `emu/ks10/tests/oracle.rs`. Without it, `make check`
-  prints SKIPPED for that run: a skip is not a pass.
+- `make oracle` builds the reference emulators (SIMH `pdp10-ks` and KLH10
+  `kn10-ks-its`, pinned in `oracle/*.pin`) with the trace patches of
+  `oracle/` into `build/`. The short differential run of `make check`
+  uses them, through the variables `KS10_ORACLE` and `KS10_ORACLE_KLH10`
+  of `emu/ks10/tests/oracle.rs`. Without one, `make check` prints
+  SKIPPED for it: a skip is not a pass.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example
@@ -165,8 +166,8 @@ fails.
   asynchronous runtime.
 - Decoders and constants come from `spec/`. Do not write a second copy by
   hand.
-- The software processor has a C interface for the co-simulation and for
-  the PL bridge.
+- The microcode-level model and the software processor have a C interface
+  for the co-simulation and for the PL bridge.
 - Device I/O reads and writes the guest memory directly with `pread` and
   `pwrite`. Do not use `O_DIRECT`.
 - The disk image keeps 8 bytes for each word. The tape image keeps the
@@ -179,7 +180,7 @@ fails.
   with the real 8080 console program. It is multi-cycle. Do not add a
   pipeline before the first core runs ITS.
 - The core gives a record at each completed instruction. The co-simulation
-  compares this record with the software processor.
+  compares this record with the microcode-level model.
 - The register map comes from `spec/regmap.*`.
 - The PS maps the guest memory without the CPU cache. If you change this,
   you must show how the PS and the PL see the same data.

@@ -130,8 +130,9 @@ differential run does not compare this count.
   `pdp10-ks`, opcode 247 changes nothing. **[measured]** 2026-11-27: CIRC
   3,3 with AC 3 = 1 left AC 3 and AC 4 unchanged.
 
-The project uses the microcode. SIMH cannot check CIRC. The unit test
-`circ_step` (`emu/ks10/src/shift.rs`) checks one case.
+The project uses the microcode. KLH10 6d733f2a has CIRC (`KLH10_I_CIRC`
+in the configuration of the ITS tree). **[measured]** 2026-11-27: 318
+CIRC cases of the differential run agree with KLH10.
 
 ## FDV: the quotient
 
@@ -148,6 +149,9 @@ The project uses the microcode. SIMH cannot check CIRC. The unit test
   quotient. No DEC vector with normalized operands separates the two
   emulators. Which one does what the microcode does is open
   (`docs/unknowns.md`).
+- **[measured]** 2026-11-27: KLH10 6d733f2a agrees with `emu/ks10` in
+  all 2123 FDV cases of 100000 (both emulators are rank 4; this does not
+  decide the case).
 - **[microcode]** `src/kshack/flt.5`, DCODE of FDVB and FDVRB (FL-BOTH):
   the quotient goes to AC and to E. **[measured]** 2026-11-27: FDVRB with
   a dividend of 0 stores 0 in the AC, but SIMH leaves E unchanged.
@@ -193,3 +197,37 @@ compare these cases.
 
 The project uses the microcode. The differential run does not compare
 this case.
+
+## HLLE in KLH10
+
+- **[microcode]** `src/kshack/simple.42`, HLLE: `READ [AR], SKIP DP0`,
+  then `RIGHT_0` or `RIGHT_-1`. The left half does not change.
+- **[emulator]** KLH10 6d733f2a, `inhalf.c` (HLLE) and `kn10ops.h`
+  (`op10m_trz`): for a positive source, `XWDVAL(w) &= ~(H10ONES)`.
+  **[measured]** 2026-11-27: HLLES 11,777773 of 040267,,515675 gives
+  000267,,000000; HLLE of 100000,,123456 gives 0, and of 300000,,123456
+  gives 0. So bits 1 to 3 are cleared. **[estimate]** The cause: the mask
+  `H10ONES` has the type `uint19`, so its complement has 32 bits and
+  clears bits 32 to 35 of the 64-bit integer word.
+
+The project uses the microcode. The differential run does not compare
+HLLE, HLLEM and HLLES of a positive source with a bit of 1 to 3 set.
+
+## DIV in KLH10: a high word equal to the divisor
+
+- **[microcode]** `src/kshack/simple.42`, DIVB, DIVC and NODIV: the
+  magnitude of the high word minus the magnitude of the divisor; if the
+  result is not negative, No Divide. So equal magnitudes give No Divide.
+- **[manual]** PRM 1982, page 2-14, DIV: if the high word of the
+  magnitude of the dividend is greater than or equal to the magnitude of
+  the divisor, No Divide.
+- **[emulator]** KLH10 6d733f2a, `kn10ops.c`, `ddivstep`: for equal
+  magnitudes and a negative quotient, the result is 400000,,0 without an
+  error, as the comment says a KL10 does. **[measured]** 2026-11-27: DIV
+  7,2036 with AC 7,10 = 777777,,777750 0 and a divisor of 30 gives
+  400000,,0 and no flag. DIVM 3,2041 with AC 3,4 = 1 400000,,0 (2^35)
+  and a divisor of -1 stores 400000,,0 and sets no flag.
+
+The project uses the microcode and the PRM. The differential run does
+not compare DIV when the high word of the magnitude of the dividend
+equals the magnitude of the divisor.
