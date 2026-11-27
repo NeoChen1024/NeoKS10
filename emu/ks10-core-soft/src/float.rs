@@ -111,9 +111,6 @@ fn normalize(r: &Raw, prec: u32, round: bool) -> Option<(u128, i32, bool)> {
 /// Floating Overflow and Trap 1; below 0 also Floating Underflow. The
 /// stored exponent is the low 8 bits.
 fn exp_test(m: &mut Machine, e: i32) -> u64 {
-    // EXP TEST loads Trap 1 with no hold term, and keeps Trap 2 (DPE9 E78;
-    // [`Flags::change`]).
-    m.flags.clear(Flags::TRAP1);
     if !(0..=0o377).contains(&e) {
         m.flags.set(Flags::AROV | Flags::FOV | Flags::TRAP1);
         if e < 0 {
@@ -183,7 +180,7 @@ fn store(m: &mut Machine, i: Inst, e: Half, w: W36) -> R {
 
 fn no_divide(m: &mut Machine) -> R {
     m.flags
-        .change(Flags::AROV | Flags::FOV | Flags::NODIV | Flags::TRAP1);
+        .set(Flags::AROV | Flags::FOV | Flags::NODIV | Flags::TRAP1);
     Ok(Next::Step)
 }
 
@@ -308,7 +305,7 @@ fn fdv(m: &mut Machine, a: W36, b: W36, round: bool) -> Option<W36> {
 fn fix(m: &mut Machine, i: Inst, e: Half) -> R {
     let (ex, f) = unpack(m.read(e)?);
     if ex > 128 + 35 {
-        m.flags.change(Flags::AROV | Flags::TRAP1);
+        m.flags.set(Flags::AROV | Flags::TRAP1);
         return Ok(Next::Step);
     }
     let n = ex - 128 - 27;

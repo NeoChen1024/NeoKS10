@@ -67,7 +67,7 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
             let p = i128::from(a.signed()) * i128::from(b.signed());
             let fits = (-(1 << 35)..1 << 35).contains(&p);
             if !fits {
-                m.flags.change(Flags::AROV | Flags::TRAP1);
+                m.flags.set(Flags::AROV | Flags::TRAP1);
             }
             let sign = i128::from(p < 0 || p == 1 << 70);
             let w = W36::wrap(((sign << 35) | (p & MAG)) as u64);
@@ -77,7 +77,7 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
             // MUL: the 70-bit product; only the square of -2^35 overflows.
             let p = i128::from(a.signed()) * i128::from(b.signed());
             if p == 1 << 70 {
-                m.flags.change(Flags::AROV | Flags::TRAP1);
+                m.flags.set(Flags::AROV | Flags::TRAP1);
             }
             let (hi, lo) = split(p);
             store(m, i, e, hi, Some(lo))
@@ -95,7 +95,7 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
                 ((i128::from(a.signed()) << 35) | lo, !signs)
             };
             if b == W36::ZERO || (check && too_big(d, b)) {
-                m.flags.change(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
+                m.flags.set(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
                 return Ok(Next::Step);
             }
             let bs = i128::from(b.signed());

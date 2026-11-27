@@ -21,6 +21,7 @@
 mod common;
 
 use common::{FILLS, label, machine, run_until, symbol};
+use ks10_core_soft::flags::Flags;
 use ks10_core_uop::alu;
 use ks10_core_uop::machine::{Coverage, Machine};
 use pdp10::{Half, W36};
@@ -792,8 +793,39 @@ struct Known {
     normalize: fn(&mut State),
 }
 
-/// The known differences. There is none: all cases agree (2026-11-28).
-const KNOWN: &[Known] = &[];
+const TRAPS: u32 = Flags::TRAP1 | Flags::TRAP2;
+const CARRIES: u32 = Flags::CRY0 | Flags::CRY1;
+
+/// The opcode of a case.
+fn opcode(c: &Case) -> u64 {
+    c.inst >> 27
+}
+
+/// The known differences (docs/discrepancies.md has the sources of each).
+const KNOWN: &[Known] = &[
+    // The microcode loads Trap 1 and Trap 2 at each flag word, and ASH
+    // gives Trap 1 the overflow of the last step; ks10-core-soft follows
+    // the PRM: an instruction only sets a trap flag, on any overflow.
+    Known {
+        why: "Trap 1 and Trap 2",
+        applies: |c| c.flags & TRAPS != 0 || matches!(opcode(c), 0o116 | 0o240 | 0o244),
+        normalize: |s| s.flags &= !TRAPS,
+    },
+    // The complement of the high word sets Carry 0 and Carry 1 in the
+    // microcode; ks10-core-soft follows the PRM.
+    Known {
+        why: "DMOVN carry flags",
+        applies: |c| matches!(opcode(c), 0o121 | 0o125),
+        normalize: |s| s.flags &= !CARRIES,
+    },
+    // Each QMULT of the microcode sets Carry 0 and Carry 1 from a partial
+    // product; ks10-core-soft follows the PRM.
+    Known {
+        why: "DMUL carry flags",
+        applies: |c| opcode(c) == 0o116,
+        normalize: |s| s.flags &= !CARRIES,
+    },
+];
 
 /// Do the two states agree, after the normalization of the known
 /// differences that apply to the case? The second value names them.
@@ -822,6 +854,7 @@ fn single_instructions_agree_with_the_software_processor() {
     let mut stops = Vec::new();
     let mut differences = Vec::new();
     let mut known = std::collections::BTreeMap::new();
+    let mut known_cases = 0;
     let mut coverage = Coverage::default();
     for fill in FILLS {
         for c in all_cases() {
@@ -830,6 +863,7 @@ fn single_instructions_agree_with_the_software_processor() {
             match got {
                 Ok(got) if got == want => {}
                 Ok(got) if agree(KNOWN, &c, &got, &want).0 => {
+                    known_cases += 1;
                     for why in agree(KNOWN, &c, &got, &want).1 {
                         *known.entry(why).or_insert(0) += 1;
                     }
@@ -844,7 +878,7 @@ fn single_instructions_agree_with_the_software_processor() {
         }
     }
     let n = 2 * all_cases().len();
-    let k: usize = known.values().sum();
+    let k = known_cases;
     println!(
         "{} cases: {} agree, {k} known differences, {} differ, {} stop",
         n,
@@ -853,7 +887,7 @@ fn single_instructions_agree_with_the_software_processor() {
         stops.len()
     );
     for (why, count) in &known {
-        println!("KNOWN {count}: {why}");
+        println!("KNOWN, applied to {count}: {why}");
     }
     println!("{coverage}");
     for s in &stops {
@@ -897,4 +931,68 @@ fn a_known_difference_hides_only_its_part() {
     assert_eq!(agree(&known, &c("x"), &flags, &want), (true, vec!["test"]));
     assert_eq!(agree(&known, &c("y"), &flags, &want), (false, vec![]));
     assert!(!agree(&known, &c("x"), &pc, &want).0);
+}
+
+/// The flag rules of the microcode that `ks10-core-soft` does not have
+/// ([`KNOWN`]), on the model alone. The expected flags come from the
+/// reading of DPE9 and the microcode in docs/discrepancies.md ("Trap 1 and
+/// Trap 2: each flag word loads them", "DMOVN: the carry flags of the
+/// complement", "DMUL: the carry flags of QMULT").
+#[test]
+fn the_flag_rules_of_the_microcode() {
+    const N: u64 = 0o777777_777777;
+    let e = E as u64;
+    let case = |op: u64, ac: Vec<(usize, u64)>, mem: [u64; 2], flags: u32| {
+        let mut c = Case {
+            name: format!("{op:o}"),
+            inst: op << 27 | 1 << 23 | e,
+            ac: [0; 16],
+            mem,
+            flags,
+        };
+        for (k, v) in ac {
+            c.ac[k] = v;
+        }
+        c
+    };
+    let cases = [
+        // ADD without overflow: AD FLAGS clears both trap flags.
+        (case(0o270, vec![(1, 1)], [1, 0], TRAPS), 0),
+        // POP with overflow: SET PDL OV sets Trap 2 and clears Trap 1.
+        (
+            case(0o262, vec![(1, 0o000000_002000)], [3, 0], TRAPS),
+            Flags::TRAP2,
+        ),
+        // ASH 1,2 of 200000,,000001: the first step overflows, the last
+        // does not. Overflow stays, Trap 1 is the last step.
+        (
+            Case {
+                inst: 0o240 << 27 | 1 << 23 | 2,
+                ..case(0o240, vec![(1, 0o200000_000001)], [0, 0], 0)
+            },
+            Flags::AROV,
+        ),
+        // DMOVN with a low word not 0: the complement sets the carries.
+        (case(0o121, vec![], [0, 5], 0), CARRIES),
+        // DMUL: a negative partial product sets the carries.
+        (
+            case(
+                0o116,
+                vec![(1, N), (2, 2)],
+                [0o377777_777777, 0o123456_654321],
+                0,
+            ),
+            CARRIES,
+        ),
+        // DMUL of (-2^70)^2: Overflow, Carry 1 and Trap 1.
+        (
+            case(0o116, vec![(1, 1 << 35)], [1 << 35, 0], 0),
+            Flags::AROV | Flags::CRY1 | Flags::TRAP1,
+        ),
+    ];
+    let mut coverage = Coverage::default();
+    for (c, want) in cases {
+        let got = model(FILLS[0], &c, &mut coverage).expect(&c.name);
+        assert_eq!(got.flags, want, "{}", c.name);
+    }
 }

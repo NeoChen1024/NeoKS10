@@ -107,9 +107,10 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
     }
 }
 
-/// DBLNEG (DMOVN, DMOVNM): the low word without its bit 0 is negated; if
-/// the result is 0, the high word is negated (with the flags of 0 - high),
-/// else complemented. Bit 0 of the low word becomes 0 (CLARX0).
+/// DMOVN, DMOVNM: the low word without its bit 0 is negated; if the result
+/// is 0, the high word is negated (with the flags of 0 - high), else
+/// complemented. Bit 0 of the low word becomes 0 (PRM, DMOVN: the flags
+/// change only for a doubleword of 0 or -2^70).
 fn negate(m: &mut Machine, h: W36, l: W36) -> (W36, W36) {
     let lo = (l.get() & MAG).wrapping_neg() & MASK36;
     let hi = if lo == 0 {
@@ -117,16 +118,6 @@ fn negate(m: &mut Machine, h: W36, l: W36) -> (W36, W36) {
         set_arith(m, c0, c1);
         s
     } else {
-        // DBLNGA, "NO CARRY": `[AR]_.NOT.[AR], AD FLAGS` **[microcode]**.
-        // For a logic function the 2901 also gives a carry out: for R XNOR
-        // S with R = 0, a slice gives G = NOT(S3 S2 S1 S0) and P = 1
-        // **[manual]** (Am2901A, Figure 8). AR has the word from memory in
-        // bits 0 to 35, and 0 in bits 36 and 37 (the D input, DPE1 to
-        // DPE4). So the slice of bits 34 to 37 is never all 1, and its
-        // carry goes through all slices: Carry 0 is always 1. The result
-        // has no overflow, so Carry 1 is also 1 (docs/discrepancies.md,
-        // "DMOVN: the carry flags of the complement").
-        m.flags.arith(true, true);
         !h.get() & MASK36
     };
     (W36::wrap(hi), W36::wrap(lo & MAG))
@@ -141,7 +132,7 @@ fn adjsp(m: &mut Machine, i: Inst, e: Half) -> R {
     let rh = Half::wrap(a.rh().get() + e.get());
     let w = W36::from_halves(lh, rh);
     if a.bit(0) != w.bit(0) {
-        m.flags.change(Flags::TRAP2);
+        m.flags.set(Flags::TRAP2);
     }
     m.ac[i.ac] = w;
     Ok(Next::Step)
@@ -174,39 +165,16 @@ fn quad_words(sign: bool, (hi, lo): Quad) -> [W36; 4] {
     [d(hi >> 35), d(hi), d(lo >> 35), d(lo)]
 }
 
-/// The four partial products of DMUL, in the order of the microcode
-/// **[microcode]** (simple.42, DMUL, DMUL2, QMULT): C(E+1) * C(AC+1);
-/// C(E) * C(AC+1) plus the high part of the first; C(AC) * C(E+1) plus the
-/// low 35 bits of the second; C(AC) * C(E) plus the high parts of the
-/// second and the third. The high words are signed, the low words are 35
-/// magnitude bits. Each call of QMULT ends with `[ARX]+[ARX], AD FLAGS`,
-/// with the high part of its product in ARX: Carry 0 is its sign, Carry 1
-/// its bit 35 in two's complement (docs/discrepancies.md, "DMUL: the
-/// carry flags of QMULT", has the measurement on `ks10-core-uop`).
-fn dmul_flags(m: &mut Machine, (ah, al): (W36, W36), (bh, bl): (W36, W36)) {
-    let (ah, bh) = (i128::from(ah.signed()), i128::from(bh.signed()));
-    let (al, bl) = (i128::from(al.get() & MAG), i128::from(bl.get() & MAG));
-    let low = (1i128 << 35) - 1;
-    let h1 = (al * bl) >> 35;
-    let p2 = bh * al + h1;
-    let h2 = p2 >> 35;
-    let h3 = (ah * bl + (p2 & low)) >> 35;
-    let h4 = (ah * bh + h2 + h3) >> 35;
-    for h in [h1, h2, h3, h4] {
-        m.flags.arith(h < 0, (h >> 35) & 1 != 0);
-    }
-}
-
 fn dmul(m: &mut Machine, i: Inst, e: Half) -> R {
     let (bh, bl) = (m.read(e)?, m.read(next(e))?);
     let (ah, al) = (m.ac[i.ac], m.ac[ac(i, 1)]);
     let (a, b) = (value(ah, al), value(bh, bl));
-    dmul_flags(m, (ah, al), (bh, bl));
     let p = mul70(a.unsigned_abs(), b.unsigned_abs());
     let negative = (a < 0) != (b < 0) && p != (0, 0);
     let (sign, q) = if p.0 >> 70 != 0 {
-        // Only (-2^70)^2: the magnitude 2^140 does not fit (PRM, DMUL).
-        // The last call of QMULT sets Overflow ([`dmul_flags`]).
+        // Only (-2^70)^2: the magnitude 2^140 does not fit. Overflow and
+        // Trap 1 (PRM, DMUL).
+        m.flags.set(Flags::AROV | Flags::TRAP1);
         (true, (0, 0))
     } else if negative {
         (true, neg_quad(p))
@@ -216,15 +184,6 @@ fn dmul(m: &mut Machine, i: Inst, e: Half) -> R {
     for (k, w) in quad_words(sign, q).into_iter().enumerate() {
         m.ac[ac(i, k)] = w;
     }
-    // CLR FPD clears the trap flags. DMTRAP then tests Overflow, which can
-    // be set from an earlier instruction, and sets Trap 1 with SET AROV
-    // (simple.42, DMUL2, DMTRAP).
-    let t = if m.flags.has(Flags::AROV) {
-        Flags::TRAP1
-    } else {
-        0
-    };
-    m.flags.change(t);
     Ok(Next::Step)
 }
 
@@ -245,7 +204,7 @@ fn ddiv(m: &mut Machine, i: Inst, e: Half) -> R {
     };
     let dv = d.unsigned_abs();
     if dv == 0 || mag_hi >= dv {
-        m.flags.change(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
+        m.flags.set(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
         return Ok(Next::Step);
     }
     let (mut r, mut q) = (mag_hi, 0u128);
@@ -305,6 +264,7 @@ mod tests {
         let mut m = machine(&[], &[0, 1]);
         run(&mut m, 0o121);
         assert_eq!(acs(&m, 2), [N, MAG]); // -1: low word bit 0 is 0
+        assert_eq!(m.flags.0, 0);
         let mut m = machine(&[], &[0, 0]);
         run(&mut m, 0o121);
         assert_eq!(acs(&m, 2), [0, 0]);
@@ -343,17 +303,15 @@ mod tests {
         let mut m = machine(&[N, N], &[0, 3]);
         run(&mut m, 0o116);
         assert_eq!(acs(&m, 4), [N, N, N, N - 2]);
-        // (-2^70)^2 overflows. The flags are those of ks10-core-uop
-        // (docs/discrepancies.md, "DMUL: the carry flags of QMULT"):
-        // Overflow, Carry 1, Trap 1.
+        // (-2^70)^2 overflows: Overflow and Trap 1, and no carry flag
+        // (PRM, DMUL).
         let mut m = machine(&[1 << 35, 0], &[1 << 35, 0]);
         run(&mut m, 0o116);
-        assert_eq!(m.flags.0, Flags::AROV | Flags::CRY1 | Flags::TRAP1);
-        // -1,,2 (AC) by 377777,,777777 123456,,654321 (E): Carry 0 and
-        // Carry 1, from ks10-core-uop.
+        assert_eq!(m.flags.0, Flags::AROV | Flags::TRAP1);
+        // Other products set no flag.
         let mut m = machine(&[N, 2], &[0o377777_777777, 0o123456_654321]);
         run(&mut m, 0o116);
-        assert_eq!(m.flags.0, Flags::CRY0 | Flags::CRY1);
+        assert_eq!(m.flags.0, 0);
     }
 
     #[test]

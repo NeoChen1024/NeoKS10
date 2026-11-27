@@ -69,9 +69,7 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
     if i.op == 0o133 {
         return Ok(Next::Step);
     }
-    // SET FPD and CLR FPD are words with SPEC/FLAGS (simple.42, BYTEA,
-    // DPB; [`Flags::change`]).
-    m.flags.change(Flags::FPD);
+    m.flags.set(Flags::FPD);
     let Some((be, _)) = m.ea_ref(ptr, Ref::E2)? else {
         // An indirect chain that does not end: do the instruction again
         // with FPD set, as after an interrupt.
@@ -87,7 +85,6 @@ pub fn execute(m: &mut Machine, i: Inst, e: Half) -> R {
         m.vwrite(be, deposit(word, m.ac[i.ac], p, s), Ref::D2)?;
     }
     m.flags.clear(Flags::FPD);
-    m.flags.change(0);
     Ok(Next::Step)
 }
 
@@ -110,7 +107,7 @@ fn adjbp(m: &mut Machine, i: Inst, e: Half) -> R {
     let bpw = p / s + (36 - p) / s;
     if bpw == 0 {
         // NO DIVIDE: the AC does not change.
-        m.flags.change(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
+        m.flags.set(Flags::AROV | Flags::TRAP1 | Flags::NODIV);
         return Ok(Next::Step);
     }
     let adj = m.ac[i.ac].signed();

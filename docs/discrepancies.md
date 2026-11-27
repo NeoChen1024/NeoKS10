@@ -295,10 +295,8 @@ the control RAM.
 - **[measured]** 2026-11-27, the microcode-level model
   (`emu/ks10-core-uop/tests/instructions.rs`, `flag_cases`). 36 cases
   start with the two trap flags set, and again with all flags of
-  executive mode except FPD. The model and `emu/ks10-core-soft` agree
-  with the rule above, from both fills. Without the rule and the carry
-  of the next section in `emu/ks10-core-soft`, 96 of the 144 runs
-  differ. ASH 1,2 with AC 1 = 200000,,000001 gives AC 1 = 4,
+  executive mode except FPD. The model agrees with the rule above,
+  from both fills. ASH 1,2 with AC 1 = 200000,,000001 gives AC 1 = 4,
   OV 1 and TRAP 1 0: the first step overflows, the second does not.
   Random left shifts with ASH and ASHC agree with the rule. The byte
   instructions and DMUL also agree with flags set. The model does not
@@ -323,14 +321,14 @@ the control RAM.
   machine, and the arithmetic trap instruction in 421 is a JFCL (seen in
   a run on `emu/ks10-core-soft`, 2026-11-27).
 
-The project uses the microcode and the schematics (rank 1).
-`emu/ks10-core-soft` loads both trap flags at each such word
-(`flags.rs`, `Flags::change` and `Flags::arith`), and sets Trap 1 to the
-overflow of the last step of ASH (`shift.rs`, `Ash`). The differential
-run starts each case with the flags 0, so only the ASH case shows there.
-It takes Trap 1 of SIMH and KLH10 as 0 for a case with an overflow only
-before the last step, and compares the rest
-(`emu/ks10-core-soft/tests/oracle.rs`, `microcode_trap_1`).
+The microcode-level model uses the microcode and the schematics (rank
+1). `emu/ks10-core-soft` follows the PRM, as SIMH and KLH10 do: an
+instruction only sets a trap flag, and ASH sets Trap 1 for an overflow in
+any step. This is a design decision of 2026-11-28
+([`emulator.md`](emulator.md), "Differences from the microcode"). The
+single-instruction test of the model has the case in its table `KNOWN`,
+and `the_flag_rules_of_the_microcode` checks the rule on the model
+alone (`emu/ks10-core-uop/tests/instructions.rs`).
 
 ## DMOVN: the carry flags of the complement
 
@@ -359,11 +357,10 @@ before the last step, and compares the rest
   DMOVN and DMOVNM with the low words 0 and 400000,,0 (`DMVNF`,
   `DMVNMF`): the magnitude is 0, so the high word is negated.
 
-The project uses the microcode and the data path (rank 1).
-`emu/ks10-core-soft` sets Carry 0 and Carry 1 (`dbl.rs`, `negate`). The
-differential run takes Carry 0 and Carry 1 of SIMH and KLH10 as 1 for
-such a case (`emu/ks10-core-soft/tests/oracle.rs`,
-`microcode_dmovn_carry`).
+The microcode-level model uses the microcode and the data path (rank 1).
+`emu/ks10-core-soft` follows the PRM, SIMH and KLH10, and sets no flag
+here (design decision 2026-11-28, as in "Trap 1 and Trap 2: each flag
+word loads them").
 
 ## DMUL: the carry flags of QMULT
 
@@ -393,9 +390,7 @@ such a case (`emu/ks10-core-soft/tests/oracle.rs`,
   no carry flag. **[measured]** 2026-11-27: without the mask below, the
   differential run gives 3 differences with each emulator, all DMUL.
 
-The project uses the microcode (rank 1). `emu/ks10-core-soft` computes
-the four high parts (`dbl.rs`, `dmul_flags`). For DMUL, the
-differential run takes Carry 0 and Carry 1 of SIMH and KLH10 from
-`emu/ks10-core-soft` (`emu/ks10-core-soft/tests/oracle.rs`,
-`microcode_dmul_carry`). `emu/ks10-core-uop/tests/instructions.rs`
-(`random_dmuls`) checks the flags against the microcode.
+The microcode-level model uses the microcode (rank 1).
+`emu/ks10-core-soft` follows the PRM, SIMH and KLH10: Overflow and Trap
+1 for (-2^70)^2, and no carry flag (design decision 2026-11-28, as in
+"Trap 1 and Trap 2: each flag word loads them").

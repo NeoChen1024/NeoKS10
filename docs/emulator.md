@@ -879,6 +879,12 @@ have behaviour that is not intended.
   same result, because the strings must not overlap (PRM 2.12).
 - The halt status block has 0 in the words of microcode temporaries
   (`docs/unknowns.md`).
+- The program flags follow the PRM where the microcode differs only in
+  its internal steps ([`discrepancies.md`](discrepancies.md)):
+  - An instruction only sets Trap 1 and Trap 2; ASH sets Trap 1 for an
+    overflow in any step. The microcode loads both at each flag word.
+  - DMOVN and DMOVNM set no carry flag for a low word not 0.
+  - DMUL sets no carry flag; (-2^70)^2 sets Overflow and Trap 1.
 - Bits 16 and 17 of the page fail word of a memory reference are 0. The
   microcode keeps VMA 16 and 17 there **[microcode]** (`itspag.98`,
   `PFMAP`, `ADDRESS HIGH/MEMORY`). The hardware loads VMA 14 to 17 from

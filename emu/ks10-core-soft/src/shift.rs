@@ -128,25 +128,14 @@ struct Ash {
     value: u128,
     /// A step lost a bit that differs from the sign.
     overflow: bool,
-    /// For a left shift, whether the last step lost such a bit.
-    last: Option<bool>,
 }
 
 impl Ash {
-    /// The microcode shifts left one place for each step and tests each
-    /// step with `ASH AROV` **[microcode]** (simple, `ASH36 LEFT`, `ASHCL`).
-    /// At each test, OV keeps its value or is set, but TRAP 1 takes the
-    /// result of the step (M8620-0-DPE9 rev B, E78, E85, E92; see
-    /// docs/discrepancies.md, "Trap 1 and Trap 2: each flag word loads
-    /// them"). Thus TRAP 1 is the overflow of the last step.
+    /// If a left shift loses a bit of significance, Overflow and Trap 1
+    /// (PRM 2.5, ASH).
     fn set_flags(&self, f: &mut Flags) {
         if self.overflow {
-            f.set(Flags::AROV);
-        }
-        match self.last {
-            Some(true) => f.set(Flags::TRAP1),
-            Some(false) => f.clear(Flags::TRAP1),
-            None => {}
+            f.set(Flags::AROV | Flags::TRAP1);
         }
     }
 }
@@ -177,12 +166,9 @@ fn ash(x: u128, bits: u32, n: i32) -> Ash {
         // After mag_bits places, the zeros that came in at the right leave
         // bit 1 too: they differ from the sign of a negative number.
         let zeros_lost = sign == 1 && k > mag_bits;
-        // The bit that the last step loses.
-        let last = if k > mag_bits { 0 } else { lost & 1 };
         Ash {
             value: (sign << mag_bits) | shifted,
             overflow: lost != all || zeros_lost,
-            last: Some(last != sign),
         }
     } else {
         // Right: the sign comes in at bit 1.
@@ -195,7 +181,6 @@ fn ash(x: u128, bits: u32, n: i32) -> Ash {
         Ash {
             value: (sign << mag_bits) | shifted,
             overflow: false,
-            last: None,
         }
     }
 }
@@ -299,20 +284,16 @@ mod tests {
         assert_eq!(ash2(0o000000000100, 36, -3), (0o10, false));
     }
 
+    // PRM 2.5, ASH: a lost bit of significance sets Overflow and Trap 1,
+    // also if a later step loses none; a flag that is set stays.
     #[test]
-    fn trap_1_is_the_overflow_of_the_last_step() {
-        // The first of two steps loses a 1, the second a 0.
-        assert_eq!(ash(0o200000_000001, 36, 2).last, Some(false));
-        assert_eq!(ash(0o100000_000001, 36, 2).last, Some(true));
-        // Past the magnitude, the steps lose zeros.
-        assert_eq!(ash(1, 36, 40).last, Some(false));
-        assert_eq!(ash(0o777777_777777, 36, 40).last, Some(true));
-        // A right shift or no shift does not test.
-        assert_eq!(ash(0o200000_000001, 36, -2).last, None);
-        assert_eq!(ash(0o200000_000001, 36, 0).last, None);
-        let mut f = Flags(Flags::TRAP1);
+    fn an_overflow_sets_overflow_and_trap_1() {
+        let mut f = Flags(0);
         ash(0o200000_000001, 36, 2).set_flags(&mut f);
-        assert_eq!(f, Flags(Flags::AROV));
+        assert_eq!(f, Flags(Flags::AROV | Flags::TRAP1));
+        let mut f = Flags(Flags::TRAP1);
+        ash(0o000000_000001, 36, 2).set_flags(&mut f);
+        assert_eq!(f, Flags(Flags::TRAP1));
     }
 
     #[test]

@@ -176,93 +176,6 @@ fn skip(c: &Case, r: Ref) -> Option<&'static str> {
     }
 }
 
-/// "Trap 1 and Trap 2: each flag word loads them"
-/// (docs/discrepancies.md): both emulators set Trap 1 for any overflow of
-/// ASH and ASHC, and the microcode sets it only for an overflow of the
-/// last step. For such a case the comparison takes Trap 1 (PC word bit 10)
-/// of the emulator as 0, and compares the rest.
-fn microcode_trap_1(c: &Case, mut b: Run) -> Run {
-    if early_overflow_only(c) {
-        for r in b.records.iter_mut().skip(1) {
-            r[0] &= !(1 << (35 - 10));
-        }
-    }
-    b
-}
-
-/// "DMOVN: the carry flags of the complement" (docs/discrepancies.md):
-/// if the magnitude of the low word is not 0, the microcode complements
-/// the high word with `AD FLAGS`, and the 2901 sets Carry 0 and Carry 1.
-/// Both emulators leave the flags. For such a case the comparison takes
-/// Carry 0 and Carry 1 (PC word bits 1 and 2) of the emulator as 1.
-fn microcode_dmovn_carry(c: &Case, mut b: Run) -> Run {
-    let op = (c.inst >> 27) as u32;
-    let a = ((c.inst >> 23) & 0o17) as usize;
-    let y = (c.inst & 0o777777) as u32;
-    let word = |e: u32| {
-        if e < 0o20 {
-            c.ac[e as usize]
-        } else {
-            c.mem.get(&e).copied().unwrap_or(0)
-        }
-    };
-    let low = match op {
-        0o121 => word((y + 1) & 0o777777),
-        0o125 => c.ac[(a + 1) & 0o17],
-        _ => return b,
-    };
-    if low & 0o377777_777777 != 0 {
-        for r in b.records.iter_mut().skip(1) {
-            r[0] |= 3 << (35 - 2);
-        }
-    }
-    b
-}
-
-/// "DMUL: the carry flags of QMULT" (docs/discrepancies.md): each call
-/// of QMULT ends with `AD FLAGS` on a partial product, which sets Carry 0
-/// and Carry 1. Both emulators leave them. For DMUL the comparison takes
-/// Carry 0 and Carry 1 (PC word bits 1 and 2) of the emulator from
-/// `ks10-core-soft`. `emu/ks10-core-uop/tests/instructions.rs`
-/// (`random_dmuls`) checks these flags against the microcode.
-fn microcode_dmul_carry(c: &Case, a: &Run, mut b: Run) -> Run {
-    if c.inst >> 27 == 0o116 {
-        let bits = 3 << (35 - 2);
-        for (r, s) in b.records.iter_mut().zip(&a.records).skip(1) {
-            r[0] = (r[0] & !bits) | (s[0] & bits);
-        }
-    }
-    b
-}
-
-/// ASH or ASHC left: a step loses a bit that differs from the sign, but
-/// the last step does not. The bits that the steps lose are the magnitude
-/// from the top, then zeros.
-fn early_overflow_only(c: &Case) -> bool {
-    let op = &ins::OPS[(c.inst >> 27) as usize];
-    let a = ((c.inst >> 23) & 0o17) as usize;
-    let n = count((c.inst & 0o777777) as u32);
-    let (hi, lo) = (u128::from(c.ac[a]), u128::from(c.ac[(a + 1) & 0o17]));
-    let (mag, bits) = match op.dram.j {
-        "ASH" => (hi & ((1 << 35) - 1), 35),
-        "ASHC" => (((hi & ((1 << 35) - 1)) << 35) | (lo & ((1 << 35) - 1)), 70),
-        _ => return false,
-    };
-    if n <= 0 {
-        return false;
-    }
-    let sign = (hi >> 35) & 1;
-    let lost = |step: u32| {
-        if step > bits {
-            0
-        } else {
-            (mag >> (bits - step)) & 1
-        }
-    };
-    let k = n as u32;
-    (1..k).any(|s| lost(s) != sign) && lost(k) == sign
-}
-
 fn skip_klh10(c: &Case) -> Option<&'static str> {
     let op = &ins::OPS[(c.inst >> 27) as usize];
     let e = (c.inst & 0o777777) as u32;
@@ -834,8 +747,6 @@ fn random_instructions() {
         .filter(|c| !noskip && refs.iter().all(|(r, _)| skip(c, *r).is_some()))
         .count();
     let _ = writeln!(err, "cases that no emulator compares: {uncompared}");
-    let early = all.iter().filter(|c| early_overflow_only(c)).count();
-    let _ = writeln!(err, "cases with Trap 1 of the microcode: {early}");
     if refs.len() == Ref::ALL.len() {
         assert_eq!(uncompared, 0, "cases that no emulator compares");
     }
@@ -857,12 +768,10 @@ fn random_instructions() {
             let theirs =
                 reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
             for (c, b) in chunk.iter().zip(theirs) {
-                let b = microcode_dmovn_carry(c, microcode_trap_1(c, b));
                 match ours(c) {
                     Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
                     Ok(a) => {
                         records += a.records.len();
-                        let b = microcode_dmul_carry(c, &a, b);
                         if let Some(d) = difference(c, &a, &b, r) {
                             failures.push((c, d));
                         }

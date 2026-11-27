@@ -763,8 +763,13 @@ can differ by a decision ("Time and the boot of ITS"). Each such case is
 an entry of the table `KNOWN` of the test, with its section of
 [`emulator.md`](emulator.md), "Differences from the microcode". For a
 case of the table, the test leaves out the parts of the state that the
-entry names; the other parts must agree. The table has no entry: all
-712 runs agree **[measured]** 2026-11-28.
+entry names; the other parts must agree. The table has three entries:
+"Trap 1 and Trap 2", "DMOVN carry flags" and "DMUL carry flags"
+([`discrepancies.md`](discrepancies.md)). **[measured]** 2026-11-28: 480
+of the 712 runs agree, and 232 differ only in the flags of these entries.
+The test `the_flag_rules_of_the_microcode` checks these flag rules on
+the model alone, with values from the reading of DPE9 and the microcode.
+A mutant of the model that holds Trap 1 fails it.
 
 **Result [measured]** 2026-11-27 (`emu/ks10-core-uop/tests/instructions.rs`,
 the ITS listing 262). The test compares the ACs, PC, the program flags
@@ -777,8 +782,7 @@ by 0 and with overflow in the first or the last step; ASHC both ways; LSH
 both ways and by 40 places; ROT both ways. 48 random left shifts with ASH
 and ASHC from a fixed seed also agree. TRAP 1 after ASH is the overflow
 of the last step ([`discrepancies.md`](discrepancies.md), "Trap 1 and
-Trap 2: each flag word loads them"). Without that rule in
-`emu/ks10-core-soft`, 15 of the 90 cases differ, from both fills.
+Trap 2: each flag word loads them").
 
 52 more cases run twice with flags set: once with the two trap flags,
 once with all flags of executive mode except FPD. They test the words with
@@ -795,9 +799,9 @@ FSBR, FMP, FMPR, FDV, FDVR, FIX, FIXR, FSC, DFAD, DFSB, DFMP and DFDV. A
 third of the exponents are near 0 or 377, so that results overflow and
 underflow (`SPEC/EXPTST`). 42 DMUL cases have random double words, and
 the two cases of [`discrepancies.md`](discrepancies.md), "DMUL: the
-carry flags of QMULT". All 712 runs agree. Mutants: without the FXU
-term, 32 runs differ; without X in Floating Overflow, 62; without X in
-Trap 1, 66. If `EXP TEST` keeps Trap 1, 8 runs with flags set differ.
+carry flags of QMULT". Mutants (2026-11-28, before the table `KNOWN`):
+without the FXU term, 32 runs differ; without X in Floating Overflow,
+62; without X in Trap 1, 66.
 If each `MULTI PREC` word needs FL 02, 26 runs of DFSB stop.
 
 The run executes these codes (both fills, with the halt path):

@@ -69,24 +69,10 @@ impl Flags {
         W36::from_halves(Half::wrap(u64::from(self.0 & Self::ALL)), pc)
     }
 
-    /// A microcode word with `SPEC/FLAGS` (ks10.47, "MACROS -- PC FLAGS")
-    /// that sets the flags `set`. Trap 1 and Trap 2 have no hold term
-    /// **[microcode]** (M8620-0-DPE9 rev B: E60 loads Trap 2 from DBM 07
-    /// OR (DBM 15 AND DP 09); E85 and E78 load Trap 1 from DBM 08, DP 10,
-    /// the overflow of `AD FLAGS`, ASH and the exponent test). Each such
-    /// word thus clears the trap flags that it does not set. The other
-    /// flags of `set` are set; the flags not named stay.
-    pub fn change(&mut self, set: u32) {
-        self.clear(Self::TRAP1 | Self::TRAP2);
-        self.set(set);
-    }
-
     /// The flags of the result of an addition or a subtraction (PRM 2.2,
-    /// "Fixed Point Arithmetic"; ks10.47, `AD FLAGS`): Carry 0 and Carry 1
-    /// from the carries; if they differ, Overflow and Trap 1. As every
-    /// word with `SPEC/FLAGS`, it loads both trap flags ([`Flags::change`]).
+    /// "Fixed Point Arithmetic"): Carry 0 and Carry 1 from the carries; if
+    /// they differ, Overflow and Trap 1. A flag that is set stays set.
     pub fn arith(&mut self, cry0: bool, cry1: bool) {
-        self.clear(Self::TRAP1 | Self::TRAP2);
         if cry0 {
             self.set(Self::CRY0);
         }
@@ -103,18 +89,18 @@ impl Flags {
 mod tests {
     use super::Flags;
 
-    // The values come from the microcode-level model, which runs the ITS
-    // microcode (emu/ks10-core-uop/tests/instructions.rs, `flag_cases`).
+    // PRM 2.2: an instruction sets flags and does not clear them; the trap
+    // flags clear when the processor takes the trap (PRM 2.9).
     #[test]
-    fn a_flag_word_loads_both_trap_flags() {
+    fn arithmetic_flags_only_set() {
         let mut f = Flags(Flags::TRAP1 | Flags::TRAP2 | Flags::FPD);
         f.arith(false, false);
-        assert_eq!(f, Flags(Flags::FPD));
-        let mut f = Flags(Flags::TRAP1 | Flags::TRAP2);
+        assert_eq!(f, Flags(Flags::TRAP1 | Flags::TRAP2 | Flags::FPD));
+        let mut f = Flags(Flags::TRAP2);
         f.arith(true, false);
-        assert_eq!(f, Flags(Flags::CRY0 | Flags::AROV | Flags::TRAP1));
-        let mut f = Flags(Flags::TRAP1 | Flags::CRY1);
-        f.change(Flags::TRAP2);
-        assert_eq!(f, Flags(Flags::TRAP2 | Flags::CRY1));
+        assert_eq!(
+            f,
+            Flags(Flags::CRY0 | Flags::AROV | Flags::TRAP1 | Flags::TRAP2)
+        );
     }
 }
