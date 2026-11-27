@@ -237,7 +237,7 @@ with the same `KS10_ITS_DISK`; the tapes come from the same directory):
 | One `Machine` owns all state | `Machine` holds the processor, the memory, the 8080 console state, the two adapters and their devices as fields. Devices get a context (memory, interrupt lines, time) for each call; they keep no references |
 | A word is its own type | A type `Word` (36 bits in a `u64`) in a crate `pdp10`, with the octal text and the field helpers |
 | `unsafe` only in `plio::mmio` | The memory of step 5 is a `plio` mapping. All other code is safe |
-| No new dependency without approval | The owner approved `toml` and `serde` for the configuration file (see [Decisions of the owner](#decisions-of-the-owner)) |
+| No new dependency without approval | The owner approved `toml` and `serde` for the configuration file, and `reedline` for the operator console (see [Decisions of the owner](#decisions-of-the-owner)) |
 | Decoders and constants from `spec/` | The instruction table and a device register table in `spec/` generate the Rust constants, as `spec/regmap.toml` does now |
 | C interface for co-simulation and the PL bridge | The `ks10` library exports C functions: create a machine, run one instruction, read the instruction record |
 | Device I/O with `pread` and `pwrite` | A disk transfer reads or writes the image file directly into the guest memory, when the adapter map gives contiguous memory |
@@ -252,7 +252,7 @@ The crates of `emu/`:
 |---|---|
 | `pdp10` | `Word`, octal text, instruction decode generated from `spec/instructions.*` |
 | `ks10` | `Machine`: the processor (interpreter), memory, paging, APR, PI, timers, 8080 console, Unibus adapters, devices, the host layer. The C interface |
-| `neoks10` (the binary `neoks10`) | Command line, configuration, operator console, image tools |
+| `neoks10` (the binary `neoks10`) | Command line, configuration, operator console, control socket, scripts, image tools |
 | `plio` | Access to the PL (exists) |
 
 Memory has two kinds, behind one interface:
@@ -294,8 +294,10 @@ that record on `soft` then repeats the run in software.
 The program `neoks10` has subcommands.
 
 ```
-neoks10 run [CONFIG] [--record FILE] [--replay FILE] [--trace FILE]
-            [--cpu soft|pl] [--realtime] [--stop-after N] [--script FILE]
+neoks10 run [CONFIG] [--control PATH] [--record FILE] [--replay FILE]
+            [--trace FILE] [--cpu soft|pl] [--realtime] [--script FILE]
+neoks10 console [--control PATH]
+neoks10 ctl [--control PATH] COMMAND...
 neoks10 image create rp06 FILE
 neoks10 image info FILE
 neoks10 image convert --from klh10 IN OUT
@@ -303,46 +305,119 @@ neoks10 tape list FILE
 neoks10 trace diff A B
 ```
 
-- `run` starts the machine and the operator console. `CONFIG` names the
-  configuration file.
+- `run` starts the machine. Its terminal is the console terminal (CTY) of
+  the KS10 and the operator console. `CONFIG` names the configuration file.
+- `console` opens the operator console from another terminal, through the
+  control socket of a running `run`.
+- `ctl` sends one command to the control socket and prints the reply. It
+  is for scripts and coding agents.
 - `--trace` writes one record for each completed instruction, in the
   format that the co-simulation compares.
-- `--script` reads operator console commands from a file, for the tests
-  `make diag` and `make its-boot`.
+- `--script` reads operator commands from a file (see [Scripts](#scripts)).
 - `image convert` exists for KLH10 images; the step 0 images need no
   conversion.
 
 ### Operator console
 
-The terminal of `neoks10 run` is the console terminal of the KS10. An escape
-character stops the guest and gives the operator prompt. The ITS build
-scripts use Ctrl-\ (034) for this (`build/pdp10-ks/build.tcl`,
-`emulator_escape`), and the default is the same.
+**The machine runs while the operator works.** Commands do not stop the
+guest unless the operator gives `halt`. On a multi-user system, a tape
+change thus does not stop the other users. A command that needs a
+stopped processor (`deposit`, `step`, the registers of the processor)
+tells the operator to give `halt` first.
+
+**Two modes on the terminal of `run`:**
+
+- CTY mode: the terminal is in raw mode. Each key goes to the CTY, and
+  the CTY output goes to the terminal.
+- Command mode: the escape character Ctrl-\ (034) opens the prompt. The
+  guest goes on. CTY output waits in a buffer and appears when the prompt
+  closes. An empty line or `cty` returns to CTY mode.
+
+The line editor is `reedline` (approved on 2026-11-27). Its terminal
+layer `crossterm` also sets the raw mode of CTY mode, so `neoks10` has
+no `unsafe` code.
+
+**Syntax: a noun, a unit, a verb, then arguments.**
+
+```
+tape 0 mount minsys.tape --ro      tape 0 rewind      tape 0 unmount
+disk 0 attach rp0.dsk              boot disk 0        boot tape 2
+dz line 7 listen 127.0.0.1:10018   mem examine 1000..1017
+mem examine exec:774000            mem deposit 1000 254000,,1000
+cpu show      cpu halt      cpu continue      cpu step 10
+show devices  record mark TEXT     quit
+```
+
+There are no SIMH names and no abbreviations; completion replaces them.
+Numbers for guest addresses and words are octal (AGENTS.md).
+
+**One command table.** A table in Rust gives each command, the type of
+each argument, a one-line help text and the source of the completion. The
+parser, the completion, `help` and `docs/console.md` come from this
+table. `docs/console.md` is generated and in git, like the files of
+`make gen`.
+
+**Completion and hints.** Because the arguments have types, the
+completion knows the candidates at the cursor:
+
+- Nouns and verbs, each with its help text in the completion menu.
+- The units that exist, for example the tape transports of the
+  configuration, with the attached image.
+- File paths, filtered by the type of the argument (`.tape`, `.dsk`).
+- Enumerated values, for example `soft` and `pl`.
+- Addresses: octal numbers, and the address spaces `exec:`, `user:` and
+  `phys:`.
+
+A hint after the cursor shows the rest of the most recent matching line
+of the history. An unknown word gives the nearest known word: `unknown
+noun "tpe"; did you mean "tape"?`.
+
+**The control socket.** `run` listens on a Unix domain socket, by default
+`neoks10.sock` in the directory of the configuration file
+(`--control PATH` changes it). The socket file has mode 0600. There is no
+TCP control port. The protocol has one command for each line, in the
+syntax above. Each reply is one line of JSON: `{"ok":true,"result":...}`
+or `{"ok":false,"error":"..."}`. A small JSON writer in `neoks10` makes
+the replies; the protocol parses no JSON, so it needs no new crate. Some
+commands exist for clients that do not own the terminal:
+
+| Command | Function |
+|---|---|
+| `cty send TEXT` | Type TEXT on the CTY (escapes `\r`, `\e`, `\xHH`) |
+| `cty read [--from N]` | The CTY output from byte N, and the next N |
+| `expect TEXT [--steps N]` | Wait until TEXT is in the CTY output, at most N instructions |
+| `show STATE --json` | The state as JSON (all `show` commands) |
+
+`neoks10 console` and `neoks10 ctl` use the socket. Several clients can
+connect at the same time.
+
+**Threads and determinism.** One thread owns `Machine` and runs the
+instructions. The terminal thread and the socket threads send commands
+to it through `std::sync::mpsc` channels and get the replies the same
+way. The machine thread does a command between two instructions. A
+command that changes the guest (a key, a tape mount) is an input of the
+host layer: it gets the instruction count, and `--record` writes it. A
+replay thus gives the same run without the terminal or the socket.
+
+### Scripts
+
+A script file has operator commands, one for each line, and two more:
+
+- `expect TEXT [--steps N]`: wait for TEXT in the CTY output. N is a
+  number of instructions, not a wall-clock time. If the text does not
+  come, the script stops with an error.
+- `send TEXT`: type TEXT on the CTY.
+
+The ITS build of `its/` and `make its-boot` use scripts. The waits count
+instructions, so a script gives the same result on a slow host.
 
 The ITS build drives the emulator with these operations
 (`build/pdp10-ks/build.tcl` and `build/ks10/include.tcl` of the ITS tree):
 start with an initial command file, a prompt, attach a tape image to a
 unit, boot from a tape unit, boot from the disk, continue, quit, and the
-escape character. The console has a command for each:
-
-| Command | Function | 8080 command |
-|---|---|---|
-| `boot disk [UNIT]` | The `BT` sequence | `BT` |
-| `boot tape [UNIT]` | The `MT` sequence | `MT` |
-| `attach DEVICE FILE [ro]` | Attach an image to a disk or tape unit | none |
-| `detach DEVICE` | Detach an image | none |
-| `continue` | Continue the guest | `CO` |
-| `halt` | Stop the processor | `HA` |
-| `shutdown` | Set `8SWIT0` | `SH` |
-| `start ADDR` | Start at an address | `ST` |
-| `step [N]` | Run N instructions | `SI` |
-| `examine ADDR [N]`, `deposit ADDR WORD` | Physical memory, octal | `EM`, `DM` |
-| `show STATE` | Processor, devices, attachments | none |
-| `record mark TEXT` | A mark in the record file | none |
-| `quit` | End the program | none |
-
-The `its/` directory of this repository holds the scripts that the ITS build
-needs under `build/<emulator>/` (AGENTS.md). They use these commands.
+escape character. The `its/` directory of this repository holds the
+scripts that the ITS build needs under `build/<emulator>/` (AGENTS.md).
+They use the commands above.
 
 ### Configuration file
 
@@ -513,7 +588,9 @@ Differences from the microcode:
 4. The adapters, the RH11 with the TM03: boot from tape (salvager,
    DSKDMP). Done.
 5. The RH11 with the RP06: boot ITS from `rp0.dsk`. Done.
-6. The DZ11, the diagnostics, the ITS build.
+6. `neoks10`: the configuration, the operator console, the control
+   socket, scripts. Then the host side of the DZ11 lines, the
+   diagnostics, the ITS build.
 7. Step 6 of README.md: the CH11 and the IMP.
 
 ## Decisions of the owner
@@ -526,9 +603,20 @@ Decided on 2026-11-26:
 3. The escape character is Ctrl-\ (034), as in the ITS build scripts.
 4. The DZ11 listeners are on the loopback address only by default.
 
+Decided on 2026-11-27:
+
+5. The crate `reedline` is approved for the operator console. A test
+   (2026-11-27) built a small program with `reedline` 0.53.0 for
+   armv7-unknown-linux-musleabihf: 43 crates, no asynchronous runtime, a
+   static binary of 1.4 MiB. In a pseudo terminal under `qemu-arm`, Tab
+   completed `ta` to `tape`, as on the host **[measured]**.
+6. The machine runs while the operator console is open.
+7. The console has no SIMH command names.
+8. The control socket is in the first version.
+
 Open:
 
-5. The IMP interface for step 6. The choices include the emulator-only
+9. The IMP interface for step 6. The choices include the emulator-only
    `SSIMP` of the `DB` configuration, the ACC LH/DH of a real KS10
    (`KSIMP`), and an interface of this project. The decision waits for
    step 6.
