@@ -40,12 +40,15 @@ pub struct Timer {
 }
 
 impl Timer {
-    /// The hardware part of the time base: units since the last tick.
+    /// The hardware part of the time base: units since the last tick. The
+    /// two low bits of the counter do not reach the processor: DBM bits 34
+    /// and 35 of input 2 are 0 **[manual]** (M8621-0-DPM2 rev B, E165,
+    /// E188; the counter is DPMC E181, E189, E180).
     fn hardware(&self, now: u64) -> u64 {
         let k = now
             .saturating_sub(self.last_tick)
             .min(INSTRUCTIONS_PER_MS - 1);
-        k * UNITS_PER_MS / INSTRUCTIONS_PER_MS
+        (k * UNITS_PER_MS / INSTRUCTIONS_PER_MS) & !3
     }
 
     /// RDTIME: the double word time base.

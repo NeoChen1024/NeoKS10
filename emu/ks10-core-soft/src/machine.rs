@@ -438,6 +438,20 @@ impl Machine {
         Ok(None)
     }
 
+    /// The work between two instructions, at the instruction count: the
+    /// 1 ms clock, the 8080 and the devices. A second call at the same
+    /// count does nothing more. [`Machine::step`] starts with it; a test
+    /// that runs in step with the microcode-level model calls it to see
+    /// the requests of this instant.
+    pub fn run_devices(&mut self) {
+        timer::run(self);
+        self.console();
+        self.io.poll(self.count);
+        if !self.io.events.is_empty() {
+            self.io.run_events(&mut self.mem, self.count);
+        }
+    }
+
     /// The level of the interrupt that the next step takes, if any.
     fn pending_interrupt(&self) -> Option<u8> {
         if self.hold_interrupts {
@@ -475,18 +489,17 @@ impl Machine {
         w
     }
 
-    /// GOEXEC (simple.42): new flags and PC from a word. LEAVE USER: the
-    /// word may clear User. LOAD PCU: in executive mode the previous
-    /// context is the old mode.
+    /// GOEXEC (simple.42): new flags and PC from a word, with `LOAD
+    /// FLAGS`, `LEAVE USER` and `LOAD PCU`. DPE9 E46 loads bit 6 (PCU or
+    /// User In-out): 1 after user mode (USER AND LOAD PCU), else bit 6 of
+    /// the word (LOAD FLAGS AND DP 06 AND NOT USER) **[manual]**
+    /// (M8620-0-DPE9 rev B). **[emulator]** KS10FPGA 5090e7a1,
+    /// `pcflags.v`, `flagUSERIO`, has the same terms.
     pub fn goexec(&mut self, w: W36) {
         let old_user = self.flags.is_user();
         let mut f = Flags((w.lh().get() as u32) & Flags::ALL);
-        if !f.is_user() {
-            if old_user {
-                f.set(Flags::USERIO);
-            } else {
-                f.clear(Flags::USERIO);
-            }
+        if old_user {
+            f.set(Flags::USERIO);
         }
         self.flags = f;
         self.pc = w.rh();
@@ -708,12 +721,7 @@ impl Machine {
     /// Do one instruction, or take an interrupt or a trap. `Ok(())` if the
     /// processor can continue.
     pub fn step(&mut self) -> Result<(), Stop> {
-        timer::run(self);
-        self.console();
-        self.io.poll(self.count);
-        if !self.io.events.is_empty() {
-            self.io.run_events(&mut self.mem, self.count);
-        }
+        self.run_devices();
         if let Some(n) = self.pending_interrupt() {
             // An interrupt at the fetch after a one-proceeded instruction
             // takes the one-proceed trap first (itspag.98, CLTRP1, CLTRP2).
@@ -900,8 +908,12 @@ impl Machine {
             Err(Fault::Uuo)
         } else {
             // AREAD: the memory cycle of E starts before the instruction
-            // (simple.42, "THE INSTRUCTION LOOP -- FETCH ARGUMENTS").
-            let pre = if !d.i && d.vma && (d.read || d.test || d.write) {
+            // (simple.42, "THE INSTRUCTION LOOP -- FETCH ARGUMENTS"). The
+            // DROM VMA bit loads VMA, and READ and TEST start the cycle;
+            // the I bit does not stop it: `IW` (SETZM and others) is I and
+            // TEST, a write test of E **[microcode]** (ks10, `IW`: "IMMED
+            // WHICH STORE IN E"; `VMA/=<29>D,1`).
+            let pre = if d.vma && (d.read || d.test || d.write) {
                 self.touch(e, d.test || d.write)
             } else {
                 Ok(())
@@ -975,6 +987,21 @@ mod tests {
         assert_eq!((m.mem[0o451].get(), m.pc.get()), (0o2000, 0o1600));
     }
 
+    // SETZM is `IW` in the DROM: AREAD starts a write test of E, so the
+    // page fail word has the write bit (ks10, `IW`; itspag, PFMAP: a write
+    // test becomes WRITE CYCLE). The microcode-level model gives the same
+    // (the lockstep boot of ITS, emu/ks10-core-uop/tests/its_boot.rs,
+    // instruction 13 885 002).
+    #[test]
+    fn setzm_page_fails_as_a_write() {
+        let mut m = paged();
+        put(&mut m, 0o1000, 0o402000_002000); // SETZM 2000
+        put(&mut m, 0o442, 0o1500);
+        m.step().unwrap();
+        assert_eq!(m.mem[0o440].get(), pfw::WRITE | 0o2000);
+        assert_eq!(m.pc.get(), 0o1500);
+    }
+
     // PRM 2.9 (traps): with paging on, an overflow executes the
     // instruction at 421 after the instruction; the trap flags are
     // cleared, and a JSR stores the PC of the next instruction.
@@ -1043,6 +1070,25 @@ mod tests {
         );
         // MOVE has no flag word: the trap flags stay.
         assert_eq!(run(0o200040_002000, 0, [5, 0]), traps);
+    }
+
+    // GOEXEC in executive mode keeps bit 6 of the new flags word (DPE9
+    // E46); the microcode-level model gives the same (the lockstep boot of
+    // ITS, emu/ks10-core-uop/tests/its_boot.rs, instruction 10 856 504).
+    #[test]
+    fn goexec_in_executive_mode_takes_pcu_from_the_word() {
+        let mut m = Machine::new();
+        m.goexec(W36::from_halves(
+            Half::wrap(u64::from(Flags::USERIO)),
+            Half::wrap(0o100),
+        ));
+        assert_eq!(m.flags, Flags(Flags::USERIO));
+        m.goexec(W36::from_halves(Half::ZERO, Half::wrap(0o100)));
+        assert_eq!(m.flags, Flags(0));
+        // From user mode, LOAD PCU sets it.
+        m.flags = Flags(Flags::USER);
+        m.goexec(W36::from_halves(Half::ZERO, Half::wrap(0o100)));
+        assert_eq!(m.flags, Flags(Flags::USERIO));
     }
 
     // inout.50, TRP1: an opcode below 100 in the trap location is a
