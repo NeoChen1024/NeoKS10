@@ -1,0 +1,18 @@
+# `make its-boot`: boot ITS from the disk as the ITS build does
+# (build/pdp10-ks/build.tcl and build/build.tcl of the ITS tree: the 8080
+# BT command, "its" and ESC G at the DSKDMP prompt), log in on the CTY
+# and list the directory SYS;.
+boot disk
+expect DSKDMP
+send "its\r"
+expect its
+send "\eg"
+expect "IN OPERATION" --steps 400000000
+expect DELRNM --steps 400000000
+send "\x1a"
+expect Fair
+send ":login neoks\r"
+expect "LOGIN  NEOKS"
+send ":listf sys;\r"
+expect "FREE BLOCKS"
+quit

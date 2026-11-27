@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references
+.PHONY: gen check check-gen check-py check-rust check-rtl cosim formal mutate synth cross references its-boot
 
 BUILD_DIR ?= build
 MEMPROBE_RTL = rtl/gen/regmap_pkg.sv rtl/memprobe/memprobe_sync.sv \
@@ -122,6 +122,33 @@ cross:
 	cd emu && CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER=$(QEMU_ARM) \
 	    $(NICE) $(CARGO) test --locked --target $(CROSS_TARGET)
 	cd emu && $(NICE) $(CARGO) build --locked --release --target $(CROSS_TARGET)
+
+# Boot ITS from the disk image of the ITS build (pdp10-ks): KS10_ITS_DISK
+# names its rp0.dsk; dskdmp.tape and minsys.tape are in the same
+# directory. The image is a third-party file, so the target uses copies
+# in the build output.
+# 1. The tests of emu/ks10 that need the image (boot, idle loop, tapes).
+# 2. neoks10 runs tests/its-boot/boot.script with a record; a replay of
+#    the record on a fresh copy must give the same CTY output.
+ITS_BOOT_DIR = $(abspath $(BUILD_DIR))/its-boot
+NEOKS10 = $(CURDIR)/emu/target/release/neoks10
+its-boot:
+	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
+	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10 \
+	    --test its --test idle --test tape
+	cd emu && $(NICE) $(CARGO) build --locked --release -p neoks10
+	rm -rf $(ITS_BOOT_DIR) && mkdir -p $(ITS_BOOT_DIR)
+	cp tests/its-boot/its.toml tests/its-boot/boot.script $(ITS_BOOT_DIR)/
+	cp "$(KS10_ITS_DISK)" $(ITS_BOOT_DIR)/rp0.start
+	cp $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
+	cd $(ITS_BOOT_DIR) && $(NICE) $(NEOKS10) run its.toml --no-control --script boot.script \
+	    --record boot.rec < /dev/null > boot.out
+	grep -q "FREE BLOCKS" $(ITS_BOOT_DIR)/boot.out
+	cp $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
+	cd $(ITS_BOOT_DIR) && $(NICE) $(NEOKS10) run --no-control --replay boot.rec < /dev/null > replay.out
+	cmp $(ITS_BOOT_DIR)/boot.out $(ITS_BOOT_DIR)/replay.out
+	rm -f $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
+	@echo "its-boot: ITS booted, listed SYS;, and the replay gave the same output"
 
 # Third-party files (third-party.lock) into references/, which git ignores.
 # bitsavers.org has an rsync server; pdp-10.trailing-edge.com is read with

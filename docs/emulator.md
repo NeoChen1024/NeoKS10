@@ -603,8 +603,19 @@ connection to a LAN needs the permission of the owner (AGENTS.md).
 - Each instruction: differential runs against the instruction records of
   the reference emulator, with a trace patch in `oracle/` (AGENTS.md).
 - The DEC KS10 diagnostics (`make diag`); see [Diagnostics](#diagnostics).
-- `make its-boot`: boot the step 0 disk image with a replay file of
-  console input, to the ITS prompt.
+- `make its-boot KS10_ITS_DISK=PATH`: PATH is `rp0.dsk` of the ITS build
+  (`pdp10-ks`); `dskdmp.tape` and `minsys.tape` are in the same
+  directory. The target works on copies in `build/its-boot/`.
+  1. The tests of `emu/ks10` that need the images: the boot and the
+     listing of `SYS;`, the idle loop, the tapes.
+  2. `neoks10` runs `tests/its-boot/boot.script` (boot, login, `:listf
+     sys;`) with `--record`. The output must have `FREE BLOCKS`.
+  3. A replay of the record on a fresh copy must give the same CTY
+     output.
+  The record is not in git: it belongs to the image of one ITS build
+  (the record has its SHA-256).
+  **[measured]** 2026-11-27: 25 s on the x86-64 host. A script with an
+  `expect` that fails makes the target fail.
 - `make its-build`: build ITS from source with the scripts of `its/`.
 
 ### Diagnostics

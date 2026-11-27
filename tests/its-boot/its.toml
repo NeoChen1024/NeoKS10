@@ -1,0 +1,6 @@
+# The machine of `make its-boot`. The Makefile copies this file and the
+# disk image of the ITS build (KS10_ITS_DISK) into one directory of the
+# build output; `image` is relative to that directory.
+
+[disk.0]
+image = "rp0.dsk"
