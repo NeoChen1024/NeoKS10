@@ -84,6 +84,21 @@ class Sources(unittest.TestCase):
             lines = [t.strip() for _, _, mode, t, _ in its._active_lines(Path(d)) if t.strip()]
             self.assertEqual(lines, ["200:\tI,\tJ/YES", "201:\tI,\tJ/YES2"])
 
+    def test_default_parameter(self):
+        # ks10, "PSEUDO OPS": .DEFAULT gives a value only to an undefined
+        # parameter; ks10.47 has .DEFAULT/FULL=1 and .DEFAULT/ITS=0 after
+        # its.15 has .SET/ITS=1.
+        with tempfile.TemporaryDirectory() as d:
+            for stem in its.UCODE_FILES:
+                (Path(d) / f"{stem}.1").write_text("")
+            (Path(d) / "its.1").write_text(".SET/ITS=1\n")
+            (Path(d) / "ks10.1").write_text(".DEFAULT/FULL=1\n.DEFAULT/ITS=0\n")
+            (Path(d) / "simple.1").write_text(
+                ".DCODE\n.IF/FULL\n116:\tI,\tJ/DMUL\n.ENDIF/FULL\n"
+                ".IFNOT/ITS\n117:\tI,\tJ/NO\n.ENDIF/ITS\n")
+            lines = [t.strip() for _, _, mode, t, _ in its._active_lines(Path(d)) if t.strip()]
+            self.assertEqual(lines, ["116:\tI,\tJ/DMUL"])
+
     def test_ksdefs_io_names(self):
         # KSDEFS: RDEBR=:CONI PAG, is 701240,, (its comment): opcode 701, AC 5.
         with tempfile.TemporaryDirectory() as d:

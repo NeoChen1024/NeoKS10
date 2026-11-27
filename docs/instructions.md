@@ -87,8 +87,8 @@ value is not shown.
 | 113 | DFDV | inst | `DBL FL-R, DAC, J/DFDV` | A=DFP, B=5, J=DFDV, READ=1 | flt.5:428 |
 | 114 | DADD | inst | `DBL R, DAC, J/DADD` | A=DREAD, B=5, J=DADD, READ=1 | simple.42:2064 |
 | 115 | DSUB | inst | `DBL R, DAC, J/DSUB` | A=DREAD, B=5, J=DSUB, READ=1 | simple.42:2065 |
-| 116 | DMUL | uuo | `DBL R, DAC, J/DMUL` | A=DREAD, B=5, J=DMUL, READ=1 | simple.42:2148 |
-| 117 | DDIV | uuo | `DBL R, DAC, J/DDIV` | A=DREAD, B=5, J=DDIV, READ=1 | simple.42:2366 |
+| 116 | DMUL | inst | `DBL R, DAC, J/DMUL` | A=DREAD, B=5, J=DMUL, READ=1 | simple.42:2148 |
+| 117 | DDIV | inst | `DBL R, DAC, J/DDIV` | A=DREAD, B=5, J=DDIV, READ=1 | simple.42:2366 |
 | 120 | DMOVE | inst | `DBL R, DAC, J/DAC` | A=DREAD, B=5, J=DAC, READ=1 | simple.42:668 |
 | 121 | DMOVN | inst | `DBL R, AC, J/DMOVN` | A=DREAD, B=15, J=DMOVN, READ=1 | simple.42:669 |
 | 122 | FIX | inst | `FL-R, FL-AC, J/FIX` | A=FP, B=1, J=FIX, READ=1 | flt.5:165 |

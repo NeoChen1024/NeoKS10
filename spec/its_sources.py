@@ -43,10 +43,11 @@ def _active_lines(ucode_dir: Path):
     """Yield (file name, line number, mode, text, comment) for each line that
     the assembly uses. mode is 'D' after .DCODE and 'U' after .UCODE.
 
-    Conditional assembly: .SET/X=n defines X; .IF/X assembles if X is not 0,
-    .IFNOT/X if X is 0, and .ENDIF/X ends the condition on X (ks10, section
-    8.0 "PSEUDO OPS"). An .IFNOT/X after an .IF/X replaces the condition on X.
-    A parameter without .SET counts as 0.
+    Conditional assembly (ks10, "PSEUDO OPS"): .SET/X=n defines X,
+    .CHANGE/X=n redefines it, .DEFAULT/X=n gives a value to X if X is not
+    defined. .IF/X assembles if X is not 0, .IFNOT/X if X is 0, and .ENDIF/X
+    ends the condition on X. An .IFNOT/X after an .IF/X replaces the
+    condition on X. A parameter that has no value counts as 0.
     """
     sym = {}
     for stem in UCODE_FILES:
@@ -58,10 +59,11 @@ def _active_lines(ucode_dir: Path):
                 raw = raw.rstrip("\n").replace("\f", "")
                 text, _, comment = raw.partition(";")
                 t = text.strip()
-                m = re.match(r"\.SET/([A-Z0-9]+)=(\d+)", t)
+                m = re.match(r"\.(SET|CHANGE|DEFAULT)/([A-Z0-9]+)=(\d+)", t)
                 if m:
-                    if all(cond.values()):
-                        sym[m.group(1)] = int(m.group(2))
+                    kind, name, value = m.groups()
+                    if all(cond.values()) and (kind != "DEFAULT" or name not in sym):
+                        sym[name] = int(value)
                     continue
                 m = re.match(r"\.(IF|IFNOT|ENDIF)/([A-Z0-9]+)", t)
                 if m:
