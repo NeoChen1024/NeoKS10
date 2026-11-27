@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use ks10_machine::INSTRUCTIONS_PER_MS;
 use ks10_machine::boot;
 use ks10_machine::console::{self as cty, Console as Cty};
-use ks10_machine::unibus::{Io, Reply};
+use ks10_machine::unibus::{Io, Reply, level_bit};
 use pdp10::W36;
 
 use crate::alu::{self, Alu, Controls, Outputs, W40};
@@ -83,6 +83,34 @@ pub struct PcFlags {
     pub trap1: bool,
     pub fxu: bool,
     pub nodiv: bool,
+}
+
+/// The bits of byte 1 to 5 for the byte insertion of DBM (M8621-0-DPM1
+/// rev B, E72, E86: SEL 2 of 00–06, 07–13, 14–20, 21–27, 28–35).
+const BYTE_BITS: [(u32, u32); 5] = [(0, 6), (7, 13), (14, 20), (21, 27), (28, 35)];
+
+/// DBM input 1, `BYTES` **[manual]** (M8621-0-DPM1 and DPM2 rev B, input
+/// 1D of each 74LS151): bit b is SCAD 01–07 in turn (SCAD 1 + b mod 7)
+/// for bits 00–34; bit 35 is 0 (GND). `scad` has SCAD 00 at the left.
+fn bytes(scad: u16) -> W36 {
+    let bit = |k: u32| u64::from((scad >> (9 - k)) & 1);
+    W36::wrap((0..35).fold(0, |v, b| v | bit(1 + b % 7) << (35 - b)))
+}
+
+/// BYTE DISP 09–11 (bits 09–11 of the address) for the byte pointer on
+/// DP **[manual]** (M8620-0-DPE3 rev B, E77, E47, E18, E10, E9). E77 and
+/// E47 enable the decoder E18 if S (DP 06–11) is 7. E18 decodes DP 00–02,
+/// and the mixer E10 by DP 03–05 picks P = 1, 8, 15, 22 or 29: the
+/// positions of the five 7-bit bytes. For such a pointer, E9 gives NOT
+/// DP 01, NOT DP 02 and NOT DP 04; else 0. The codes agree with the
+/// dispatch of the microcode **[microcode]** (simple, `LDB1`: 001 byte 1,
+/// 010 byte 2, 100 byte 3, 101 byte 4, 111 byte 5).
+fn byte_disp(dp: W36) -> u16 {
+    let (p, size) = (dp.field(0, 5), dp.field(6, 11));
+    if size != 7 || ![1, 8, 15, 22, 29].contains(&p) {
+        return 0;
+    }
+    u16::from(!dp.bit(1)) << 2 | u16::from(!dp.bit(2)) << 1 | u16::from(!dp.bit(4))
 }
 
 /// The VMA flags (M8621-0-DPM4 rev B, E82, E90, E189).
@@ -290,9 +318,8 @@ pub struct Machine {
     /// The cycle type (DPM5 E33) and MEMORY CYCLE (DPM6 E16 R0).
     pub cycle: Cycle,
     pub memory_cycle: bool,
-    /// INT and 1MS as DPM6 E16 R3 and R2 latched them at MEM WAIT. INT is
-    /// `None` if it depended on an APR interrupt request.
-    pub int_latched: Option<bool>,
+    /// INT and 1MS as DPM6 E16 R3 and R2 latched them at MEM WAIT.
+    pub int_latched: bool,
     pub one_ms_latched: bool,
     /// The memory buffer (DPM8, DPM9 receive latches).
     pub mb: W36,
@@ -301,12 +328,17 @@ pub struct Machine {
     pub pxct: Pxct,
     /// The DP word of the last `SPEC/APR EN` (DPMB E123, E132; DPEB E173).
     pub apr_enables: W36,
+    /// The APR flags 24–31 **[manual]** (M8621-0-DPMB rev B, E159, E158,
+    /// E139, E147): bit 7 is flag 24, bit 0 is flag 31.
+    pub apr_flags: u8,
     /// The DP word of the last `SPEC/LDPI` (DPEB E175, E126, E140). The
     /// registers hold the complement of DP.
     pub pi: W36,
-    /// INTERRUPT REQ (DPEB E167 R7), `None` if it depends on an APR
-    /// interrupt request.
-    pub interrupt_req: Option<bool>,
+    /// INTERRUPT REQ (DPEB E167 R7).
+    pub interrupt_req: bool,
+    /// The bus PI requests that DPEB E167 R0–R6 latched at the last clock,
+    /// as a mask of levels (`unibus::level_bit`).
+    pub bus_requests: u8,
     /// The 1 ms flag (DPMC E1) and its copy (DPMC E3 R3).
     pub one_ms: bool,
     pub one_ms_sync: bool,
@@ -412,7 +444,7 @@ impl Machine {
                 cache_inhibit: p,
             },
             memory_cycle: p,
-            int_latched: Some(p),
+            int_latched: p,
             one_ms_latched: p,
             mb: pw,
             memory: vec![alu::word(fill); MEMORY_WORDS],
@@ -421,8 +453,10 @@ impl Machine {
                 bits: all(15),
             },
             apr_enables: pw,
+            apr_flags: all(0o377),
             pi: pw,
-            interrupt_req: Some(p),
+            interrupt_req: p,
+            bus_requests: all(0o177),
             one_ms: p,
             one_ms_sync: p,
             csl: Csl::default(),
@@ -472,19 +506,59 @@ impl Machine {
             }
     }
 
-    /// INTERRUPT REQ for the next cycle (DPEB E147, E134, E148): the
-    /// highest program request is above the highest level in progress.
-    /// Stage 1 has no bus requests; an APR request makes it unknown.
-    fn interrupt_request(&self) -> Option<bool> {
-        if self.apr_enables.field(24, 31) != 0 {
-            return None;
-        }
+    /// INTERRUPT EN, which DPEB E167 latches as INTERRUPT REQ (DPEB E147,
+    /// E134, E148): PI ON, and the highest request is above the highest
+    /// level in progress. A level requests with a program request, or with
+    /// a latched bus request if the level is active (E168, E154, E161).
+    fn interrupt_request(&self) -> bool {
+        let on = !self.pi.bit(28);
+        let current = (1..=7u8).find(|&n| !self.pi.bit(20 + u32::from(n)));
+        on && self
+            .pi_request()
+            .is_some_and(|r| current.is_none_or(|c| r < c))
+    }
+
+    /// The highest level that requests (E168, E154, E161, E147).
+    fn pi_request(&self) -> Option<u8> {
         let dp = self.pi;
-        let on = !dp.bit(28);
-        let first = |base: u32| (1..=7).find(|n| !dp.bit(base + n));
-        let request = first(10);
-        let current = first(20);
-        Some(on && request.is_some_and(|r| current.is_none_or(|c| r < c)))
+        let requested = |n: u8| {
+            let k = u32::from(n);
+            !dp.bit(10 + k) || (self.bus_requests & level_bit(n) != 0 && !dp.bit(28 + k))
+        };
+        (1..=7).find(|&n| requested(n))
+    }
+
+    /// PI NEW (DPEB E147, a 74148 with active low outputs and PI ON at its
+    /// enable): the highest level that requests, else 7 **[manual]**. The
+    /// drawing names its inputs from D0 (the highest priority) to D7;
+    /// level n is at Dn. The microcode dispatches on it to the level
+    /// (inout, `PI`: 1001 to 1111 for levels 1 to 7).
+    pub fn pi_new(&self) -> u8 {
+        if self.pi.bit(28) {
+            return 7;
+        }
+        self.pi_request().unwrap_or(7)
+    }
+
+    /// APR INT REQ **[manual]** (M8621-0-DPMB rev B, E131, E140, E135,
+    /// E97): an APR flag with its enable, or DP 32 of the last `SPEC/APR
+    /// EN` (E123 R2).
+    fn apr_int_req(&self) -> bool {
+        let en = self.apr_enables.field(24, 31) as u8;
+        self.apr_flags & en != 0 || self.apr_enables.bit(32)
+    }
+
+    /// The BUS PI REQ lines: the adapters, and APR INT REQ on the level of
+    /// DP 33–35 of the last `SPEC/APR EN` **[manual]** (M8620-0-DPEB rev
+    /// B, E173, E166). Level 0 selects an output that drives no line.
+    fn bus_request_lines(&self) -> u8 {
+        let level = self.apr_enables.field(33, 35) as u8;
+        let apr = if level != 0 && self.apr_int_req() {
+            level_bit(level)
+        } else {
+            0
+        };
+        self.io.requests() | apr
     }
 
     fn unmodelled(&self, what: impl Into<String>) -> Stop {
@@ -636,15 +710,17 @@ impl Machine {
             // The DPE/M clock is off (CSL5 E52, E45, E54). The check above
             // leaves these registers as the only data path state that the
             // word can change.
-            let (alu, e603, sc, fe, int) = (
+            let (alu, e603, sc, fe, int, bus) = (
                 self.alu.clone(),
                 self.e603,
                 self.sc,
                 self.fe,
                 self.interrupt_req,
+                self.bus_requests,
             );
             self.step_word(mw)?;
-            (self.alu, self.e603, self.sc, self.fe, self.interrupt_req) = (alu, e603, sc, fe, int);
+            (self.alu, self.e603, self.sc, self.fe) = (alu, e603, sc, fe);
+            (self.interrupt_req, self.bus_requests) = (int, bus);
         }
         Ok(())
     }
@@ -734,14 +810,15 @@ impl Machine {
             return Err(self.unmodelled("paging (PAGE EN is 1)"));
         }
         let stop_main_memory = ac_ref;
-        // DPM6 E15, E9: INT OR ERR makes a page fail.
-        if self.memory_cycle && !self.vma_flags.physical && !self.cycle.write {
-            let int = self
-                .int_latched
-                .ok_or_else(|| self.unmodelled("INT latched from an APR interrupt request"))?;
-            if int || self.one_ms_latched {
-                return Err(self.unmodelled("page fail: interrupt or 1 ms timer"));
+        // A page fail from INT OR ERR (DPM6 E15, E9) in the word that
+        // completes the cycle: DPM5 E21 PAGE FAIL DELAY, CSL5 E32 PAGE
+        // FAIL. Only the CRA clock runs in it.
+        if memory_delay && self.int_or_err() {
+            if spec_en & 1 != 0 && spec_low == 5 {
+                return Err(self.unmodelled("page fail in a word with SPEC/NICOND"));
             }
+            self.page_fail(mw);
+            return Ok(());
         }
         // DPM5 E32, E5: with RPW CYCLE (READ and WRITE from the last load,
         // and no stop), a MEM EN word starts no cycle: no bus request
@@ -924,13 +1001,16 @@ impl Machine {
         if started && self.cycle.read && (f.io || f.wru || f.vector) {
             self.io_command()?;
         }
-        self.spec(mw, spec_en, spec_low, &out);
-        // DPEB E167 R7 every cycle, from the PI registers before a load.
+        // DPEB E167 at each clock: the bus request lines and INTERRUPT EN,
+        // from the registers before this clock.
+        let bus_next = self.bus_request_lines();
         let int_next = self.interrupt_request();
+        self.spec(mw, spec_en, spec_low, &out);
         if spec_en & 4 != 0 && spec_low == 3 {
             self.pi = dp;
         }
         self.interrupt_req = int_next;
+        self.bus_requests = bus_next;
         self.e603 = Flags603 {
             func_01: func01,
             carry_02: Some(out.carry_02),
@@ -1044,6 +1124,7 @@ impl Machine {
                 .ok_or_else(|| m.unmodelled("DP depends on the DBus, which selects DP"))
         };
         match sel {
+            0 => Ok(self.dbus_pc_flags()),
             1 => dp_word(self),
             2 => {
                 self.coverage.ramadr.insert(get(mw, u::RAMADR));
@@ -1055,6 +1136,32 @@ impl Machine {
         }
     }
 
+    /// DBus input 0 **[manual]** (M8620-0-DPE3 and DPE4 rev B, input 0 of
+    /// each 74LS153): the program flags in bits 00–06 and 09–12, PI NEW in
+    /// 19–21, 1 in 22–25 (+3V), VMA 26–35 (DPE5 E156, E176, which load
+    /// with VMA), and 0 in the other bits.
+    fn dbus_pc_flags(&self) -> W36 {
+        let f = self.flags;
+        let left = [
+            (0, f.ov),
+            (1, f.cry0),
+            (2, f.cry1),
+            (3, f.fov),
+            (4, f.fpd),
+            (5, f.user),
+            (6, f.pcu),
+            (9, f.trap2),
+            (10, f.trap1),
+            (11, f.fxu),
+            (12, f.nodiv),
+        ]
+        .iter()
+        .filter(|(_, v)| *v)
+        .fold(0u64, |acc, (b, _)| acc | 1 << (17 - b));
+        let right = u64::from(self.pi_new()) << 14 | 0o17 << 10 | self.vma.field(26, 35);
+        W36::wrap(left << 18 | right)
+    }
+
     /// The DBM mixer (M8621-0-DPM1 and DPM2 rev B).
     fn dbm(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
         let dbm = get(mw, u::DBM);
@@ -1064,9 +1171,21 @@ impl Machine {
                 .ok_or_else(|| m.unmodelled("DP depends on the DBus, which selects DP"))
         };
         match dbm {
+            0 => self.dbm_apr(mw, dp),
+            1 => Ok(bytes(self.scad_output(mw, dp)?)),
             // SPEC 1 to 5 insert a byte; 6 and 7 are "SAME AS ZERO" (ks10,
             // "MICROCODE FIELDS -- SPEC", the DBM table).
             3 if matches!(get(mw, u::SPEC) & 7, 0 | 6 | 7) => dp_word(self),
+            // DPM1 E94 decodes SPEC 1 to 5 while DBM SEL 4 is 0 and DBM
+            // SEL 1 is 1, and clears SEL 2 of that byte (E72, E86): the
+            // byte takes input 1 **[manual]** (M8621-0-DPM1 rev B).
+            3 => {
+                let (first, last) = BYTE_BITS[(get(mw, u::SPEC) & 7) as usize - 1];
+                let b = bytes(self.scad_output(mw, dp)?);
+                let w = dp_word(self)?;
+                let mask = ((1u64 << (last - first + 1)) - 1) << (35 - last);
+                Ok(W36::wrap((w.get() & !mask) | (b.get() & mask)))
+            }
             4 => Ok(dp_word(self)?.swap()),
             // VMA FLAGS,,VMA.
             5 => {
@@ -1100,6 +1219,107 @@ impl Machine {
             }
             other => Err(self.unmodelled(format!("DBM {other}, SPEC {:o}", get(mw, u::SPEC)))),
         }
+    }
+
+    /// The SCAD output for a DBM input, with the coverage.
+    fn scad_output(&mut self, mw: Microword, dp: Option<W40>) -> Result<u16, Stop> {
+        self.coverage
+            .scad
+            .insert((get(mw, u::SCAD), get(mw, u::SCADA), get(mw, u::SCADB)));
+        self.scad(mw, dp.map(alu::word))
+    }
+
+    /// DBM input 0 **[manual]** (M8621-0-DPM1 and DPM2 rev B, input 0D of
+    /// each 74LS151). Bits 00–16 are SCAD 01–07 in turn, as input 1, and
+    /// bit 17 is SCAD 00. Bits 18–21 are the page fail dispatch (DPM6),
+    /// 22 TRAP EN, 23 PAGE EN, 24–31 the APR flags, 32 APR INT REQ. The
+    /// inputs of bits 33–35 are open: the model takes them as 1
+    /// **[estimate]** (docs/unknowns.md).
+    fn dbm_apr(&mut self, mw: Microword, dp: Option<W40>) -> Result<W36, Stop> {
+        let scad = self.scad_output(mw, dp)?;
+        let mut left = bytes(scad).lh().get() & !1;
+        left |= u64::from((scad >> 9) & 1);
+        let e = self.apr_enables;
+        let right = u64::from(self.pf_disp()?) << 14
+            | u64::from(e.bit(22)) << 13
+            | u64::from(e.bit(23)) << 12
+            | u64::from(self.apr_flags) << 4
+            | u64::from(self.apr_int_req()) << 3
+            | 0o7;
+        Ok(W36::wrap(left << 18 | right))
+    }
+
+    /// INT OR ERR **[manual]** (M8621-0-DPM6 rev C, E15, E9): INT or 1MS
+    /// (DPM6 E16, latched at MEM WAIT) in a memory cycle that is virtual
+    /// and not a write, or NXM ERR or BAD DATA EN. The model has neither
+    /// error: it stops on nonexistent memory and has no parity.
+    fn int_or_err(&self) -> bool {
+        self.memory_cycle
+            && !self.vma_flags.physical
+            && !self.cycle.write
+            && (self.int_latched || self.one_ms_latched)
+    }
+
+    /// A page fail in the word that completes a memory cycle **[manual]**.
+    /// DPM5 E21 gives PAGE FAIL DELAY: MEMORY DELAY AND PAGE FAIL EN AND
+    /// NOT VMA JUST LOADED (M8621-0-DPM5 rev B). CSL5 E32 then gives PAGE
+    /// FAIL, which turns off the DPE/M clock (E54; M8616-0-CSL5 rev D):
+    /// the word changes nothing in the data path. The CRA clock runs:
+    /// CRA2 E34 moves the stack as for a CALL, so that the stack holds the
+    /// address of the word, and the page fail sets all bits of the next
+    /// address (M8622-0-CRA2 rev B; CRA1). The microcode returns to the
+    /// word with `RETURN [0]` (itspag, `PAGE-CONTINUE`).
+    ///
+    /// The model has no wait cycles. It takes VMA JUST LOADED as 0 in the
+    /// word that completes the cycle, as after a wait for the memory
+    /// **[estimate]** (docs/unknowns.md).
+    fn page_fail(&mut self, mw: Microword) {
+        self.sp = (self.sp + 1) & 15;
+        self.stack[usize::from(self.sp)] = self.upc;
+        self.bus_clock(false, false);
+        self.cycles += 1;
+        self.ticks += 2 + u64::from(get(mw, u::T));
+        self.upc = 0o7777;
+    }
+
+    /// The page fail dispatch PF DISP 10, 04, 02, 01 **[manual]**
+    /// (M8621-0-DPM6 rev C, E116, E115, E9, E47, E124, E41). PAGING OK
+    /// enables the 74148 E116; the drawing names its inputs from D0 (the
+    /// highest) to D7, so D4 to D6 are its inputs 3 to 1: page not valid,
+    /// USER of the page and of VMA differ, a write test of a page that is
+    /// not writeable. Its outputs are active low. The codes agree with the
+    /// dispatch of the microcode **[microcode]** (itspag, `PFD`: 12
+    /// nonexistent page, 13 exec/user mismatch, 10 read-only page, 11 the
+    /// 1 ms timer). NXM ERR and BAD DATA ERR are 0: the model stops on
+    /// nonexistent memory and has no parity.
+    fn pf_disp(&self) -> Result<u8, Stop> {
+        let f = self.vma_flags;
+        let int_or_err = self.int_or_err();
+        let paging_ok = !self.ac_ref() && self.apr_enables.bit(23) && !f.physical && !int_or_err;
+        // The highest active input of E116, if it is enabled.
+        let mut input = None;
+        if paging_ok {
+            let index = self.vma.field(19, 26) as usize;
+            let k = if self.vma.bit(18) { 256 | index } else { index };
+            let e = self.page_table[k].ok_or_else(|| {
+                self.unmodelled("page fail dispatch: an entry that nothing wrote")
+            })?;
+            input = [
+                (3, !e.valid),
+                (2, e.user != f.user),
+                (1, !e.writeable && self.cycle.write_test),
+            ]
+            .iter()
+            .find(|(_, on)| *on)
+            .map(|&(k, _)| k);
+        }
+        // E116 outputs A0–A2, active low; all 1 if disabled or no input.
+        let a = !input.unwrap_or(0u8) & 7;
+        let d01 = a & 1;
+        let d02 = u8::from(a & 2 == 0);
+        let d04 = u8::from(a & 4 == 0);
+        let d10 = u8::from(!int_or_err);
+        Ok(d10 << 3 | d04 << 2 | d02 << 1 | d01)
     }
 
     /// JFCL 09–12 (DPE9 E107, E109): a flag, its AC bit, and JFCL EN (DBM
@@ -1168,9 +1388,9 @@ impl Machine {
         if en & 4 != 0 && !matches!(low, 0 | 1 | 3 | 4 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 40, code {low}")));
         }
-        // Group 20 (DPMA E78): 0 PREVIOUS, 1 XR LOAD, 4 SET SWEEP, 5 APR EN,
-        // 6 PXCT OFF, 7 MEM CLR.
-        if en & 2 != 0 && !matches!(low, 0 | 1 | 4 | 5 | 6 | 7) {
+        // Group 20 (DPMA E78): 0 PREVIOUS, 1 XR LOAD, 3 APR FLAGS, 4 SET
+        // SWEEP, 5 APR EN, 6 PXCT OFF, 7 MEM CLR.
+        if en & 2 != 0 && !matches!(low, 0 | 1 | 3 | 4 | 5 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 20, code {low}")));
         }
         // Group 10 (CRA2 E97, DPMA E2): 0 CONSOLE, 1 CLR 1 MSEC, 2 CLR IO
@@ -1190,6 +1410,16 @@ impl Machine {
         }
         if en & 2 != 0 && low == 5 {
             self.apr_enables = dp;
+        }
+        if en & 2 != 0 && low == 3 {
+            // SPEC/APR FLAGS clocks the APR flags from DP 24–31 **[manual]**
+            // (DPMB, DPM5 CLK APR FLAGS). Flag 25 presets CSL4 E161, the
+            // interrupt of the 8080 (M8616-0-CSL4 rev C): the doorbell.
+            let new = dp.field(24, 31) as u8;
+            if new & !self.apr_flags & 0o100 != 0 {
+                self.cty.doorbell(self.instructions);
+            }
+            self.apr_flags = new;
         }
         if en & 1 != 0 {
             let num = get(mw, u::NUM);
@@ -1249,9 +1479,11 @@ impl Machine {
             if let Some(w) = e.input {
                 self.memory[cty::CTYIN as usize] = w;
             }
-            if e.interrupt && self.pending_stop.is_none() {
-                self.pending_stop =
-                    Some(self.unmodelled("APR flag: the 8080 interrupts the processor"));
+            if e.interrupt {
+                // CSL4 INT 10 L, a pulse of the 8080 write to 116,
+                // presets APR flag 31 **[manual]** (M8616-0-CSL4 rev C,
+                // E171, E170, E163; DPMB E158).
+                self.apr_flags |= 1;
             }
         }
         self.io.poll(now);
@@ -1420,6 +1652,9 @@ impl Machine {
         c.halt_loop = false;
         self.io.reset();
         self.bus = Bus::default();
+        // DP RESET (204 bit 2) clears the APR flags **[manual]** (CSL4
+        // E156; M8621-0-DPMA rev B, E23, E87; DPMB).
+        self.apr_flags = 0;
         self.memory[0] = W36::ONES;
         self.upc = 0;
         self.last_tick = self.instructions;
@@ -1491,9 +1726,7 @@ impl Machine {
                     4 => !self.flags.user,
                     5 => self.flags.fpd,
                     6 => self.ac == 0,
-                    7 => self.interrupt_req.ok_or_else(|| {
-                        self.unmodelled("INTERRUPT REQ from an APR interrupt request")
-                    })?,
+                    7 => self.interrupt_req,
                     _ => return Err(self.unmodelled(format!("SKIP group 40, input {sel}"))),
                 };
             }
@@ -1601,6 +1834,7 @@ impl Machine {
                 }
                 // NICOND: MEMORY CYCLE and NICOND 09–11.
                 4 => (u16::from(self.memory_cycle) << 3) | self.nicond(),
+                5 => byte_disp(y),
                 6 => {
                     let jrst0 = self.ir == 0o254 && self.ac == 0;
                     (u16::from(!jrst0) << 3)
@@ -1770,5 +2004,68 @@ mod tests {
             let f = m.vma_flags;
             assert_eq!([f.io, f.wru, f.vector], want, "DP bit {bit}");
         }
+    }
+
+    // The codes of the page fail dispatch come from the dispatch table
+    // of the microcode, an independent source (itspag, `PFD`: 1
+    // interrupt, 10 read-only page, 11 the 1 ms timer, 12 nonexistent
+    // page, 13 exec/user mismatch).
+    #[test]
+    fn the_page_fail_dispatch_gives_the_codes_of_the_microcode() {
+        let mut m = Machine::new(
+            vec![Microword::from_bits(0); CRAM_WORDS],
+            vec![0; DROM_WORDS],
+            W40::ZERO,
+        );
+        m.apr_enables = W36::wrap(1 << (35 - 23)); // PAGE EN
+        m.vma = W36::wrap(0o001000); // page 1, not an AC
+        m.vma_flags = VmaFlags::default();
+        let entry = |valid, writeable, user| {
+            Some(PageEntry {
+                valid,
+                writeable,
+                cacheable: false,
+                user,
+                page: 0,
+            })
+        };
+        let mut code = |e: Option<PageEntry>, user: bool, write_test: bool| {
+            m.page_table[1] = e;
+            m.vma_flags.user = user;
+            m.cycle.write_test = write_test;
+            m.pf_disp().unwrap()
+        };
+        assert_eq!(code(entry(false, true, false), false, false), 0o12);
+        assert_eq!(code(entry(true, true, true), false, false), 0o13);
+        assert_eq!(code(entry(true, false, false), false, true), 0o10);
+        assert_eq!(code(entry(true, true, false), false, true), 0o11);
+        // An interrupt in a virtual read: INT OR ERR, code 1.
+        m.memory_cycle = true;
+        m.int_latched = true;
+        m.cycle.write = false;
+        assert_eq!(m.pf_disp().unwrap(), 0o1);
+    }
+
+    // The 7-bit bytes of the dispatch table of the microcode (simple,
+    // `LDB1`): P = 29, 22, 15, 8, 1 give 1, 2, 4, 5, 7. Other pointers
+    // give 0.
+    #[test]
+    fn the_byte_dispatch_gives_the_codes_of_the_microcode() {
+        let ptr = |p: u64, s: u64| W36::wrap(p << 30 | s << 24);
+        for (p, want) in [(29, 1), (22, 2), (15, 4), (8, 5), (1, 7)] {
+            assert_eq!(byte_disp(ptr(p, 7)), want, "P {p}");
+        }
+        for (p, s) in [(36, 7), (30, 7), (29, 6), (29, 8), (1, 0o47)] {
+            assert_eq!(byte_disp(ptr(p, s)), 0, "P {p} S {s}");
+        }
+    }
+
+    // DBM BYTES: SCAD 01-07 in each of the five 7-bit bytes, from bit 00;
+    // bit 35 is 0 (M8621-0-DPM1 and DPM2 rev B, input 1).
+    #[test]
+    fn bytes_repeats_scad_01_to_07() {
+        // SCAD 00 1, SCAD 01-07 = 1000001, SCAD 08-09 = 11.
+        let scad = 0b11_0000_0111;
+        assert_eq!(bytes(scad), W36::wrap(0o406030_140602));
     }
 }

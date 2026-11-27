@@ -13,3 +13,18 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# The tests of the microcode-level model run millions of microcycles
+# (`make microcode`). The crates of their inner loop are optimized also
+# in the dev profile; overflow checks and debug assertions stay on.
+[profile.dev.package.ks10-core-uop]
+opt-level = 3
+
+[profile.dev.package.ks10-core-soft]
+opt-level = 3
+
+[profile.dev.package.ks10-machine]
+opt-level = 3
+
+[profile.dev.package.pdp10]
+opt-level = 3

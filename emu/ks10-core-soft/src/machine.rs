@@ -115,6 +115,13 @@ pub struct Machine {
     /// The PXCT bits of the XCTR in progress (0 if none).
     pub pxct: u8,
     pub oneproc: OneProc,
+    /// Do not take an interrupt at the next steps. A test that runs this
+    /// processor in step with the microcode-level model sets it, and lets
+    /// an interrupt through where the model takes one: the microcode takes
+    /// a request some microcycles after it comes, so the instruction at
+    /// which it takes it depends on the microcycles of the instructions
+    /// (docs/microcode-model.md, "Interrupt timing"). False in normal use.
+    pub hold_interrupts: bool,
     /// The I/O bus: adapters and devices.
     pub io: Io,
     /// The timer ticks come from [`Machine::tick`], which the host calls
@@ -221,6 +228,7 @@ impl Machine {
             hsb: W36::wrap(0o500),
             pxct: 0,
             oneproc: OneProc::Off,
+            hold_interrupts: false,
             io: Io::default(),
             wall_clock: false,
         }
@@ -428,6 +436,20 @@ impl Machine {
             w = self.vread(e, r)?;
         }
         Ok(None)
+    }
+
+    /// The level of the interrupt that the next step takes, if any.
+    fn pending_interrupt(&self) -> Option<u8> {
+        if self.hold_interrupts {
+            return None;
+        }
+        self.acceptable_interrupt()
+    }
+
+    /// The level of the interrupt that the PI system accepts now, if any,
+    /// also while [`Machine::hold_interrupts`] is set.
+    pub fn acceptable_interrupt(&self) -> Option<u8> {
+        self.pi.accept(self.requests())
     }
 
     /// The interrupt requests of the APR (and later the devices) as a
@@ -692,7 +714,7 @@ impl Machine {
         if !self.io.events.is_empty() {
             self.io.run_events(&mut self.mem, self.count);
         }
-        if let Some(n) = self.pi.accept(self.requests()) {
+        if let Some(n) = self.pending_interrupt() {
             // An interrupt at the fetch after a one-proceeded instruction
             // takes the one-proceed trap first (itspag.98, CLTRP1, CLTRP2).
             if self.oneproc == OneProc::Running {

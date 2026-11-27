@@ -598,7 +598,9 @@ TRAP EN and the APR enables are 0, so there is no paging, no cache and
 no trap. The model is `emu/ks10-core-uop/src/alu.rs` and `machine.rs`.
 Stage 2 adds the I/O cycles and the console ("Stage 2: I/O and the
 console"). Stage 3 adds the page table and the cache directory ("Stage
-3: the page table and the cache directory").
+3: the page table and the cache directory"). Stage 4 adds the APR, the
+interrupts and the byte functions ("Stage 4: the APR, interrupts and
+bytes").
 
 A function is either modelled or a stop with "unmodelled". The model
 does not guess a value. A shift line that nothing drives is undefined; a
@@ -641,17 +643,17 @@ skip latch CRA2 E98 has the values of the cycle, except NOT I/O LATCH
 The rest stops (the `unmodelled` branches of `machine.rs`):
 
 - paging: PAGE EN with a virtual VMA and a memory cycle;
-- a page fail from INT OR ERR; an APR interrupt request (APR enables
-  24–31 not 0) where INTERRUPT REQ is read;
+- a page fail from INT OR ERR in a word with `SPEC/NICOND`; a page fail
+  dispatch with an entry that nothing wrote;
 - a memory cycle above 512 Ki words; an I/O read of controller 0
   without bit 19 (the memory status register), and an I/O read that no
   controller answers;
-- DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
-  on the DBus where DP depends on D;
+- DBM input 2; DP on the DBus where DP depends on D, and SCAD on DBM
+  where SCAD depends on DP;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
 - `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2 and 3
-  (code 2 has no name in ks10; `APR FLAGS`);
-- the dispatches DIAG ADR, PAGE FAIL and BYTE, and `DISP/MUL` with `J`
+  (code 2 has no name in ks10);
+- the dispatches DIAG ADR and PAGE FAIL, and `DISP/MUL` with `J`
   bit 10 clear;
 - `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
   of group 10, 20 or 40, and `CALL` with a return in one word;
@@ -795,8 +797,9 @@ time in microcycles.
   stops and that starts again later (BLT: `CLEANUP AND TRAP`, itspag
   `PF-INT`) passes `SPEC/NICOND` again and counts twice. The 1 ms page
   fail does not: `PF-INT` updates the time and continues the instruction
-  (`PAGE-CONTINUE`) **[microcode]**. A request of the 8080 for an APR
-  interrupt stops the model, because the APR flags are not modelled.
+  (`PAGE-CONTINUE`) **[microcode]**. The instruction count is the time
+  base of the devices by design ("Stage 4", "The lockstep run and
+  time").
 
 The controllers:
 
@@ -912,15 +915,156 @@ M8621-0-DPMC rev D **[manual]**:
   written and not valid. Both fills. The mutants "PAGE WRITE in the same
   word", "SET SWEEP without the VMA load" and "VMA SWEEP without the
   right half" each fail the test.
-- `emu/ks10-core-uop/tests/its_boot.rs`: the model and
-  `emu/ks10-core-soft` agree for 773 instructions of the boot loader,
-  about 1.06 million microcycles, and in main memory. The model then
-  stops at word 2203 in `WRAPR`: `[BRX]_APR` reads the APR flags on DBM
-  input 0.
-- On the way, the lockstep run found a difference of Trap 1 after an
-  ADD. The microcode and DPE9 decide it
-  ([`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag
-  word loads them").
+- The lockstep boot (`emu/ks10-core-uop/tests/its_boot.rs`) found a
+  difference of Trap 1 after an ADD of the boot loader. The microcode
+  and DPE9 decide it ([`discrepancies.md`](discrepancies.md), "Trap 1
+  and Trap 2: each flag word loads them"). The result of the boot is in
+  "Stage 4", "Results".
+
+## Stage 4: the APR, interrupts and bytes
+
+Stage 4 adds the APR flags and enables, the bus interrupt requests, the
+page fail from INT OR ERR, DBus input 0, DBM inputs 0 and 1, the byte
+insertion of DBM and the byte dispatch. All come from the schematics
+**[manual]** (MP00540); the drawing and the chip numbers are in the code.
+
+### The APR
+
+- **Flags** (M8621-0-DPMB rev B). APR flags 24–31 are 74LS74
+  flip-flops. `SPEC/APR FLAGS` loads them from DP 24–31 (DPM5 CLK APR
+  FLAGS). DP RESET clears them (DPMA E23, E87). Asynchronous presets set
+  them: 26 BUS AC LO, 27 NXM ERR, 28 BAD DATA ERR, 29 CORRECTED DATA, 31
+  CSL4 INT 10. Flag 30 has no preset: the microcode sets it (inout,
+  `TOCK`).
+- **The 8080.** Flag 25 presets CSL4 E161, the interrupt of the 8080
+  (M8616-0-CSL4 rev C). The model rings the doorbell of the 8080 when
+  flag 25 goes to 1. A write of the 8080 to 116 gives CSL4 INT 10 L, a
+  pulse through E171, E170 and E163, which presets flag 31.
+- **Enables.** `SPEC/APR EN` loads E123 and E132: the enables of flags
+  24–31, TRAP EN (DP 22), PAGE EN (DP 23) and DP 32. DPEB E173 loads
+  the level from DP 33–35 at the same word.
+- **APR INT REQ** is a flag with its enable, or DP 32 (E131, E140, E135,
+  E97). The decoder DPEB E166 puts it on BUS PI REQ of the level. Level
+  0 selects an output with no connection, so it gives no request.
+
+### Interrupt requests
+
+- **Two latches.** DPEB E167 loads the BUS PI REQ lines and INTERRUPT EN
+  at each clock (M8620-0-DPEB rev B). A level requests with a program
+  request, or with a latched bus request if the level is active (E168,
+  E154, E161). INTERRUPT EN is PI ON and the highest request above the
+  highest level in progress (E147, E134, E148); E167 R7 is INTERRUPT
+  REQ. A bus request thus reaches INTERRUPT REQ two clocks after the
+  line. KS10FPGA has one latch: it takes the bus requests into the
+  priority logic without a register **[emulator]** (KS10FPGA 5090e7a1,
+  `pi.v`, `piREQEST`). The model follows the drawing.
+- **PI NEW** (E147) is the highest level that requests, else 7. The
+  drawing names the inputs of the 74148 from D0 (the highest priority)
+  to D7. DBus input 0 gives it in bits 19–21, for the dispatch of the
+  microcode (inout, `PI`).
+
+### The page fail from INT OR ERR
+
+- **Condition.** INT OR ERR is (MEMORY CYCLE AND NOT VMA PHYSICAL AND NOT
+  MEM WRITE AND (INT OR 1MS)) OR NXM ERR OR BAD DATA EN (DPM6 E15, E9).
+  DPM5 E21 gives PAGE FAIL DELAY in the word that completes the cycle:
+  MEMORY DELAY AND PAGE FAIL EN AND NOT VMA JUST LOADED (M8621-0-DPM5
+  rev B).
+- **The word.** CSL5 E32 gives PAGE FAIL, which turns off the DPE/M
+  clock (E54; M8616-0-CSL5 rev D). The CRA clock runs. CRA2 E34 moves
+  the stack as for a CALL, so the stack holds the address of the word,
+  and all bits of the next address are 1 (M8622-0-CRA2 rev B). The
+  microcode at 3777 takes the interrupt, or updates the time and
+  returns to the word with `RETURN [0]` (itspag, `PAGE-FAIL`, `PF-INT`,
+  `PAGE-CONTINUE`).
+- **VMA JUST LOADED** (DPMC E10) loads VMA EN AND SYNC at each T CLK J
+  (M8621-0-DPMC rev D). It is 1 for one tick after a word that loads
+  VMA. The model takes it as 0 in the word that completes a cycle
+  ([`unknowns.md`](unknowns.md)).
+- **Page fail dispatch.** DBM input 0 gives the dispatch in bits 18–21
+  (DPM6 E116, E115, E9, E47, E124, E41). PAGING OK enables the 74148
+  E116. Its inputs are page not valid, USER of the page and of VMA
+  differ, and a write test of a page that is not writeable. The codes
+  agree with the dispatch table of the microcode **[microcode]** (itspag,
+  `PFD`: 12, 13, 10, and 11 for the 1 ms timer; 1, 3, 5 for an
+  interrupt, parity, NXM).
+
+### DBus and DBM inputs
+
+- **DBus input 0** (M8620-0-DPE3 and DPE4 rev B): the program flags in
+  bits 00–06 and 09–12, PI NEW in 19–21, 1 in 22–25 (+3V), VMA 26–35
+  (DPE5 E156, E176, which load with VMA), and 0 in the other bits.
+- **DBM input 1** (`BYTES`, M8621-0-DPM1 and DPM2 rev B): SCAD 01–07 in
+  turn, from bit 00; bit 35 is 0.
+- **DBM input 0**: bits 00–16 as input 1, bit 17 SCAD 00, the page fail
+  dispatch in 18–21, TRAP EN, PAGE EN, the APR flags in 24–31, APR INT
+  REQ in 32. The inputs of bits 33–35 have no connection
+  ([`unknowns.md`](unknowns.md)).
+- **Byte insertion.** DPM1 E94 decodes `SPEC` 1 to 5 while DBM SEL 4 is 0
+  and DBM SEL 1 is 1, and clears SEL 2 of that byte (E72, E86). With
+  `DBM/DP`, byte n (bits 00–06, 07–13, 14–20, 21–27, 28–35) then takes
+  input 1.
+- **Byte dispatch** (M8620-0-DPE3 rev B, E77, E47, E18, E10, E9). If S
+  is 7 and P is 1, 8, 15, 22 or 29, BYTE DISP 09–11 are NOT DP 01, NOT DP
+  02 and NOT DP 04; else 0. The codes agree with the dispatch table of
+  the microcode **[microcode]** (simple, `LDB1`).
+
+### The lockstep run and time
+
+Design decision 2026-11-27. The lockstep run of
+`emu/ks10-core-uop/tests/its_boot.rs` is a regression test of the
+instruction semantics. After each instruction it compares PC, the
+program flags, the ACs and, at the stop, main memory. It does not check
+the timing of the bus or of interrupts, for these reasons:
+
+- The devices run on the instruction count (`INSTRUCTIONS_PER_MS`, at
+  `SPEC/NICOND`). This time base is a convention of the emulators, not
+  of the hardware. The model uses it so that both processors see the
+  same device events.
+- The timing values of the I/O model are estimates
+  ([`unknowns.md`](unknowns.md)). Agreement with `emu/ks10-core-soft` does
+  not show that they are correct.
+- **Interrupt timing.** The microcode takes a request some clocks after
+  it comes, at the page fail of the next instruction fetch. The
+  instruction at which it takes the interrupt thus depends on the
+  microcycles of the instructions. `emu/ks10-core-soft` takes a request
+  at the next instruction boundary. The lockstep run holds the
+  interrupts of `emu/ks10-core-soft` (`hold_interrupts`) and lets one
+  through where the model starts one (label `PI`). There, both must
+  accept the same level.
+
+The bus semantics come from the microcode and the schematics, and the
+DEC diagnostics check them. The timing in microcycles is for the
+co-simulation of the model with the logic in `rtl/`.
+
+### Results
+
+**[measured]** 2026-11-27, the ITS listing 262:
+
+- `emu/ks10-core-uop/tests/console.rs`: an APR interrupt on level 1 with
+  a return by `JRST 12,@`. The ACs, the RDAPR and RDPI words and the
+  halt PC agree with `emu/ks10-core-soft`. The model takes the
+  interrupt one instruction later than `emu/ks10-core-soft`, as the two
+  latches of DPEB E167 give. Both fills. The mutants "no bus request
+  latch", "APR FLAGS not loaded", "enables ignored" and "PI NEW wrong"
+  each fail the test.
+- Unit tests in `machine.rs`: the page fail dispatch gives the codes of
+  `PFD`, and the byte dispatch the codes of `LDB1`.
+- `emu/ks10-core-uop/tests/instructions.rs`: PUSHJ, JSR, JSP and DMUL
+  with the flags set agree (DBus input 0). DMUL of a negative operand,
+  and of -2^70 by itself, differs in Carry 0 and Carry 1
+  ([`unknowns.md`](unknowns.md), DMUL).
+- `emu/ks10-core-uop/tests/its_boot.rs`: the 8080 BT command, then "its"
+  and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`), to
+  both processors at the same instruction. The model and
+  `emu/ks10-core-soft` agree for 4 731 024 instructions, about 51.0
+  million microcycles, and in main memory. The 1 ms clock takes the page
+  fail path of `PF-INT` throughout. No device interrupt comes in this
+  part. ITS then turns on paging, and the model stops at the first
+  virtual memory cycle with PAGE EN. With the mutant "page fail without
+  the stack push", the first 1 ms page fail does not return, and the
+  model stays in the halt loop after 1 002 instructions. The test stops
+  a run that has no instruction for 10 million microcycles.
 
 ## Field tables
 

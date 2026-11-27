@@ -576,6 +576,16 @@ fn flag_cases() -> Vec<Case> {
         ("SETZ", i(0o400, 1, 0), vec![(1, 1)], [0, 0]),
         ("AOBJN", i(0o253, 1, e), vec![(1, M1)], [0, 0]),
         ("DMOVE", i(0o120, 1, e), vec![], [1, 2]),
+        ("PUSHJ", i(0o260, 1, e), vec![(1, 0o000001_002000)], [0, 0]),
+        ("JSR", i(0o264, 0, e), vec![], [0, 0]),
+        ("JSP", i(0o265, 1, e), vec![], [0, 0]),
+        ("DMUL", i(0o116, 1, e), vec![(1, 0), (2, 3)], [0, 5]),
+        (
+            "DMUL of large numbers",
+            i(0o116, 1, e),
+            vec![(1, MAX), (2, MAX)],
+            [MAX, MAX],
+        ),
     ];
     let mut v = Vec::new();
     for (f, fname) in [(traps, "the traps"), (all, "all flags")] {

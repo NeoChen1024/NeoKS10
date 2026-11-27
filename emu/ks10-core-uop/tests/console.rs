@@ -154,3 +154,83 @@ fn wrubr_invalidates_the_page_table_and_the_cache_directory() {
         assert_eq!((pages, tags), (vec![], vec![]), "fill {:o}", fill.get());
     }
 }
+
+/// An APR interrupt: WRPI turns on the PI system and all levels. WRAPR
+/// sets flag 24 without its enable, then sets and enables the interval
+/// flag (30) on level 1. The interrupt
+/// takes the instruction at 40 + 2 n (inout, `PI10`: no adapter answers
+/// the WRU cycle), a JSR. The interrupt program reads the APR and PI
+/// words, clears the flag and returns with `JRST 12,@`. The formats are
+/// those of KSDEFS (ksdefs, WRAPR, RDAPR, WRPI). The test compares the
+/// ACs, the APR and PI words and the halt PC with `ks10-core-soft`.
+///
+/// The PC word that the JSR stores differs by design
+/// (docs/microcode-model.md, "Interrupt timing"). `ks10-core-soft` takes
+/// the interrupt before 1003. The model takes it before 1004
+/// **[manual]**: WRAPR loads the APR enables two words before `DONE`,
+/// DPEB E167 latches the bus request at the next clock, and INTERRUPT REQ
+/// at the clock after it (M8620-0-DPEB rev B). `DONE` starts the fetch of
+/// 1003 and latches INT in DPM6 E16 one clock too early (ks10, `DONE`;
+/// inout, `WRAPR1`). The fetch of 1004 then page-fails.
+#[test]
+fn an_apr_interrupt_agrees_with_the_software_processor() {
+    let Some(text) = common::listing_text("APR interrupt") else {
+        return;
+    };
+    let haltlp = label(&text, "HALTLP");
+    let i = |op: u64, ac: u64, e: u64| op << 27 | ac << 23 | e;
+    let program: Vec<(usize, u64)> = vec![
+        (0o1000, i(0o700, 0o14, 0o2377)),  // WRPI 2377: on, levels on
+        (0o1001, i(0o700, 0o4, 0o014001)), // WRAPR: set 24, level 1
+        (0o1002, i(0o700, 0o4, 0o110041)), // WRAPR: enable, set 30, level 1
+        (0o1003, i(0o201, 2, 1)),          // MOVEI 2,1
+        (0o1004, i(0o201, 3, 1)),          // MOVEI 3,1
+        (0o1005, i(0o254, 4, 0o1005)),     // HALT
+        (0o42, i(0o264, 0, 0o1100)),       // JSR 1100
+        (0o1101, i(0o700, 0o5, 0o1200)),   // RDAPR 1200
+        (0o1102, i(0o700, 0o4, 0o024041)), // WRAPR: clear 24 and 30, level 1
+        (0o1103, i(0o700, 0o15, 0o1201)),  // RDPI 1201
+        (0o1104, i(0o254, 0o12, 0o1100) | 1 << 22), // JRST 12,@1100
+    ];
+    let mut s = ks10_core_soft::Machine::new();
+    for &(a, w) in &program {
+        s.mem[a] = W36::wrap(w);
+    }
+    s.pc = Half::wrap(0o1000);
+    let r = (0..100).find_map(|_| s.step().err());
+    assert!(
+        matches!(r, Some(ks10_core_soft::Stop::Halt { code: 1, .. })),
+        "{r:?}"
+    );
+    assert_eq!(s.mem[0o1100].get() & 0o777777, 0o1003, "ks10-core-soft");
+    let want = [0o1200, 0o1201].map(|a| s.mem[a].get());
+    for fill in FILLS {
+        let mut m = machine(&text, fill);
+        m.master_reset();
+        for &(a, w) in &program {
+            m.memory[a] = W36::wrap(w);
+        }
+        m.start_at(0o1000);
+        assert_eq!(
+            run_to_halt(&mut m, haltlp),
+            Ok(true),
+            "fill {:o}",
+            fill.get()
+        );
+        assert_eq!(m.memory[0], W36::wrap(1), "halt code");
+        assert_eq!(m.memory[1].get() & 0o777777, 0o1005, "halt PC");
+        let got = [0o1200, 0o1201].map(|a| m.memory[a].get());
+        let octal = |v: [u64; 2]| v.map(|w| format!("{w:o}")).join(" ");
+        assert_eq!(octal(got), octal(want), "1200, 1201, fill {:o}", fill.get());
+        assert_eq!(
+            m.memory[0o1100].get() & 0o777777,
+            0o1004,
+            "the interrupted PC"
+        );
+        // The program writes AC 2 and AC 3 only.
+        let block = usize::from(m.cur_block & 7) << 4;
+        for k in [2, 3] {
+            assert_eq!(m.ram_file[block + k], s.ac[k], "AC {k}");
+        }
+    }
+}
