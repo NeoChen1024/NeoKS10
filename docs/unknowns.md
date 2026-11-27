@@ -14,9 +14,6 @@ tapes"). Not known yet:
 
 ## KS10 processor and devices
 
-- How the microcode takes a Unibus interrupt: the request line, the PI
-  level from the adapter status register, and the use of the vector
-  (`src/kshack/inout`, not read yet). docs/emulator.md.
 - The register address of the `SSIMP` IMP interface (`%LHVEC`,
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
 - The instruction times of the KS10, for the virtual time of the emulator.
@@ -86,6 +83,20 @@ schematics (MP00540):
   FAIL`. The model takes EA1, EF1 and EK1 as inactive.
 - The byte dispatch inputs BYTE DISP 09–11 (DPE3).
 - The FXU term of `SPEC/EXPTST` (DPE9 E206, input 1).
+- The I/O cycles of the model in microcycles
+  ([`microcode-model.md`](microcode-model.md), "I/O cycles"): how long a
+  Unibus adapter asserts I/O BUSY before its data cycle, and after a
+  write. The model uses 4 microcycles **[estimate]**.
+- What a Unibus adapter does on a read or a write of an address with no
+  device. The model gives no I/O BUSY and no data cycle, so IOWAIT ends
+  in the page fail "nonexistent I/O register" (inout, IOW5; ksdefs,
+  `%PFNXI`), as `emu/ks10-core-soft` does.
+- Whether the memory controller answers a read of its status register
+  (0,,100000) with DATA CYCLE or I/O DATA CYCLE. The model stops on a
+  read of controller 0 without bit 19. ITS does not read the register.
+- Which registers DP RESET and CRAM RESET clear (hcore.m80, MRINT). The
+  model sets the CRAM address to 0 and leaves the rest; the power-up
+  sequence sets the state that the microcode uses.
 - The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
   both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
   clocks the data path at each repeat, as the manual describes

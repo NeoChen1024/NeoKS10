@@ -974,7 +974,6 @@ These are in `docs/unknowns.md`:
 
 - Which DEC KS10 diagnostics apply to the ITS microcode behaviour, and how
   the diagnostic monitor loads them.
-- How the microcode takes a Unibus interrupt (`inout`).
 - The register address of the `SSIMP` interface (`%LHVEC`, `lhdh.defs`).
 
 ## Documents and tapes

@@ -79,7 +79,7 @@ fn power_up_ends_in_the_halt_loop() {
     let haltlp = label(&text, "HALTLP");
     for fill in FILLS {
         let mut m = machine(&text, fill);
-        let r = run_until(&mut m, 100_000, |m| m.upc == haltlp && m.console.halt_loop);
+        let r = run_until(&mut m, 100_000, |m| m.upc == haltlp && m.csl.halt_loop);
         println!("fill {:o}: {} cycles, {r:?}", fill.get(), m.cycles);
         assert_eq!(r, Ok(()));
         let location_0 = if fill == W40::ZERO {

@@ -37,7 +37,7 @@ fn no_register(m: &Machine, a: u32, byte: bool) -> Fault {
 /// Read an I/O register.
 pub fn io_read(m: &mut Machine, a: u32, byte: bool) -> Result<u64, Fault> {
     let now = m.count;
-    match m.io.read(a & !1 | if byte { 0 } else { a & 1 }, now) {
+    match m.io.read_cycle(a, byte, now) {
         Reply::Value(v) => Ok(v),
         Reply::NoDevice => Err(no_register(m, a, byte)),
     }
@@ -46,14 +46,8 @@ pub fn io_read(m: &mut Machine, a: u32, byte: bool) -> Result<u64, Fault> {
 /// Write an I/O register. A byte write changes the byte that the address
 /// selects: the high byte for an odd address.
 pub fn io_write(m: &mut Machine, a: u32, value: u64, byte: bool) -> Result<(), Fault> {
-    let mask = match (byte, a & 1) {
-        (false, _) => 0o177777,
-        (true, 0) => 0o377,
-        (true, _) => 0o177400,
-    };
     let Machine { io, mem, count, .. } = m;
-    let addr = if byte { a & !1 } else { a };
-    if io.write(mem, *count, addr, value, mask) {
+    if io.write_cycle(mem, *count, a, value, byte) {
         Ok(())
     } else {
         Err(no_register(m, a, byte))

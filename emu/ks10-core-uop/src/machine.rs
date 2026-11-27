@@ -7,6 +7,8 @@
 
 use std::collections::BTreeSet;
 
+use ks10_machine::boot;
+use ks10_machine::unibus::{Io, Reply};
 use pdp10::W36;
 
 use crate::alu::{self, Alu, Controls, Outputs, W40};
@@ -17,9 +19,26 @@ use crate::listing::DROM_WORDS;
 /// The number of words of the RAM file (DPE7, DPE8).
 pub const RAM_FILE_WORDS: usize = 1024;
 
-/// The size of main memory in words: 512 Ki words, the largest KS10
-/// memory (docs/architecture.md).
-pub const MEMORY_WORDS: usize = 1 << 19;
+pub use ks10_machine::MEMORY_WORDS;
+
+/// The microcycles from the command/address of an I/O cycle to the end of
+/// I/O BUSY of a Unibus adapter, for a read (then I/O DATA CYCLE) and for
+/// a write **[estimate]**: the emulated devices complete at once, and the
+/// microcode waits for any time up to its limits (inout, IOWAIT).
+const UBA_BUSY_CYCLES: u32 = 4;
+
+/// The microcycles from the command/address of a console read to its data
+/// cycle: "two cycles after the command/address" **[manual]**
+/// (EK-OKS10-TM-002 5.3.6), taken as microcycles.
+const CONSOLE_DATA_CYCLES: u32 = 2;
+
+/// The register address bit that the console decodes for a read of its
+/// instruction register: R DATA 19 (M8616-0-CSL4 rev C, E90, E106).
+const CONSOLE_REGISTER_BIT: u32 = 0o200000;
+
+/// The microcycles that `master_reset` and `start_at` wait for the
+/// microcode, as the delay loops of the 8080 do (cmds.m80, HLTCM, DNF).
+const CONSOLE_WAIT_CYCLES: u64 = 100_000;
 
 /// Why the machine stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +46,14 @@ pub enum Stop {
     /// The microinstruction at `addr` needs a function that the model does
     /// not have yet.
     Unmodelled { addr: u16, what: String },
+}
+
+impl std::fmt::Display for Stop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stop::Unmodelled { addr, what } => write!(f, "not modelled at {addr:04o}: {what}"),
+        }
+    }
 }
 
 /// The register E603 of DPE5: values of the previous cycle.
@@ -88,18 +115,45 @@ pub struct Pxct {
     pub bits: u8,
 }
 
-/// The console inputs and the HALT LOOP flag (M8616-0-CSL4 rev C). The
-/// 8080 sets RUN, CONTINUE and EXECUTE through register 212, TRAP EN
-/// through register 205 and 1 MSEC EN through register 100.
+/// The console board: its inputs to the processor and the HALT LOOP flag
+/// (M8616-0-CSL4 rev C). The 8080 sets RUN, CONTINUE and EXECUTE through
+/// register 212, TRAP EN through register 205 and 1 MSEC EN and CACHE EN
+/// through register 100 (hcore.m80, condef.m80).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Console {
+pub struct Csl {
     pub run: bool,
     pub cont: bool,
     pub execute: bool,
     pub trap_en: bool,
     pub one_ms_en: bool,
+    pub cache_en: bool,
     /// HALT LOOP (E161): the microcode sets and clears it.
     pub halt_loop: bool,
+    /// The console instruction register, I/O address 0,,200000: the word
+    /// that the 8080 writes to registers 102 to 112 (cmds.m80, EXINT,
+    /// WDATP).
+    pub data: W36,
+    /// The console answers a read with I/O DATA CYCLE, not DATA CYCLE:
+    /// register 114 (DTARB) bit 1 (cmds.m80, EXINT: "SET BIT FOR "I/O DATA
+    /// CYCLE"").
+    pub io_data_cycle: bool,
+}
+
+/// The state of the KS10 bus for the I/O cycles of the processor, in
+/// microcycles (docs/microcode-model.md, "I/O cycles").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bus {
+    /// I/O LATCH (CRA2 E148 R2) and the copy that `SKIP/-IO BUSY` reads
+    /// (CRA2 E98 R1).
+    pub io_latch: bool,
+    pub io_latch_skip: bool,
+    /// The microcycles in which a controller still asserts I/O BUSY.
+    pub io_busy: u32,
+    /// The microcycles until the data cycle of a read, and whether it is
+    /// an I/O DATA CYCLE.
+    pub data_in: Option<(u32, bool)>,
+    /// The word of the read in progress.
+    pub reply: Option<W36>,
 }
 
 /// The codes that a run executed, for the coverage report.
@@ -166,7 +220,6 @@ impl std::fmt::Display for Coverage {
 }
 
 /// The microcode-level machine.
-#[derive(Clone, Debug)]
 pub struct Machine {
     pub cram: Vec<Microword>,
     pub drom: Vec<u64>,
@@ -221,7 +274,16 @@ pub struct Machine {
     /// The 1 ms flag (DPMC E1) and its copy (DPMC E3 R3).
     pub one_ms: bool,
     pub one_ms_sync: bool,
-    pub console: Console,
+    pub csl: Csl,
+    pub bus: Bus,
+    /// The Unibus adapters and their devices.
+    pub io: Io,
+    /// The completed instructions: the `SPEC/NICOND` words. This is the
+    /// time of the devices, as in `ks10-core-soft`.
+    pub instructions: u64,
+    /// A stop of `master_reset` or `start_at`, which the next `step`
+    /// returns.
+    pub pending_stop: Option<Stop>,
     /// TRAP CYCLE (CRA2 E159).
     pub trap_cycle: bool,
     pub flags: PcFlags,
@@ -318,7 +380,11 @@ impl Machine {
             interrupt_req: Some(p),
             one_ms: p,
             one_ms_sync: p,
-            console: Console::default(),
+            csl: Csl::default(),
+            bus: Bus::default(),
+            io: Io::default(),
+            instructions: 0,
+            pending_stop: None,
             trap_cycle: p,
             flags,
             cycles: 0,
@@ -504,6 +570,9 @@ impl Machine {
     /// also needs CSL5 FS (1) (E53), which this model takes as 1
     /// (docs/unknowns.md).
     pub fn step(&mut self) -> Result<(), Stop> {
+        if let Some(s) = self.pending_stop.take() {
+            return Err(s);
+        }
         let mw = self.cram[usize::from(self.upc & 0o3777)];
         if get(mw, u::MULTI_SHIFT) == 0 {
             return self.step_word(mw);
@@ -632,17 +701,19 @@ impl Machine {
         // (DPM5 E46) and MEMORY CYCLE 0.
         let rpw = self.cycle.read && self.cycle.write && !stop_main_memory;
         let bus_cycle = memory_delay && !stop_main_memory;
-        if bus_cycle && (self.vma_flags.io || self.vma_flags.wru || self.vma_flags.vector) {
-            return Err(self.unmodelled("I/O cycle"));
-        }
+        let io_cycle = self.vma_flags.io || self.vma_flags.wru || self.vma_flags.vector;
         let address = self.bus_address();
-        if bus_cycle && address >= self.memory.len() {
+        if bus_cycle && !io_cycle && address >= self.memory.len() {
             return Err(self.unmodelled(format!("nonexistent memory {address:o}")));
         }
         // A read gives MB on DBM MEM. For an AC reference, FORCE RAMFILE
         // makes the DBus take the RAM file (DPM5 E14, DPE3 E70).
         if bus_cycle && self.cycle.read {
-            self.mb = self.memory[address];
+            self.mb = if io_cycle {
+                self.io_read_data()?
+            } else {
+                self.memory[address]
+            };
         }
         let force_ramfile = ac_ref && memory_delay && self.cycle.read;
         // DPMA E22, E54: the RAM file takes the DBus at the end of a
@@ -709,8 +780,19 @@ impl Machine {
         // A write takes DP of the word that completes the cycle (DPM8,
         // DPM9 MIX: DP in the data phase). DPMA WRITE CYCLE needs NOT MEM
         // READ (DPMA E17, E21, E14).
+        let mut io_written = false;
         if bus_cycle && self.cycle.write && !self.cycle.read {
-            self.memory[address] = dp;
+            if io_cycle {
+                // An I/O write: the controller asserts I/O BUSY after the
+                // data cycle (EK-OKS10-TM-002 5.3.6).
+                let a = address as u32;
+                let byte = self.vma_flags.io_byte;
+                io_written =
+                    self.io
+                        .write_cycle(&mut self.memory, self.instructions, a, dp.get(), byte);
+            } else {
+                self.memory[address] = dp;
+            }
         }
         if let Some(s) = scad {
             if load_sc {
@@ -757,15 +839,27 @@ impl Machine {
             };
             self.cycle = new;
         }
+        let mut started = false;
         if mem_wait {
             // DPM5 E5 (SYNC is 1 at the clock) and DPM6 E16.
             let start = mem_en && !rpw && (self.cycle.read || self.cycle.write);
             self.memory_cycle = start;
+            started = start;
             self.int_latched = self.interrupt_req;
             self.one_ms_latched = self.one_ms_sync;
         }
         if vma_en {
             self.load_vma(dp, nb, previous_en, spec_en, spec_low);
+        }
+        // The bus in this microcycle, then the cycles that start in it.
+        let group_10 = |code: u32| spec_en & 1 != 0 && spec_low == code;
+        self.bus_clock(group_10(2), group_10(3));
+        if io_written {
+            self.bus.io_busy = UBA_BUSY_CYCLES;
+        }
+        let f = self.vma_flags;
+        if started && self.cycle.read && (f.io || f.wru || f.vector) {
+            self.io_command()?;
         }
         self.spec(mw, spec_en, spec_low, &out);
         // DPEB E167 R7 every cycle, from the PI registers before a load.
@@ -816,7 +910,7 @@ impl Machine {
         } else {
             let previous = previous_en || (spec_en & 2 != 0 && spec_low == 0);
             VmaFlags {
-                user: (!nb(1) && !self.console.execute && user_flag)
+                user: (!nb(1) && !self.csl.execute && user_flag)
                     || (nb(2) && user_flag)
                     || nb(0)
                     || (previous && self.flags.pcu),
@@ -975,9 +1069,9 @@ impl Machine {
         if en & 2 != 0 && !matches!(low, 0 | 1 | 5 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 20, code {low}")));
         }
-        // Group 10 (CRA2 E97, DPMA E2): 0 CONSOLE, 1 CLR 1 MSEC, 5 NICOND,
-        // 6 PXCT EN, 7 MEM WAIT.
-        if en & 1 != 0 && !matches!(low, 0 | 1 | 5 | 6 | 7) {
+        // Group 10 (CRA2 E97, DPMA E2): 0 CONSOLE, 1 CLR 1 MSEC, 2 CLR IO
+        // LATCH, 3 CLR IO BUSY, 5 NICOND, 6 PXCT EN, 7 MEM WAIT.
+        if en & 1 != 0 && !matches!(low, 0 | 1 | 2 | 3 | 5 | 6 | 7) {
             return Err(self.unmodelled(format!("SPEC group 10, code {low}")));
         }
         Ok(())
@@ -1001,7 +1095,7 @@ impl Machine {
             match low {
                 // CONSOLE (CSL4 E171, E149, E135, E161).
                 0 => {
-                    let c = &mut self.console;
+                    let c = &mut self.csl;
                     c.cont &= !nb(12);
                     c.execute &= !nb(13);
                     c.run &= !nb(14);
@@ -1012,8 +1106,16 @@ impl Machine {
                         c.halt_loop = false;
                     }
                 }
-                // NICOND: TRAP CYCLE is NOT NICOND 09 (CRA2 E159).
-                5 => self.trap_cycle = self.nicond() < 4,
+                // NICOND: TRAP CYCLE is NOT NICOND 09 (CRA2 E159). The
+                // word ends an instruction; the devices run to its time.
+                5 => {
+                    self.trap_cycle = self.nicond() < 4;
+                    self.instructions += 1;
+                    self.io.poll(self.instructions);
+                    if !self.io.events.is_empty() {
+                        self.io.run_events(&mut self.memory, self.instructions);
+                    }
+                }
                 // PXCT EN, with PXCT OFF from group 20 (DPMA E71).
                 6 => {
                     self.pxct = Pxct {
@@ -1034,14 +1136,14 @@ impl Machine {
 
     /// A 1 ms tick of the timer (DPMC E1): E1 takes 1 MSEC EN.
     pub fn millisecond(&mut self) {
-        self.one_ms = self.console.one_ms_en;
+        self.one_ms = self.csl.one_ms_en;
     }
 
     /// NICOND 09–11 (CRA2 E147, DPE9 E125): the first active input of
     /// 0 EA1, 1 TRAP 3, 2 TRAP 2, 3 TRAP 1, 4 EF1, 5 not RUN, 6 EK1, 7.
     /// EA1, EF1 and EK1 are inactive (docs/microcode-model.md, "NICOND").
     fn nicond(&self) -> u16 {
-        let trap_en = self.console.trap_en && self.apr_enables.bit(22);
+        let trap_en = self.csl.trap_en && self.apr_enables.bit(22);
         let f = self.flags;
         if trap_en && f.trap2 && f.trap1 {
             1
@@ -1049,11 +1151,173 @@ impl Machine {
             2
         } else if trap_en && f.trap1 {
             3
-        } else if !self.console.run {
+        } else if !self.csl.run {
             5
         } else {
             7
         }
+    }
+
+    /// The highest PI level in progress, PI CURRENT (DPEB E134). The WRU
+    /// cycle sends it on bus data 15 to 17 (DPEB E96; EK-OKS10-TM-002
+    /// 5.6.6).
+    fn pi_current(&self) -> Option<u8> {
+        (1..=7).find(|n| !self.pi.bit(20 + u32::from(*n)))
+    }
+
+    /// The bus signals of one microcycle for the I/O LATCH (CRA2 E148,
+    /// E183, E184): I/O LATCH takes (I/O LATCH AND NOT `CLR IO LATCH`) OR
+    /// BUS I/O BUSY OR BUS I/O DATA CYCLE. E98 takes the old I/O LATCH at
+    /// the end of the microcycle (DISP & SKIP EN with SYNC, E31).
+    /// `CLR IO BUSY` sends CLR BUSY on the bus (EK-0KS10-TM-001, Figure
+    /// 5-28), and the controller ends I/O BUSY.
+    fn bus_clock(&mut self, clr_latch: bool, clr_busy: bool) {
+        let b = &mut self.bus;
+        let busy = b.io_busy > 0;
+        let mut io_data = false;
+        b.data_in = match b.data_in {
+            Some((1, io)) => {
+                io_data = io;
+                None
+            }
+            Some((n, io)) => Some((n - 1, io)),
+            None => None,
+        };
+        b.io_latch_skip = b.io_latch;
+        b.io_latch = (b.io_latch && !clr_latch) || busy || io_data;
+        b.io_busy = b.io_busy.saturating_sub(1);
+        if clr_busy {
+            b.io_busy = 0;
+        }
+    }
+
+    /// The command/address cycle of an I/O read, a WRU cycle or a vector
+    /// cycle (EK-OKS10-TM-002 5.3.6, 5.3.7). The controller reads its
+    /// register now; the word reaches MB at the data cycle.
+    fn io_command(&mut self) -> Result<(), Stop> {
+        let a = self.bus_address() as u32;
+        let f = self.vma_flags;
+        let b = &mut self.bus;
+        b.reply = None;
+        b.data_in = None;
+        let ctl = a >> 18;
+        if f.wru || f.vector {
+            let Some(n) = self.pi_current() else {
+                return Err(self.unmodelled("WRU or vector cycle with no PI level in progress"));
+            };
+            if f.wru {
+                // The adapters answer on the data lines in the second
+                // cycle; there is no data cycle and no I/O BUSY (5.3.7,
+                // 5.6.2).
+                self.bus.reply = Some(W36::wrap(self.io.wru(n)));
+            } else if let Some(v) = self.io.vector(ctl, n) {
+                // The adapter asserts I/O BUSY and sends the vector with
+                // I/O DATA CYCLE (EK-OKS10-TM-002 5.9.6).
+                self.answer(u64::from(v), UBA_BUSY_CYCLES, true);
+            }
+            return Ok(());
+        }
+        if ctl == 0 {
+            if a & CONSOLE_REGISTER_BIT == 0 {
+                return Err(
+                    self.unmodelled("I/O read of controller 0 other than the console register")
+                );
+            }
+            let c = self.csl;
+            self.bus.reply = Some(c.data);
+            self.bus.data_in = Some((CONSOLE_DATA_CYCLES, c.io_data_cycle));
+            return Ok(());
+        }
+        // A Unibus adapter asserts I/O BUSY, then sends the word with I/O
+        // DATA CYCLE (EK-OKS10-TM-002 5.3.6, 5.9.5). For an address with
+        // no device the adapter does not answer (docs/unknowns.md).
+        if let Reply::Value(v) = self.io.read_cycle(a, f.io_byte, self.instructions) {
+            self.answer(v, UBA_BUSY_CYCLES, true);
+        }
+        Ok(())
+    }
+
+    /// A controller answers a read: I/O BUSY for `busy` microcycles, then
+    /// the data cycle.
+    fn answer(&mut self, v: u64, busy: u32, io_data_cycle: bool) {
+        self.bus.reply = Some(W36::wrap(v));
+        self.bus.io_busy = busy;
+        self.bus.data_in = Some((busy + 1, io_data_cycle));
+    }
+
+    /// The word of an I/O read for the word that completes the cycle. If
+    /// the data cycle has not come yet, the processor clock waits for it
+    /// (EK-OKS10-TM-002 5.6.1), so it comes in this microcycle.
+    fn io_read_data(&mut self) -> Result<W36, Stop> {
+        let Some(w) = self.bus.reply.take() else {
+            return Err(self.unmodelled("I/O read that no controller answers: the processor waits"));
+        };
+        if let Some((_, io)) = self.bus.data_in {
+            self.bus.data_in = Some((1, io));
+            self.bus.io_busy = 0;
+        }
+        Ok(w)
+    }
+
+    /// Run until `done` is true, for at most `limit` microcycles. Returns
+    /// whether `done` became true.
+    pub fn run_until(&mut self, limit: u64, done: impl Fn(&Machine) -> bool) -> Result<bool, Stop> {
+        for _ in 0..limit {
+            if done(self) {
+                return Ok(true);
+            }
+            self.step()?;
+        }
+        Ok(done(self))
+    }
+
+    /// The console command SM and the start of a boot command (cmds.m80,
+    /// SM1, BT.GO). MRINT: RUN, EXECUTE and CONTINUE to 0, CRAM RESET, DP
+    /// RESET and the bus RESET (hcore.m80, MRCMD, MRINT). Then the 8080
+    /// deposits all ones in location 0, sets the CRAM address to 0, starts
+    /// the clock and waits for HALT LOOP. BT.GO then sets the default
+    /// enables: 1 MSEC EN and CACHE EN (condef.m80, DEFLTE), TRAP EN
+    /// (TRPDEF). Which registers DP RESET clears is not modelled
+    /// (docs/unknowns.md); the power-up sequence sets the state that the
+    /// microcode uses.
+    ///
+    /// While SM1 runs, register 100 has only the parity bits (PARBT AND
+    /// 140), so 1 MSEC EN and CACHE EN are 0. The wait in HLTCM (DELAY.
+    /// with 255 loops of DCR, PUSH, POP and JNZ: 9180 8080 states) takes
+    /// more than 1 ms **[estimate]**: the 8080A runs at 3 MHz or less. So
+    /// the 1 ms flag (DPMC E1) takes 0 at least once.
+    fn console_reset(&mut self) -> Result<(), Stop> {
+        let c = &mut self.csl;
+        (c.run, c.cont, c.execute) = (false, false, false);
+        (c.one_ms_en, c.cache_en) = (false, false);
+        c.halt_loop = false;
+        self.io.reset();
+        self.bus = Bus::default();
+        self.memory[0] = W36::ONES;
+        self.upc = 0;
+        if !self.run_until(CONSOLE_WAIT_CYCLES, |m| m.csl.halt_loop)? {
+            return Err(self.unmodelled("the microcode does not reach the halt loop"));
+        }
+        self.millisecond();
+        let c = &mut self.csl;
+        (c.one_ms_en, c.cache_en, c.trap_en) = (true, true, true);
+        Ok(())
+    }
+
+    /// The console command ST (cmds.m80, STINT, EXINT, COCMD): EXECUTE of
+    /// JRST `addr`, then CONTINUE and RUN. The 8080 checks that the
+    /// microcode clears CONTINUE (DNF).
+    fn console_start(&mut self, addr: u32) -> Result<(), Stop> {
+        let c = &mut self.csl;
+        c.data = W36::wrap(0o254000 << 18 | u64::from(addr & 0o777777));
+        c.io_data_cycle = true;
+        (c.execute, c.cont) = (true, true);
+        if !self.run_until(CONSOLE_WAIT_CYCLES, |m| !m.csl.cont)? {
+            return Err(self.unmodelled("the microcode does not clear CONTINUE after EXECUTE"));
+        }
+        let c = &mut self.csl;
+        (c.execute, c.cont, c.run) = (false, true, true);
+        Ok(())
     }
 
     fn drom_word(&self) -> u64 {
@@ -1125,8 +1389,10 @@ impl Machine {
                     2 => ad_zero,
                     3 => self.sc & 0o1000 != 0,
                     // CRA2 E98: the console and the 1 ms flag.
-                    4 => self.console.execute,
-                    6 => !self.console.cont,
+                    4 => self.csl.execute,
+                    // -IO BUSY: NOT I/O LATCH (CRA2 E98 D1).
+                    5 => !self.bus.io_latch_skip,
+                    6 => !self.csl.cont,
                     7 => !self.one_ms_sync,
                     _ => return Err(self.unmodelled(format!("SKIP group 10, input {sel}"))),
                 };
@@ -1222,6 +1488,26 @@ impl Machine {
             self.sp = self.sp.wrapping_sub(1) & 15;
         }
         Ok(next)
+    }
+}
+
+impl boot::Processor for Machine {
+    fn bus(&mut self) -> (&mut [W36], &mut Io, u64) {
+        (&mut self.memory, &mut self.io, self.instructions)
+    }
+
+    fn master_reset(&mut self) {
+        if let Err(s) = self.console_reset() {
+            self.pending_stop = Some(s);
+        }
+    }
+
+    fn start_at(&mut self, addr: u32) {
+        if self.pending_stop.is_none()
+            && let Err(s) = self.console_start(addr)
+        {
+            self.pending_stop = Some(s);
+        }
     }
 }
 

@@ -593,10 +593,12 @@ clock, through E3 R2. E3 R3 copies E1 at each clock and gives DPMC 1 MSEC.
 
 ## Stage 1
 
-Stage 1 runs single instructions that need no I/O, in the state after
-power-up: PAGE EN, TRAP EN and the APR enables are 0, so there is no
-paging, no cache and no trap. The model is `emu/ks10-core-uop/src/alu.rs` and
-`machine.rs`.
+Stage 1 runs single instructions in the state after power-up: PAGE EN,
+TRAP EN and the APR enables are 0, so there is no paging, no cache and
+no trap. The model is `emu/ks10-core-uop/src/alu.rs` and `machine.rs`.
+Stage 2 adds the I/O cycles and the console ("Stage 2: I/O and the
+console").
+
 
 A function is either modelled or a stop with "unmodelled". The model
 does not guess a value. A shift line that nothing drives is undefined; a
@@ -627,10 +629,13 @@ where the hardware also depends on its state at power on.
   `SPEC/PXCT EN`, `SPEC/PXCT OFF`, `SPEC/MEMCLR`, `SPEC/MEM WAIT`,
   `SPEC/NICOND`, `SPEC/CLRCLK`, `SPEC/#`;
 - the console inputs RUN, CONTINUE, EXECUTE, TRAP EN and 1 MSEC EN, and
-  HALT LOOP; INTERRUPT REQ from program requests; the 1 ms flag.
+  HALT LOOP; INTERRUPT REQ from program requests; the 1 ms flag;
+- I/O cycles, the I/O LATCH, `SPEC/CLR IO LATCH` and `SPEC/CLR IO BUSY`,
+  and the console instruction register (stage 2).
 
 Timing within a cycle is not modelled: SYNC is 1 at the clock, and the
-skip latch CRA2 E98 has the values of the cycle. The cache directory
+skip latch CRA2 E98 has the values of the cycle, except NOT I/O LATCH
+(stage 2). The cache directory
 (DPM7) is not modelled; without PAGE EN there is no cache hit.
 
 The rest stops (the `unmodelled` branches of `machine.rs`):
@@ -638,15 +643,14 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - paging: PAGE EN with a virtual VMA and a memory cycle;
 - a page fail from INT OR ERR; an APR interrupt request (APR enables
   24–31 not 0) where INTERRUPT REQ is read;
-- I/O cycles (VMA I/O, WRU, VECTOR), and a bus cycle above 512 Ki
-  words;
+- a memory cycle above 512 Ki words; an I/O read of controller 0
+  without bit 19 (the memory status register), and an I/O read that no
+  controller answers;
 - DBus input 0; DBM inputs 0, 1 and 2, and DP with a byte insertion; DP
   on the DBus where DP depends on D;
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
 - `SPEC` group 40 codes 2 and 5 (`EXPTST`); group 20 codes 2, 3 and 4
-  (`APR FLAGS`, `CLRCSH`, `SWEEP`); group 10 codes 2, 3 and 4 (I/O
-  latch, I/O busy, `LDPAGE`);
-- the skip input NOT I/O LATCH;
+  (`APR FLAGS`, `CLRCSH`, `SWEEP`); group 10 code 4 (`LDPAGE`);
 - the dispatches DIAG ADR, PAGE FAIL and BYTE, and `DISP/MUL` with `J`
   bit 10 clear;
 - `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
@@ -682,9 +686,8 @@ state at power on.
 
 Design decision 2026-11-27: the test puts the ACs into block 0 of the
 RAM file and PC into the 2901 register. The console starts a program
-with EXECUTE of a JRST, which reads the console register with an I/O
-cycle (`cmds.m80`, `STCMD`, `EXINT`; inout, `CONT`); stage 1 has no I/O.
-The test then does what the console command `SI` does: it sets CONTINUE
+with EXECUTE of a JRST (`cmds.m80`, `STCMD`, `EXINT`; inout, `CONT`),
+which has its own test (stage 2). The test then does what the console command `SI` does: it sets CONTINUE
 without RUN ("I/O WRT 212/1") **[its]** (`cmds.m80`, `SICMD`; `condef.m80`,
 `CPUCTL`). One 1 ms step with 1 MSEC EN 0 clears the 1 ms flag first. The microcode then does one
 instruction, finds RUN 0 at NICOND (code 5), and halts with the halt code
@@ -747,6 +750,102 @@ the sign gives differences in IMUL, MUL, ASH and ASHC.
 Mutants of the shifts: `SCADB` `SHIFT` with 0 in bits 00 and 01 gives
 differences in ASH right, ASHC and LSH. A last `MULTI SHIFT` word that
 changes the data path gives differences in ASH right, LSH and ROT.
+
+## Stage 2: I/O and the console
+
+Stage 2 connects the model to the devices of `emu/ks10-machine`: the
+Unibus adapters, the devices behind them, and main memory. The uop
+`Machine` implements `ks10_machine::boot::Processor`, so the boot
+commands of `ks10-machine` run on it.
+
+### I/O cycles
+
+An I/O cycle is a memory function with VMA I/O, WRU or VECTOR. All I/O
+is physical **[manual]** (EK-OKS10-TM-002 5.6.3). The model counts bus
+time in microcycles.
+
+- **Command/address.** The word that starts a read cycle sends the
+  command/address. The controller reads its register at this point. The
+  word reaches MB with the data cycle. The word that completes the cycle
+  reads MB. If the data cycle has not come yet, the processor clock waits
+  for it **[manual]** (5.6.1), so the model gives the data cycle in that
+  microcycle.
+- **Write.** The word that completes a write cycle sends the data. The
+  controller then asserts I/O BUSY **[manual]** (5.3.6).
+- **I/O LATCH** (CRA2 E148, E183, E184). At each clock, I/O LATCH takes
+  (I/O LATCH AND NOT `CLR IO LATCH`) OR BUS I/O BUSY OR BUS I/O DATA
+  CYCLE. The skip input NOT I/O LATCH comes from E98, which loads at
+  SYNC (E31). So `SKIP/-IO BUSY` sees the latch of the previous
+  microcycle. `CLR IO BUSY` sends CLR BUSY on the bus, and the
+  controller ends I/O BUSY **[manual]** (EK-0KS10-TM-001, Figure 5-28).
+- **Device time.** Each `SPEC/NICOND` word counts one instruction. The
+  devices run at this count, as in `emu/ks10-core-soft`.
+
+The controllers:
+
+| Cycle | Answer | Source |
+|---|---|---|
+| Read, controller 0, address bit 19 | The console instruction register, after 2 microcycles, with I/O DATA CYCLE if the 8080 set it in register 114 | CSL4 E90, E106; 5.3.6 **[manual]**; `cmds.m80` EXINT **[its]** |
+| Read, controller 1 or 3 | I/O BUSY for 4 microcycles, then I/O DATA CYCLE | 5.3.6, 5.9.5 **[manual]**; time **[estimate]** |
+| Write, controller 0, 1 or 3 | I/O BUSY for 4 microcycles after the data | 5.3.6 **[manual]**; time **[estimate]** |
+| WRU | Bit 18 + n for each adapter n that requests on the level; no data cycle and no I/O BUSY | 5.3.7, 5.6.2 **[manual]** |
+| Vector, controller n | I/O BUSY for 4 microcycles, then the vector with I/O DATA CYCLE | 5.9.6 **[manual]**; time **[estimate]** |
+
+The WRU cycle sends PI CURRENT, the highest level in progress, on bus
+data 15–17 (DPEB E134, E96). A register with no device gives no answer
+([`unknowns.md`](unknowns.md)). The model stops on a read of controller
+0 without bit 19 (the memory status register), and on a read that no
+controller answers.
+
+### The console
+
+The console board (`Csl` in `machine.rs`) has RUN, CONTINUE, EXECUTE,
+TRAP EN, 1 MSEC EN, CACHE EN, HALT LOOP, the console instruction
+register (8080 registers 102 to 112) and the data cycle bit of register
+114 **[its]** (`cmds.m80`, `hcore.m80`, `condef.m80`).
+
+- **Master reset** (`master_reset`) does what the 8080 does at the start
+  of a boot command: MRINT clears RUN, EXECUTE and CONTINUE, and gives
+  CRAM RESET, DP RESET and the bus RESET. SM1 deposits all ones in
+  location 0, sets the CRAM address to 0, and waits for HALT LOOP.
+  BT.GO then sets 1 MSEC EN, CACHE EN and TRAP EN **[its]** (`hcore.m80`
+  MRCMD, MRINT; `cmds.m80` SM1, BT.GO; `condef.m80` DEFLTE, TRPDEF).
+  While SM1 runs, 1 MSEC EN is 0, and the wait of the 8080 is longer
+  than 1 ms **[estimate]** (the comment of `console_reset`). The model
+  therefore clears the 1 ms flag with one tick.
+- **Start** (`start_at`) is the command ST: the console instruction
+  register gets JRST to the address, register 114 selects I/O DATA
+  CYCLE, and the 8080 sets EXECUTE and CONTINUE. The microcode reads the
+  register (inout, `CONT`) and clears CONTINUE. The 8080 then sets
+  CONTINUE and RUN **[its]** (`cmds.m80` STINT, EXINT, DNF, COCMD).
+
+### Results
+
+**[measured]** 2026-11-27, the ITS listing 262:
+
+- `emu/ks10-core-uop/tests/console.rs`: after the master reset, ST 1000
+  runs MOVEI and HALT; the halt code is 1 and the PC is the address of
+  the HALT. A program of IOWRI, IORDI, IOWRQ, IORDQ, IOWRBQ and IORDBQ
+  on the status register of adapter 3 and the WC register of the disk
+  RH11 gives the ACs of `emu/ks10-core-soft` and the values that the
+  test computes. Both fills.
+- `emu/ks10-core-uop/tests/its_boot.rs`: BT loads the boot loader from
+  the disk image of the ITS build and starts it at 1000. The model runs
+  in step with `emu/ks10-core-soft`, and compares PC and the ACs after
+  each instruction. Both start with the ACs that the power-up sequence
+  leaves. The model agrees for 5 instructions, about 1.05 million
+  microcycles: most are a BLT that clears memory. It then stops at
+  `SWEEP` (word 2277, `SPEC` group 20 code 4) in `WRUBR`: the page
+  table and the cache are the next stage.
+
+Mutants of the I/O model: no I/O BUSY on a read or a write, and an I/O
+LATCH without the BUSY term, each give differences in the ACs; a byte
+write as a word write gives a difference; a console decode with the
+wrong polarity stops both tests. Two mutants survive, and the
+instructions cannot show them. A skip from I/O LATCH without E98 only
+changes the number of loops in IOWAIT. A byte read as a word read reads
+the same register, because the RH11 of `emu/ks10-machine` ignores the
+low bit of the register address.
 
 ## Field tables
 

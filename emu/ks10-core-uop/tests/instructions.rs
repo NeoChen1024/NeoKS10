@@ -98,13 +98,15 @@ fn reference(c: &Case) -> Result<State, String> {
 fn halted(text: &str, fill: alu::W40) -> Machine {
     let haltlp = label(text, "HALTLP");
     let mut m = machine(text, fill);
-    run_until(&mut m, 100_000, |m| m.upc == haltlp && m.console.halt_loop).unwrap();
+    run_until(&mut m, 100_000, |m| m.upc == haltlp && m.csl.halt_loop).unwrap();
     m
 }
 
-fn model(text: &str, base: &Machine, c: &Case, coverage: &mut Coverage) -> Result<State, String> {
+fn model(text: &str, fill: alu::W40, c: &Case, coverage: &mut Coverage) -> Result<State, String> {
     let haltlp = label(text, "HALTLP");
-    let mut m = base.clone();
+    // A machine has its own bus with the devices, so each case runs the
+    // power-up sequence (about 640 microcycles).
+    let mut m = halted(text, fill);
     for (k, &a) in c.ac.iter().enumerate() {
         m.ram_file[k] = W36::wrap(a);
     }
@@ -119,11 +121,11 @@ fn model(text: &str, base: &Machine, c: &Case, coverage: &mut Coverage) -> Resul
     m.millisecond();
     // The "SI" command: CONTINUE without RUN (cmds.m80, SICMD: "I/O WRT
     // 212/1").
-    m.console.cont = true;
-    m.console.run = false;
+    m.csl.cont = true;
+    m.csl.run = false;
     // Leave the halt loop, then run to its next entry.
-    run_until(&mut m, 50, |m| !m.console.halt_loop)?;
-    run_until(&mut m, 20_000, |m| m.upc == haltlp && m.console.halt_loop)?;
+    run_until(&mut m, 50, |m| !m.csl.halt_loop)?;
+    run_until(&mut m, 20_000, |m| m.upc == haltlp && m.csl.halt_loop)?;
     if m.memory[0] != W36::wrap(2) {
         return Err(format!("halt code {:o}", m.memory[0].get()));
     }
@@ -472,10 +474,9 @@ fn single_instructions_agree_with_the_software_processor() {
     let mut differences = Vec::new();
     let mut coverage = Coverage::default();
     for fill in FILLS {
-        let base = halted(&text, fill);
         for c in cases().into_iter().chain(random_shifts()) {
             let want = reference(&c).expect(&c.name);
-            let got = model(&text, &base, &c, &mut coverage);
+            let got = model(&text, fill, &c, &mut coverage);
             match got {
                 Ok(got) if got == want => {}
                 Ok(got) => differences.push(format!(

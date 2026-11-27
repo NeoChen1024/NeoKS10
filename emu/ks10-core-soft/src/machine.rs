@@ -249,13 +249,7 @@ impl Machine {
         self.hsb = W36::wrap(0o500);
         self.pxct = 0;
         self.oneproc = OneProc::Off;
-        self.io.uba = Default::default();
-        self.io.disk.reset();
-        self.io.dz.reset();
-        self.io.chaos.reset();
-        self.io.imp.reset();
-        self.io.events.clear();
-        self.io.memstat = 0;
+        self.io.reset();
     }
 
     /// The physical address of a word of the EPT: the EBR plus the

@@ -170,25 +170,42 @@ impl Io {
         m
     }
 
-    /// The WRU and vector cycles for PI level `n`: the adapter and the
-    /// vector, and the device drops its request. The adapters answer in
-    /// the order of the WRU bits (VECINT: bit 18 first); on one adapter the
-    /// highest bus request level wins, then the order of `sources`.
-    pub fn acknowledge(&mut self, n: u8) -> Option<(u32, u32)> {
-        let mut best: Option<(u32, u32, u32, u8)> = None;
-        for (on, inst, vec, which) in self.sources() {
-            if !on || self.uba[inst.adapter as usize].level(inst.br) != n {
-                continue;
-            }
-            let better = match best {
-                None => true,
-                Some((a, br, _, _)) => inst.adapter < a || (inst.adapter == a && inst.br > br),
-            };
-            if better {
-                best = Some((inst.adapter, inst.br, vec, which));
+    /// The answer of the adapters to a WRU cycle for PI level `n`: bit
+    /// 18 + a of the word for each adapter a that requests on level `n`
+    /// (EK-OKS10-TM-002 5.3.7; inout.50, VECINT: "BIT 18 FOR DEVICE 0").
+    pub fn wru(&self, n: u8) -> u64 {
+        let mut w = 0;
+        for (on, inst, _, _) in self.sources() {
+            if on && self.uba[inst.adapter as usize].level(inst.br) == n {
+                w |= 1 << (17 - inst.adapter);
             }
         }
-        let (a, _, vec, which) = best?;
+        w
+    }
+
+    /// The WRU and vector cycles for PI level `n`: the adapter and the
+    /// vector, and the device drops its request. The adapters answer in
+    /// the order of the WRU bits (VECINT: bit 18 first).
+    pub fn acknowledge(&mut self, n: u8) -> Option<(u32, u32)> {
+        let w = self.wru(n);
+        let a = (0..4).find(|a| w & 1 << (17 - a) != 0)?;
+        self.vector(a, n).map(|v| (a, v))
+    }
+
+    /// The vector cycle on adapter `a` for PI level `n`: the vector, and
+    /// the device drops its request. The highest bus request level wins,
+    /// then the order of `sources`.
+    pub fn vector(&mut self, a: u32, n: u8) -> Option<u32> {
+        let mut best: Option<(u32, u32, u8)> = None;
+        for (on, inst, vec, which) in self.sources() {
+            if !on || inst.adapter != a || self.uba[a as usize].level(inst.br) != n {
+                continue;
+            }
+            if best.is_none_or(|(br, _, _)| inst.br > br) {
+                best = Some((inst.br, vec, which));
+            }
+        }
+        let (_, vec, which) = best?;
         match which {
             0 => self.disk.irq = false,
             7 => self.tape.irq = false,
@@ -200,7 +217,44 @@ impl Io {
             // the program clears RDN or TDN).
             _ => {}
         }
-        Some((a, vec))
+        Some(vec)
+    }
+
+    /// An I/O read cycle of the processor. A byte read reads the word at
+    /// the even address.
+    pub fn read_cycle(&mut self, a: u32, byte: bool, now: u64) -> Reply {
+        self.read(if byte { a & !1 } else { a }, now)
+    }
+
+    /// An I/O write cycle of the processor. A byte write changes the byte
+    /// that the address selects: the high byte for an odd address.
+    pub fn write_cycle(
+        &mut self,
+        mem: &mut [W36],
+        now: u64,
+        a: u32,
+        value: u64,
+        byte: bool,
+    ) -> bool {
+        let mask = match (byte, a & 1) {
+            (false, _) => 0o177777,
+            (true, 0) => 0o377,
+            (true, _) => 0o177400,
+        };
+        let addr = if byte { a & !1 } else { a };
+        self.write(mem, now, addr, value, mask)
+    }
+
+    /// The bus RESET of the console (hcore.m80, MRINT): the adapters and
+    /// the devices return to their state at power on.
+    pub fn reset(&mut self) {
+        self.uba = Default::default();
+        self.disk.reset();
+        self.dz.reset();
+        self.chaos.reset();
+        self.imp.reset();
+        self.events.clear();
+        self.memstat = 0;
     }
 
     /// A read of I/O address `addr` (adapter in bits 14 to 17).
