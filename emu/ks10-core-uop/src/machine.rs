@@ -7,7 +7,7 @@
 
 use ks10_machine::INSTRUCTIONS_PER_MS;
 use ks10_machine::boot;
-use ks10_machine::console::{self as cty, Console as Cty};
+use ks10_machine::console::Console as Cty;
 use ks10_machine::unibus::{Io, Reply, level_bit};
 use pdp10::W36;
 
@@ -1278,11 +1278,7 @@ impl Machine {
             _ => return Err(self.unmodelled("DBM EXP needs DP 09-17, which depends on the DBus")),
         };
         let exponent = u64::from(scad) & 0o377; // SCAD 02-09
-        let k = self
-            .instructions
-            .saturating_sub(self.last_tick)
-            .min(INSTRUCTIONS_PER_MS - 1);
-        let count = k * 4096 / INSTRUCTIONS_PER_MS;
+        let count = ks10_machine::msec_count(self.instructions, self.last_tick);
         let left = exponent << 9 | dp_left;
         Ok(W36::wrap(left << 18 | (count & 0o7774)))
     }
@@ -1574,20 +1570,11 @@ impl Machine {
             self.last_tick += INSTRUCTIONS_PER_MS;
             self.millisecond();
         }
-        let mem = &self.memory;
-        if let Some(e) = self.cty.poll(now, |a| mem[a as usize]) {
-            if let Some(a) = e.clear {
-                self.memory[a as usize] = W36::ZERO;
-            }
-            if let Some(w) = e.input {
-                self.memory[cty::CTYIN as usize] = w;
-            }
-            if e.interrupt {
-                // CSL4 INT 10 L, a pulse of the 8080 write to 116,
-                // presets APR flag 31 **[manual]** (M8616-0-CSL4 rev C,
-                // E171, E170, E163; DPMB E158).
-                self.apr_flags |= 1;
-            }
+        if self.cty.run(now, &mut self.memory) {
+            // CSL4 INT 10 L, a pulse of the 8080 write to 116, presets APR
+            // flag 31 **[manual]** (M8616-0-CSL4 rev C, E171, E170, E163;
+            // DPMB E158).
+            self.apr_flags |= 1;
         }
         self.io.poll(now);
         if !self.io.events.is_empty() {

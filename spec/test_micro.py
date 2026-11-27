@@ -3,7 +3,6 @@
 import unittest
 from pathlib import Path
 
-import gen_microcode as gm
 import micro
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,17 +79,6 @@ class Words(unittest.TestCase):
 
 @unittest.skipUnless((ITS / "src" / "kshack").is_dir(), "the submodule 3rdparty/its is missing")
 class Its(unittest.TestCase):
-    def test_the_fields_agree_with_gen_microcode(self):
-        a = its_assembly()
-        data = gm.read(ITS / "src" / "kshack")
-        for ram, fields in ((micro.UCODE, data["ufields"]), (micro.DISP, data["dfields"])):
-            for name, first, last, where in fields:
-                with self.subTest(field=name, at=where):
-                    # TOK3 keeps the first 19 characters of a name.
-                    f, _ = a.find_field(name[: micro.MAX_NAME], ram)
-                    self.assertIsNotNone(f)
-                    self.assertEqual((f.pos - f.size + 1, f.pos), (first, last))
-
     def test_the_word_counts(self):
         a = its_assembly()
         self.assertEqual((len(a.cram), len(a.drom)), (1980, 512))

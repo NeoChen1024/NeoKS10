@@ -4,39 +4,57 @@ import unittest
 from pathlib import Path
 
 import gen_microcode as gm
+import micro
 
 ROOT = Path(__file__).resolve().parent.parent
-KSHACK = ROOT / "3rdparty" / "its" / "src" / "kshack"
+ITS = ROOT / "3rdparty" / "its"
 
-# Fields of a made-up word for the layout tests: 108 bits in total.
-FIELDS = [("A", 0, 35, "x:1"), ("B", 36, 70, "x:2"), ("C", 71, 106, "x:3")]
+# A made-up word for the layout tests. The RAM file has 3 words (108 bits).
+FIELDS = """\
+.WIDTH/108
+A/=<0:11>
+B/=<12:35>
+"""
+
+
+def items(ramfile):
+    a = micro.Assembler([("test", FIELDS + ".RAMFILE/" + ramfile + "\n")])
+    a.assemble()
+    return gm.ramfile_items(a)
 
 
 class RamFile(unittest.TestCase):
     def test_items_are_packed_from_the_left(self):
-        items = gm.parse_ramfile("A, B, ODD PARITY<0:35,36:70>, 36/0", FIELDS)
-        self.assertEqual(items[0], ("field", "A", 0, 36, 0))
-        self.assertEqual(items[1], ("field", "B", 36, 35, 36))
-        self.assertEqual(items[2], ("parity", True, ((0, 35), (36, 70)), 71))
-        self.assertEqual(items[3], ("pad", 36, 72))
+        got = items("A, B, ODD PARITY<0:11,12:35>, 71/0")
+        self.assertEqual(got[0], ("field", "A", 0, 12, 0))
+        self.assertEqual(got[1], ("field", "B", 12, 24, 12))
+        self.assertEqual(got[2], ("parity", True, ((0, 11), (12, 35)), 36))
+        self.assertEqual(got[3], ("pad", 71, 37))
 
     def test_even_parity_and_a_one_bit_pad(self):
-        items = gm.parse_ramfile("A, 0, B, EVEN PARITY<0:10>, 35/0", FIELDS)
-        self.assertEqual(items[1], ("pad", 1, 36))
-        self.assertEqual(items[3][:2], ("parity", False))
+        got = items("A, 0, EVEN PARITY<0:10>, 94/0")
+        self.assertEqual(got[1], ("pad", 1, 12))
+        self.assertEqual(got[2], ("parity", False, ((0, 10),), 13))
+
+    def test_the_source_lines(self):
+        a = micro.Assembler([("test", FIELDS + ".RAMFILE/A, B, 72/0\n")])
+        a.assemble()
+        self.assertEqual(a.ramfile_source, "test:4")
+        self.assertEqual(gm.fields(a, micro.UCODE), [("A", 0, 11, "test:2"), ("B", 12, 35, "test:3")])
 
     def test_rejects(self):
         cases = [
-            ("A, B, 36/0", "bits, expected 108"),
-            ("A, D, 37/0", "not defined"),
-            ("0, A, 71/0", "crosses a word"),
-            ("A, B, ODD PARITY<0:200>, 36/0", "outside the entry"),
+            ("A, B, ODD PARITY<0:1>, 35/0", gm.MicrocodeError, "72 bits, expected 108"),
+            ("A, D, 96/0", micro.MicroError, "NOT DEFINED"),
+            ("A, A, 0, B, 59/0", micro.MicroError, "CROSSES WORD BOUNDARY"),
         ]
-        for text, msg in cases:
+        for text, error, msg in cases:
             with self.subTest(text=text):
-                with self.assertRaisesRegex(gm.MicrocodeError, msg):
-                    gm.parse_ramfile(text, FIELDS)
+                with self.assertRaisesRegex(error, msg):
+                    items(text)
 
+
+class Names(unittest.TestCase):
     def test_rust_names(self):
         self.assertEqual(gm.rs_ident("#"), "NUM")
         self.assertEqual(gm.rs_ident("# HIGH"), "NUM_HIGH")
@@ -45,20 +63,20 @@ class RamFile(unittest.TestCase):
         self.assertEqual(gm.rs_ident("I.CO3"), "I_CO3")
 
 
-@unittest.skipUnless(KSHACK.is_dir(), "the submodule 3rdparty/its is not checked out")
+@unittest.skipUnless((ITS / "src" / "kshack").is_dir(), "the submodule 3rdparty/its is not checked out")
 class Sources(unittest.TestCase):
     def test_the_its_microcode(self):
-        data = gm.read(KSHACK)
-        items = gm.parse_ramfile(data["ramfile"][0], data["ufields"])
-        fields = {i[1]: i for i in items if i[0] == "field"}
+        a = micro.assemble(ITS)
+        got = gm.ramfile_items(a)
+        fields = {i[1]: i for i in got if i[0] == "field"}
         # J is the next address, bits 0 to 11 (ks10, "MICROCODE FIELDS"),
         # in the third word of the RAM file.
         self.assertEqual(fields["J"][2:], (0, 12, 84))
-        self.assertEqual(sum(1 for i in items if i[0] == "parity"), 2)
-        names = [f[0] for f in data["ufields"]]
-        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(sum(1 for i in got if i[0] == "parity"), 2)
+        ufields = gm.fields(a, micro.UCODE)
+        self.assertIn(("J", 0, 11, "ks10.47:563"), ufields)
         # The dispatch ROM word has its own J, bits 12 to 23.
-        self.assertIn(("J", 12, 23), [f[:3] for f in data["dfields"]])
+        self.assertIn(("J", 12, 23), [f[:3] for f in gm.fields(a, micro.DISP)])
 
 
 if __name__ == "__main__":

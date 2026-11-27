@@ -204,7 +204,7 @@ the microcode file.
   same result in the emulator, because the emulator does not load
   microcode.
 
-**[measured]** 2026-11-27 (`cargo test --release -p ks10-core-soft --test its` with
+**[measured]** 2026-11-27 (`cargo test --release -p ks10-core-soft --test idle` with
 `KS10_ITS_DISK` naming the step 0 `rp0.dsk`): `BT`, then `its` and ESC G
 at the DSKDMP prompt, start ITS. The Salvager runs, ITS prints `DB ITS
 1652 IN OPERATION`, the system job logs in, and a login on the console

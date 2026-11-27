@@ -23,8 +23,8 @@ pub mod u {
     pub const MICROCODE_VERSION: Field = Field { name: "MICROCODE VERSION", first: 99, last: 107 };
     /// `HARDWARE OPTIONS/=<90:92>` (its.15:22).
     pub const HARDWARE_OPTIONS: Field = Field { name: "HARDWARE OPTIONS", first: 90, last: 92 };
-    /// `HARDWARE SERIAL NUMBER/=<93:107>` (its.15:25).
-    pub const HARDWARE_SERIAL_NUMBER: Field = Field { name: "HARDWARE SERIAL NUMBER", first: 93, last: 107 };
+    /// `HARDWARE SERIAL NUM/=<93:107>` (its.15:25).
+    pub const HARDWARE_SERIAL_NUM: Field = Field { name: "HARDWARE SERIAL NUM", first: 93, last: 107 };
     /// `J/=<0:11>` (ks10.47:563).
     pub const J: Field = Field { name: "J", first: 0, last: 11 };
     /// `AD/=<12:17>` (ks10.47:572).
@@ -285,12 +285,12 @@ pub mod u {
     pub const PT_CACHE: Field = Field { name: "PT CACHE", first: 94, last: 94 };
     /// `PT PAGE/=<97:107>` (itspag.98:24).
     pub const PT_PAGE: Field = Field { name: "PT PAGE", first: 97, last: 107 };
-    /// `NONEXISTENT IO REGISTER/=<91:91>` (itspag.98:32).
-    pub const NONEXISTENT_IO_REGISTER: Field = Field { name: "NONEXISTENT IO REGISTER", first: 91, last: 91 };
+    /// `NONEXISTENT IO REGI/=<91:91>` (itspag.98:32).
+    pub const NONEXISTENT_IO_REGI: Field = Field { name: "NONEXISTENT IO REGI", first: 91, last: 91 };
     /// `NONEXISTENT MEMORY/=<92:92>` (itspag.98:34).
     pub const NONEXISTENT_MEMORY: Field = Field { name: "NONEXISTENT MEMORY", first: 92, last: 92 };
-    /// `UNCORRECTABLE MEMORY ERROR/=<93:93>` (itspag.98:36).
-    pub const UNCORRECTABLE_MEMORY_ERROR: Field = Field { name: "UNCORRECTABLE MEMORY ERROR", first: 93, last: 93 };
+    /// `UNCORRECTABLE MEMOR/=<93:93>` (itspag.98:36).
+    pub const UNCORRECTABLE_MEMOR: Field = Field { name: "UNCORRECTABLE MEMOR", first: 93, last: 93 };
     /// `PAGE ACCESS/=<96:97>` (itspag.98:43).
     pub const PAGE_ACCESS: Field = Field { name: "PAGE ACCESS", first: 96, last: 97 };
     /// `ADDRESS HIGH/=<104:107>` (itspag.98:47).
@@ -299,7 +299,7 @@ pub mod u {
     pub const ALL: &[Field] = &[
         MICROCODE_VERSION,
         HARDWARE_OPTIONS,
-        HARDWARE_SERIAL_NUMBER,
+        HARDWARE_SERIAL_NUM,
         J,
         AD,
         LSRC,
@@ -430,9 +430,9 @@ pub mod u {
         PT_WRITE,
         PT_CACHE,
         PT_PAGE,
-        NONEXISTENT_IO_REGISTER,
+        NONEXISTENT_IO_REGI,
         NONEXISTENT_MEMORY,
-        UNCORRECTABLE_MEMORY_ERROR,
+        UNCORRECTABLE_MEMOR,
         PAGE_ACCESS,
         ADDRESS_HIGH,
     ];

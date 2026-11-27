@@ -8,13 +8,15 @@
 //! - [`devregs`]: the device registers, generated from spec/devices.toml.
 //! - [`console`]: the 8080 console words.
 //! - [`boot`]: the 8080 boot commands.
-//! - [`sav`]: the SAV loader for stand-alone programs.
+//! - [`sav`]: the SAV loader for stand-alone programs; [`diag`]: the run
+//!   file of the DEC diagnostics.
 
 pub mod boot;
 pub mod ch11;
 pub mod console;
 #[rustfmt::skip]
 pub mod devregs;
+pub mod diag;
 pub mod dz11;
 pub mod imp;
 pub mod rh11;
@@ -30,3 +32,11 @@ pub const MEMORY_WORDS: usize = 512 * 1024;
 /// the default of docs/emulator.md ("Time"). The KS10 instruction times
 /// are not known yet (docs/unknowns.md).
 pub const INSTRUCTIONS_PER_MS: u64 = 1000;
+
+/// The MSEC counter (DPMC E181, E189, E180) at instruction `now`, for a
+/// tick at `last_tick`: it counts 2^12 units in each millisecond of the
+/// time base, and stays below 2^12 until the next tick.
+pub fn msec_count(now: u64, last_tick: u64) -> u64 {
+    let k = now.saturating_sub(last_tick).min(INSTRUCTIONS_PER_MS - 1);
+    (k << 12) / INSTRUCTIONS_PER_MS
+}

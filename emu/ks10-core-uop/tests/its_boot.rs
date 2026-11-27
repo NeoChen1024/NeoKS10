@@ -4,7 +4,7 @@
 //! loader from a copy of the image and starts it at 1000. The test answers
 //! the DSKDMP prompt as `tests/its-boot/boot.script` does, and passes when
 //! ITS prints "IN OPERATION" on the CTY. `ks10-core-soft` boots ITS in
-//! its own test (`emu/ks10-core-soft/tests/its.rs`); the two processors do
+//! its own test (`emu/ks10-core-soft/tests/idle.rs`); the two processors do
 //! not run in step (docs/microcode-model.md, "Time and the boot of ITS").
 //!
 //! The test needs `KS10_ITS_DISK` (`make microcode` sets it).

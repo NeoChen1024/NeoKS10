@@ -683,18 +683,7 @@ impl Machine {
 
     /// The 8080 console works between two instructions.
     fn console(&mut self) {
-        let mem = &self.mem;
-        let word = |a: u32| mem[a as usize];
-        let Some(e) = self.console.poll(self.count, word) else {
-            return;
-        };
-        if let Some(a) = e.clear {
-            self.mem[a as usize] = W36::ZERO;
-        }
-        if let Some(w) = e.input {
-            self.mem[ks10_machine::console::CTYIN as usize] = w;
-        }
-        if e.interrupt {
+        if self.console.run(self.count, &mut self.mem) {
             self.apr.flags |= flag::FROM_8080;
         }
     }

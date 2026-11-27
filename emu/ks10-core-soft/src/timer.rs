@@ -45,10 +45,7 @@ impl Timer {
     /// and 35 of input 2 are 0 **[manual]** (M8621-0-DPM2 rev B, E165,
     /// E188; the counter is DPMC E181, E189, E180).
     fn hardware(&self, now: u64) -> u64 {
-        let k = now
-            .saturating_sub(self.last_tick)
-            .min(INSTRUCTIONS_PER_MS - 1);
-        (k * UNITS_PER_MS / INSTRUCTIONS_PER_MS) & !3
+        ks10_machine::msec_count(now, self.last_tick) & !3
     }
 
     /// RDTIME: the double word time base.

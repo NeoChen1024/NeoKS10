@@ -85,9 +85,25 @@ impl Console {
         t
     }
 
+    /// The work of the 8080 at the instruction count `now`, on the memory
+    /// of the processor: [`Console::poll`] and its writes. True if the
+    /// 8080 interrupts the KS (APR flag "8080 interrupting the KS").
+    pub fn run(&mut self, now: u64, mem: &mut [W36]) -> bool {
+        let Some(e) = self.poll(now, |a| mem[a as usize]) else {
+            return false;
+        };
+        if let Some(a) = e.clear {
+            mem[a as usize] = W36::ZERO;
+        }
+        if let Some(w) = e.input {
+            mem[CTYIN as usize] = w;
+        }
+        e.interrupt
+    }
+
     /// The work of the 8080 at instruction `now`. `word` reads a
     /// communication word.
-    pub fn poll(&mut self, now: u64, word: impl Fn(u32) -> W36) -> Option<Effect> {
+    fn poll(&mut self, now: u64, word: impl Fn(u32) -> W36) -> Option<Effect> {
         if self.service_at.is_some_and(|t| now >= t) {
             self.service_at = None;
             return Some(self.serve(&word));

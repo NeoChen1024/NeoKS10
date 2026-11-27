@@ -18,33 +18,23 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use common::{FILLS, label, machine, symbol};
 use ks10_core_uop::alu;
 use ks10_core_uop::machine::Machine;
 use ks10_machine::boot::Processor;
 use ks10_machine::console::Script;
-use ks10_machine::sav;
+use ks10_machine::diag::{How, dir, how, load, run_file};
+
+// DSKEB tells cache hits from misses by time: RDTIME before and after a
+// page of JFCLs (DSKEBM.MAC, PHYCHK, CACCHK). The time base of the model
+// counts instructions.
+const DSKEB: &str = "cache hits by time, and the time base of the model counts instructions";
 
 /// The most microcycles without an instruction: no instruction of the
 /// diagnostics takes so long, and the halt loop counts none.
 const STALL_CYCLES: u64 = 10_000_000;
-
-fn dir() -> Option<PathBuf> {
-    std::env::var_os("KS10_DIAG_DIR").map(PathBuf::from)
-}
-
-fn load(m: &mut Machine, d: &Path, name: &str) {
-    let bytes =
-        std::fs::read(d.join(format!("diagnostics..{name}.sav"))).expect("read the .SAV file");
-    let s = sav::parse(&sav::words(&bytes)).expect("a SAV file");
-    for (addr, ws) in &s.blocks {
-        for (k, w) in ws.iter().enumerate() {
-            m.memory[addr.get() as usize + k] = *w;
-        }
-    }
-}
 
 /// Why a run ended.
 #[derive(Debug, PartialEq)]
@@ -103,52 +93,6 @@ fn started(d: &Path, programs: &[&str]) -> Machine {
     }
     m.start_at(0o30000);
     m
-}
-
-/// How a program of SMCPU.CMD runs (`emu/ks10-core-soft/tests/diag.rs`,
-/// `how`, for the reasons of the switches and of the programs not run).
-enum How {
-    Alone,
-    Subsm(&'static str),
-    /// DSKCG to the start of test 9, with the UBR fixture of SUBSM.
-    Dskcg,
-    Skip(&'static str),
-}
-
-fn how(name: &str) -> Option<How> {
-    Some(match name {
-        "DSKAA" | "DSKAB" | "DSKAC" | "DSKAD" | "DSKAE" | "DSKAF" | "DSKAG" | "DSKAH" => How::Alone,
-        "DSKAI" | "DSKAJ" | "DSKAK" | "DSKAL" | "DSKAM" | "DSKCA" | "DSKCB" | "DSKCC" | "DSKCD"
-        | "DSKCE" | "DSKCF" => How::Subsm("000100"),
-        "DSKBA" => How::Subsm("000110"),
-        "DSKCG" => How::Dskcg,
-        "DSKEA" => How::Skip("the paging of the DEC microcode"),
-        // DSKEB tells cache hits from misses by time: RDTIME before and
-        // after a page of JFCLs (DSKEBM.MAC, PHYCHK, CACCHK). The time
-        // base of the model counts instructions.
-        "DSKEB" => {
-            How::Skip("cache hits by time, and the time base of the model counts instructions")
-        }
-        "DSKEC" => How::Skip("the KL paging of the DEC microcode"),
-        _ => return None,
-    })
-}
-
-fn run_file(d: &Path) -> Vec<(String, String, u64)> {
-    let text = std::fs::read(d.join("diagnostics..smcpu.cmd")).expect("read SMCPU.CMD");
-    let text = String::from_utf8_lossy(&text);
-    let mut list = Vec::new();
-    for line in text.lines() {
-        let line = line.trim_matches(|c: char| c == '\r' || c == '\0' || c == '\x1a');
-        if line.is_empty() || line.starts_with(';') {
-            continue;
-        }
-        let f: Vec<&str> = line.split_whitespace().collect();
-        assert_eq!(f.len(), 4, "SMCPU.CMD line {line:?}");
-        let iterations = u64::from_str_radix(f[3], 8).expect("octal iterations");
-        list.push((f[0].to_string(), f[2].to_string(), iterations.max(1)));
-    }
-    list
 }
 
 fn one(d: &Path, name: &str, how: &How, rh: &str, iterations: u64) -> Result<String, String> {
@@ -245,8 +189,8 @@ fn smcpu_run_file() {
     let jobs: Vec<(String, How, String, u64)> = run_file(&d)
         .into_iter()
         .map(|(n, rh, i)| {
-            let h =
-                how(&n).unwrap_or_else(|| panic!("{n}: a program of SMCPU.CMD without a decision"));
+            let h = how(&n, DSKEB)
+                .unwrap_or_else(|| panic!("{n}: a program of SMCPU.CMD without a decision"));
             (n, h, rh, i)
         })
         .collect();

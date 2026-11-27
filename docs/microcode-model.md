@@ -93,8 +93,8 @@ RP06.
 `.RAMFILE` in `ks10` gives the layout of an entry **[microcode]**: 108
 bits, the listed fields from left to right, two parity bits and two pads
 (MICRO, `$RAMFL` and `RAMFL4`). The generator `spec/gen_microcode.py`
-reads this layout and the field definitions into
-`emu/ks10-core-uop/src/fields.rs`.
+takes this layout and the field definitions from the assembly of
+`spec/micro.py` and writes them into `emu/ks10-core-uop/src/fields.rs`.
 
 **Parity.** The parity bit of `ODD PARITY<ranges>` is the XOR of the given
 bits of the RAM file entry **[microcode]** (MICRO, `PNTB91`). With the
@@ -1252,15 +1252,15 @@ PENDING: it is neither a pass nor a failure.
 
 ## Field tables
 
-`spec/gen_microcode.py` reads from the ITS microcode sources:
+`spec/gen_microcode.py` takes from the assembly of `spec/micro.py`:
 
 - the fields of the microword (`.UCODE` mode), bit 0 at the left end of
   108 bits (`.WIDTH/108`);
 - the fields of the dispatch ROM word (`.DCODE` mode);
 - the layout of the RAM file (`.RAMFILE`).
 
-`.RAMFILE` is on line 467 of `ks10.47`, before the field definitions.
-MICRO handles it in its second pass, when all fields are known (MICRO,
-`$RAMFL`). Thus the generator resolves the names with the fields of the
-whole microword. The dispatch ROM has its own `J` (bits 12 to 23); the
+A field name has the first 19 characters of the source name, as in MICRO
+(`TOK3`). `.RAMFILE` is on line 467 of `ks10.47`, before the field
+definitions. MICRO handles it in its second pass, when all fields are
+known (MICRO, `$RAMFL`). The dispatch ROM has its own `J` (bits 12 to 23); the
 microword `J` is bits 0 to 11.

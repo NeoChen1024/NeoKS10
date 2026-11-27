@@ -203,6 +203,7 @@ class Node:
         self.tm2 = 0  # DEFTM2
         self.text = None  # SYMMAC: the text of a macro
         self.line = None  # the line of the definition (CREF)
+        self.source = None  # "file:line" of a field definition
 
 
 class Frame:
@@ -238,6 +239,7 @@ class Assembler:
         self.ramfile_fields = []  # (source bit, width, dest bit)
         self.ramfile_parity = []  # (dest bit, first, count, complement)
         self.ramfile_words = 0
+        self.ramfile_source = None  # "file:line" of .RAMFILE
         self.supsym = None
 
     # ---- errors ----------------------------------------------------
@@ -258,6 +260,11 @@ class Assembler:
         self.reread = False
         self.lastc = None
         self.endfil = False
+
+    def source_line(self):
+        """'file:line' of the input file at the current character."""
+        name, text = self.files[self.file_index]
+        return f"{name}:{text.count(LF, 0, self.file_pos) + 1}"
 
     def getchr(self):
         if self.reread:
@@ -406,6 +413,7 @@ class Assembler:
         f = Node(name, ram)
         if not name.endswith("%"):
             f.line = self.line
+            f.source = self.source_line()
         if prev is None:
             f.next_field, self.fields = self.fields, f
         else:
@@ -691,6 +699,7 @@ class Assembler:
         """$RAMFL: the layout of the RAM file."""
         if self.ram != UCODE:
             self.error(".RAMFILE ONLY WORKS FOR UCODE, FOR NOW")
+        source = self.source_line()
         fields, parity, bitno = [], [], 0
         while True:
             t = self.token(decimal=True)
@@ -742,6 +751,7 @@ class Assembler:
             self.ramfile_fields = fields
             self.ramfile_parity = parity
             self.ramfile_words = bitno // 36
+            self.ramfile_source = source
         self.swt100()
 
     def ramfile_field(self, f, fields, bitno):

@@ -74,7 +74,7 @@ fn run(m: &mut Machine, script: &mut Script, done: &str, limit: u64) -> String {
     text(m)
 }
 
-/// The ITS start and the login (tests/its.rs) with DUMP.
+/// The ITS start and the login (tests/idle.rs) with DUMP.
 fn login_and_dump(script: &mut Script, dskdmp_from_tape: bool) {
     if dskdmp_from_tape {
         script.answer("MTBOOT", "\x1bg");

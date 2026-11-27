@@ -160,7 +160,7 @@ its-boot: its-boot-soft its-boot-neoks10
 its-boot-soft:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
-	    --test its --test idle --test tape
+	    --test idle --test tape
 
 its-boot-neoks10:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
