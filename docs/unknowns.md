@@ -102,6 +102,11 @@ schematics (MP00540):
   marks an entry that nothing wrote. The ITS boot loader sweeps both
   tables with `WRUBR` at 1004, its fifth instruction **[measured]**
   2026-11-27 (`emu/ks10-core-uop/tests/its_boot.rs`).
+- The program flags after DMUL. Its subroutine `QMULT` ends with
+  `[ARX]+[ARX], AD FLAGS` **[microcode]** (simple), so DMUL can set
+  Overflow, Carry 0 and Carry 1 from that sum. `emu/ks10-core-soft` sets
+  only Overflow, for the square of -2^70. The model stops in DMUL
+  (DBus input 0), so no run shows the flags yet.
 - The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
   both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
   clocks the data path at each repeat, as the manual describes

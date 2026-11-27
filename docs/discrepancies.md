@@ -301,8 +301,9 @@ the control RAM.
   differ. ASH 1,2 with AC 1 = 200000,,000001 gives AC 1 = 4,
   OV 1 and TRAP 1 0: the first step overflows, the second does not.
   Random left shifts with ASH and ASHC agree with the rule. The model
-  does not run the floating point instructions and DMUL yet, so the rule
-  for them has only the reading of the microcode.
+  does not run the floating point instructions, the byte instructions
+  and DMUL yet, so the rule for them has only the reading of the
+  microcode.
 - **[emulator]** KS10FPGA 5090e7a1, `pcflags.v`: at each PC flags word,
   Trap 1 is 0 unless the word sets it. At ASH TEST, both OV and TRAP 1
   take the overflow of the step, with no hold. Its OV does not agree with
@@ -351,8 +352,9 @@ before the last step, and compares the rest
 - **[emulator]** KS10FPGA 5090e7a1, `alu.v`: only the arithmetic
   functions give the carry out, so the complement sets no carry flag.
   sims 9556eca0 (`kx10_cpu.c`, DMOVN) and KLH10 6d733f2 (`inmove.c`,
-  `i_dmovn`): before the change of 2026-11-27, `emu/ks10-core-soft` set
-  no flag here, and the differential run found no difference.
+  `i_dmovn`) set no flag here **[measured]** 2026-11-27: without the
+  mask below, the differential run gives 11 differences with each
+  emulator, all DMOVN and DMOVNM.
 - The DEC diagnostics do not test the case. DSKCC tests the flags of
   DMOVN and DMOVNM with the low words 0 and 400000,,0 (`DMVNF`,
   `DMVNMF`): the magnitude is 0, so the high word is negated.
