@@ -7,6 +7,7 @@
 use pdp10::instructions::{self as ins, Class};
 use pdp10::{Half, W36};
 
+use crate::apr::{Apr, Pi};
 use crate::flags::Flags;
 use crate::ops;
 
@@ -34,6 +35,8 @@ pub struct Machine {
     pub ac: [W36; 16],
     pub pc: Half,
     pub flags: Flags,
+    pub apr: Apr,
+    pub pi: Pi,
     /// Completed instructions (the virtual time, docs/emulator.md).
     pub count: u64,
 }
@@ -91,6 +94,8 @@ impl Machine {
             ac: [W36::ZERO; 16],
             pc: Half::ZERO,
             flags: Flags::default(),
+            apr: Apr::default(),
+            pi: Pi::default(),
             count: 0,
         }
     }

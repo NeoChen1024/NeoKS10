@@ -2,7 +2,9 @@
 //! t10backup extracts them), start at an address, and report why the
 //! processor stopped.
 //!
-//!   cargo run --example diag -- [--start OCTAL] [--limit N] FILE.SAV...
+//!   cargo run --example diag -- [--start OCTAL] [--limit N] [--trace N] FILE.SAV...
+//!
+//! --trace N prints the PC and the instruction of the last N instructions.
 
 use ks10::sav::{self, Packing};
 use ks10::{Machine, Stop};
@@ -12,11 +14,13 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mut start = None;
     let mut limit = 10_000_000u64;
+    let mut trace = 0usize;
     let mut files = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--start" => start = args.next().and_then(|s| Half::parse_radix(&s, 8)),
             "--limit" => limit = args.next().and_then(|s| s.parse().ok()).unwrap_or(limit),
+            "--trace" => trace = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             _ => files.push(a),
         }
     }
@@ -50,7 +54,30 @@ fn main() {
         last_start = s.start;
     }
     m.pc = start.unwrap_or(last_start);
-    let stop = m.run(limit);
+    let mut last = std::collections::VecDeque::new();
+    let stop = if trace == 0 {
+        m.run(limit)
+    } else {
+        loop {
+            if m.count >= limit {
+                break Stop::Limit;
+            }
+            let pc = m.pc;
+            last.push_back((
+                pc,
+                m.mem.get(pc.get() as usize).copied().unwrap_or(W36::ZERO),
+            ));
+            if last.len() > trace {
+                last.pop_front();
+            }
+            if let Err(s) = m.step() {
+                break s;
+            }
+        }
+    };
+    for (pc, w) in &last {
+        println!("  trace {pc}: {}", w.halves_text());
+    }
     let pascnt = m.mem[0o30047];
     println!("stop: {stop:?} after {} instructions", m.count);
     println!(

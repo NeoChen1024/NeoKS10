@@ -10,6 +10,7 @@ use pdp10::{Half, W36};
 
 use crate::flags::Flags;
 use crate::machine::{Fault, Inst, Machine, Next};
+use crate::{apr, shift};
 
 type R = Result<Next, Fault>;
 
@@ -39,6 +40,9 @@ fn cond(c: u16, a: W36, b: W36) -> bool {
 pub fn execute(m: &mut Machine, i: Inst, e: Half, last: W36) -> R {
     match i.op {
         0o200..=0o217 => moves(m, i, e),
+        0o240..=0o247 => shift::execute(m, i, e),
+        0o251 => shift::blt(m, i, e),
+        0o700 => apr::op700(m, i, e),
         0o250 => {
             // EXCH (PRM 2.1)
             let x = m.read(e)?;
