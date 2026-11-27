@@ -1,6 +1,11 @@
-//! Boot ITS from a disk image with the 8080 `BT` command, and run.
+//! Boot ITS from a disk image with the 8080 `BT` command, or from a tape
+//! with `MB`, and run.
 //!
-//!   cargo run --release --example its -- [--limit N] [--answer P=T]... DISK.dsk
+//!   cargo run --release --example its -- [--limit N] [--answer P=T]...
+//!       [--tape N=TAPE]... [--mt N] [DISK.dsk]
+//!
+//! --tape mounts a tape image on transport N (read only if the file is
+//! read only). --mt N boots from transport N instead of the disk.
 //!
 //! The CTY output goes to stdout as it comes. --answer types TEXT after
 //! PROMPT appears (`console::Script`); "\r" is a carriage return and
@@ -43,6 +48,8 @@ fn main() {
     let mut script = Script::default();
     let mut disk = None;
     let mut trace = 0usize;
+    let mut tapes = Vec::new();
+    let mut mt = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--limit" => limit = args.next().and_then(|s| s.parse().ok()).unwrap_or(limit),
@@ -53,27 +60,51 @@ fn main() {
                 let un = |x: &str| unescape(x);
                 script.answer(&un(p), &un(t));
             }
+            "--tape" => {
+                let a = args.next().unwrap_or_default();
+                let (n, f) = a.split_once('=').unwrap_or(("0", &a));
+                tapes.push((n.parse::<usize>().unwrap_or(0), f.to_string()));
+            }
+            "--mt" => mt = args.next().and_then(|s| s.parse::<u16>().ok()),
             _ => disk = Some(a),
         }
     }
-    let Some(disk) = disk else {
-        eprintln!("usage: its [--limit N] [--answer P=T]... DISK.dsk");
+    if disk.is_none() && mt.is_none() {
+        eprintln!(
+            "usage: its [--limit N] [--answer P=T]... [--tape N=TAPE]... [--mt N] [DISK.dsk]"
+        );
         std::process::exit(2);
-    };
-    let f = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&disk)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("{disk}: {e}");
-            std::process::exit(2);
+    }
+    let open = |path: &str| {
+        let rw = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path);
+        match rw {
+            Ok(f) => (f, false),
+            Err(_) => match std::fs::File::open(path) {
+                Ok(f) => (f, true),
+                Err(e) => {
+                    eprintln!("{path}: {e}");
+                    std::process::exit(2);
+                }
+            },
         }
     };
     let mut m = Machine::new();
-    m.io.disk.attach(0, f, false);
-    if let Err(e) = boot::boot_disk(&mut m, 0) {
+    if let Some(disk) = &disk {
+        let (f, ro) = open(disk);
+        m.io.disk.attach(0, f, ro);
+    }
+    for (n, path) in &tapes {
+        let (f, ro) = open(path);
+        m.io.tape.attach(*n, f, ro);
+    }
+    let booted = match mt {
+        Some(n) => boot::boot_tape(&mut m, n),
+        None => boot::boot_disk(&mut m, 0),
+    };
+    if let Err(e) = booted {
         eprintln!("boot: {e:?}");
         std::process::exit(1);
     }

@@ -64,3 +64,31 @@ The project uses the microcode: AC bits 9-35 are 0 at the end
   KS): 0 for a difference of 65 or more.
 
 The project uses the microcode (`emu/ks10/src/float.rs`, `fad`).
+
+## TM03: a space that stops at a tape mark
+
+- **[emulator]** KLH10 6d733f2, `dvtm03.c`, `tm_cmddon`: after Space
+  Forward or Space Reverse, FC has the count; there is no error bit.
+- **[emulator]** sims 9556eca0, `kx10_tu.c`, `FNC_SPACEF`: if the space
+  stops at a tape mark before FC counts to 0, the formatter sets the frame
+  count error (FCE).
+- **[its]** `src/kshack/cmds.m80`, `MBINT`: "we expect there to be a frame
+  count error from the space forward". `src/system/nmtape.30`, `MGSPCF`,
+  accepts FCE after a space.
+
+The project uses the 8080 source: a space that stops at a tape mark
+before the count ends sets FCE (`emu/ks10/src/tm03.rs`).
+
+## TM03: a read of a tape mark
+
+- **[emulator]** KLH10 6d733f2, `dvtm03.c`, `tm_flsbuf`: the read ends
+  with FC 0 and TM; no error bit.
+- **[emulator]** sims 9556eca0, `kx10_tu.c`, `FNC_READ`: the read sets
+  FCE and the controller transfer error.
+- **[its]** `src/system/nmtape.30`, `MGRD1A`: "the TM03, which doesn't
+  give a FC error on READ". ITS checks TM on the normal path and on the
+  error path (`MGRERR`, `MGRER2`).
+
+The ITS source does not decide the case. The project uses KLH10, which
+agrees with the ITS comment: a read of a tape mark gives TM without an
+error.

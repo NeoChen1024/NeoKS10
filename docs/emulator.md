@@ -154,6 +154,10 @@ The boot commands of the 8080 **[its]** (`src/kshack/cmds.m80`):
 - `MT` (`MTCMD`): read the first file of the tape (the microcode). Skip to
   the second file, load it to 1000, write words 36 to 40, and start at
   1000.
+- `MB` (`MBCMD`, `MBINT`): the same without the microcode. Rewind, space
+  forward over the first file, read one record of the second file to
+  1000. The space stops at the tape mark with a frame count error; `MBINT`
+  expects it and clears it (`MTARST`).
 
 The images of step 0 agree with this **[measured]** (2026-11-26, a read of
 the files with a Python script):
@@ -176,18 +180,39 @@ the microcode file.
 - RH11 and RP06: the registers, the commands of `rh11.defs48`, attention
   and the interrupt with IE, DMA of 18-bit words. A command ends after a
   fixed delay in virtual time; a data transfer moves its data at that end.
+- RH11 and TM03 with up to 8 TU45 transports: the registers of
+  `tm03s.defs5`, the commands that `nmtape.30` and the 8080 use, rewind
+  with PIP, space with the frame count, read and write in the core dump
+  and industry compatible formats. Read reverse moves the words of the
+  record in reverse order.
 - DZ11: the silo, the transmit scanner, the line parameters, both
   interrupts. CH11: transmit, receive, loop back. IMP: the registers
   only, with "IMP not ready". The host side of the DZ11 lines, the
   Chaosnet and the IMP comes with the host layer.
 - The 8080 `BT` command runs the channel command list `DSKSEQ`
-  (`dr.m80`) on the emulated RH11 (`emu/ks10/src/boot.rs`).
+  (`dr.m80`) on the emulated RH11. The `MB` command runs `MTASEQ` and
+  `QTXFR` on the emulated TM03 (`emu/ks10/src/boot.rs`). `MT` gives the
+  same result in the emulator, because the emulator does not load
+  microcode.
 
 **[measured]** 2026-11-27 (`cargo test --release -p ks10 --test its` with
 `KS10_ITS_DISK` naming the step 0 `rp0.dsk`): `BT`, then `its` and ESC G
 at the DSKDMP prompt, start ITS. The Salvager runs, ITS prints `DB ITS
 1652 IN OPERATION`, the system job logs in, and a login on the console
 lists `SYS;`. This takes about 140 million steps.
+
+**[measured]** 2026-11-27 (`cargo test --release -p ks10 --test tape`
+with the same `KS10_ITS_DISK`; the tapes come from the same directory):
+
+- `MB` on transport 2 with `dskdmp.tape` prints `ITS MTBOOT.176`. ESC G
+  starts DSKDMP, and DSKDMP starts ITS from the disk.
+- DUMP `LIST` under ITS reads all 16 files of `minsys.tape` to `E-O-T`.
+  The SIMH build wrote this tape.
+- DUMP writes a copy of `SYS; TS PDSET` to an empty tape. `ICHECK` finds
+  no difference to the disk, and `LIST` shows the file.
+- A Python script compared the data words of that file with the file
+  `SYSBIN; PDSET BIN` on `output.tape` that SIMH wrote at the end of the
+  build. All 1439 data words agree; only the file headers differ.
 
 ### Image formats in step 0
 
@@ -486,7 +511,7 @@ Differences from the microcode:
    block. Done in `emu/ks10`, except the Unibus interrupts, which come
    with the adapters.
 4. The adapters, the RH11 with the TM03: boot from tape (salvager,
-   DSKDMP). The adapters are done; the TM03 is not.
+   DSKDMP). Done.
 5. The RH11 with the RP06: boot ITS from `rp0.dsk`. Done.
 6. The DZ11, the diagnostics, the ITS build.
 7. Step 6 of README.md: the CH11 and the IMP.

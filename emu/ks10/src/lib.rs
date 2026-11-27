@@ -43,6 +43,7 @@ pub mod rh11;
 pub mod sav;
 pub mod shift;
 pub mod timer;
+pub mod tm03;
 pub mod unibus;
 
 pub use machine::{Machine, Stop};

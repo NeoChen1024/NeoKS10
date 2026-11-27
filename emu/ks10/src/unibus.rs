@@ -24,6 +24,7 @@ use crate::devregs::{self, Instance, uba};
 use crate::dz11::Dz11;
 use crate::imp::Imp;
 use crate::rh11::Rh11;
+use crate::tm03::Tm03;
 
 /// One Unibus adapter.
 #[derive(Clone, Debug)]
@@ -87,12 +88,17 @@ pub enum Event {
     Dz,
     /// The CH11 transmission ends.
     Chaos,
+    /// The tape formatter finishes the command with this number.
+    Tape(u32),
+    /// Tape transport `n` finishes the rewind with this number.
+    Rewind(u8, u32),
 }
 
 /// The I/O bus: adapters 1 and 3 (index 0 and 2 are not present).
 pub struct Io {
     pub uba: [Uba; 4],
     pub disk: Rh11,
+    pub tape: Tm03,
     pub dz: Dz11,
     pub chaos: Ch11,
     pub imp: Imp,
@@ -108,6 +114,7 @@ impl Default for Io {
         Io {
             uba: Default::default(),
             disk: Rh11::new(devregs::DISK),
+            tape: Tm03::new(devregs::TAPE),
             dz: Dz11::new(devregs::DZ0),
             // ITS config.202, configuration DB: MYCHAD==177002.
             chaos: Ch11::new(devregs::CHAOS, 0o177002),
@@ -128,10 +135,12 @@ pub enum Reply {
 impl Io {
     /// The interrupt requests of the devices: adapter, bus request
     /// level, vector, and which request (for the acknowledge).
-    fn sources(&self) -> [(bool, Instance, u32, u8); 7] {
+    fn sources(&self) -> [(bool, Instance, u32, u8); 8] {
         let (d, z, c, i) = (&self.disk, &self.dz, &self.chaos, &self.imp);
+        let t = &self.tape;
         [
             (d.irq, d.inst, d.inst.vector, 0),
+            (t.irq, t.inst, t.inst.vector, 7),
             (i.rx_irq, i.inst, i.inst.vector, 5),
             (i.tx_irq, i.inst, i.inst.vector + 4, 6),
             (z.rx_irq, z.inst, z.inst.vector, 1),
@@ -176,6 +185,7 @@ impl Io {
         let (a, _, vec, which) = best?;
         match which {
             0 => self.disk.irq = false,
+            7 => self.tape.irq = false,
             1 => self.dz.rx_irq = false,
             2 => self.dz.tx_irq = false,
             5 => self.imp.rx_irq = false,
@@ -213,6 +223,9 @@ impl Io {
         }
         if let Some(off) = self.disk.offset(a, ub) {
             return Reply::Value(u64::from(self.disk.read(off)));
+        }
+        if let Some(off) = self.tape.offset(a, ub) {
+            return Reply::Value(u64::from(self.tape.read(off)));
         }
         if let Some(off) = self.dz.offset(a, ub) {
             return Reply::Value(u64::from(self.dz.read(off)));
@@ -266,6 +279,13 @@ impl Io {
             disk.write(off, value as u16, mask, &uba[a as usize], mem, now, events);
             return true;
         }
+        if let Some(off) = self.tape.offset(a, ub) {
+            let Io {
+                uba, tape, events, ..
+            } = self;
+            tape.write(off, value as u16, mask, &uba[a as usize], mem, now, events);
+            return true;
+        }
         if let Some(off) = self.dz.offset(a, ub) {
             self.dz
                 .write(off, value as u16, mask, now, &mut self.events);
@@ -312,6 +332,10 @@ impl Io {
                 self.disk.reset();
                 self.events.retain(|e| !matches!(e.1, Event::Disk(..)));
             }
+            if self.tape.inst.adapter == a {
+                self.tape.reset();
+                self.events.retain(|e| !matches!(e.1, Event::Tape(_)));
+            }
             if self.dz.inst.adapter == a {
                 self.dz.reset();
             }
@@ -341,6 +365,18 @@ impl Io {
                 }
                 Event::Dz => self.dz.tick(now, &mut self.events),
                 Event::Chaos => self.chaos.done(),
+                Event::Tape(serial) => {
+                    let Io { uba, tape, .. } = self;
+                    let a = tape.inst.adapter as usize;
+                    tape.finish(serial, &uba[a], mem);
+                }
+                Event::Rewind(n, serial) => {
+                    let Io {
+                        uba, tape, events, ..
+                    } = self;
+                    let a = tape.inst.adapter as usize;
+                    tape.rewound(n, serial, &uba[a], mem, now, events);
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 //! The boot commands of the 8080 console, as a model of what they do
 //! **[its]** (src/kshack/cmds.m80: BTCMD, LBINT, FILEINIT, CHKHOM, BLKRDR,
-//! PASSSRC; dr.m80: DSKSEQ).
+//! MBCMD, MBINT, PASSSRC; dr.m80: DSKSEQ, MTASEQ, QTXFR, MTARST;
+//! hcore.m80: the defaults DEN.SLV and MTBASE).
 //!
 //! `BT` (disk boot):
 //!
@@ -26,7 +27,7 @@
 
 use pdp10::{Half, W36};
 
-use crate::devregs::{self, rh11 as r, uba};
+use crate::devregs::{self, rh11 as r, tm03 as t, uba};
 use crate::machine::Machine;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +40,10 @@ pub enum BootError {
     NoHomeBlock,
     /// A file pointer is 0.
     NoFile(u32),
+    /// The tape formatter or the transport is not there.
+    NoTape,
+    /// The tape formatter reported an error.
+    Tape { cs1: u16, fs: u16, er: u16 },
 }
 
 /// SIXBIT /HOM/ (cmds.m80, HOMEWD).
@@ -135,6 +140,101 @@ pub fn boot_disk(m: &mut Machine, unit: u16) -> Result<(), BootError> {
     m.mem[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
     m.mem[0o37] = W36::wrap(u64::from(unit));
     m.mem[0o40] = W36::ZERO;
+    m.pc = Half::wrap(0o1000);
+    Ok(())
+}
+
+/// Write a tape RH11 register through the I/O bus.
+fn twr(m: &mut Machine, off: u32, v: u16) {
+    let d = devregs::TAPE;
+    let a = (d.adapter << 18) | (d.base + off);
+    let Machine { io, mem, count, .. } = m;
+    io.write(mem, *count, a, u64::from(v), 0o177777);
+}
+
+fn trd(m: &mut Machine, off: u32) -> u16 {
+    let d = devregs::TAPE;
+    let a = (d.adapter << 18) | (d.base + off);
+    match m.io.read(a, m.count) {
+        crate::unibus::Reply::Value(v) => v as u16,
+        crate::unibus::Reply::NoDevice => 0,
+    }
+}
+
+/// The density and slave word DEN.SLV: 1600 BPI, core dump format
+/// (hcore.m80: 2,0), and the transport.
+fn den_slv(slave: u16) -> u16 {
+    ((t::tc_den::D1600 << t::tc::DEN_LSB) as u16) | (slave & 7)
+}
+
+/// One tape command of QTXFR: Unibus address 4000, word count -2000
+/// (one page of 512 words), frame count 0, the function, then wait for
+/// the formatter. The result has the error registers.
+fn tape_op(m: &mut Machine, f: u64) -> (u16, u16, u16) {
+    twr(m, t::BA, 0o4000);
+    twr(m, t::WC, 0o176000);
+    twr(m, t::FC, 0);
+    twr(m, t::CS1, f as u16);
+    wait(m);
+    (trd(m, t::CS1), trd(m, t::FS), trd(m, t::ER))
+}
+
+/// MTASEQ up to the rewind: map Unibus page 1 to memory page 1, clear the
+/// controller, select formatter 0 and the transport, check that it is
+/// there, rewind.
+fn tape_setup(m: &mut Machine, slave: u16) -> Result<(), BootError> {
+    let d = devregs::TAPE;
+    {
+        let Machine { io, mem, count, .. } = m;
+        let page1 = (d.adapter << 18) | (uba::PAGE + 1);
+        io.write(mem, *count, page1, uba::page::W_VAL | 1, 0o177777);
+    }
+    twr(m, t::CS2, t::cs2::CLR as u16);
+    twr(m, t::CS2, 0);
+    twr(m, t::TC, den_slv(slave));
+    if trd(m, t::FS) & t::fs::DPR as u16 == 0 || trd(m, t::FS) & t::fs::MOL as u16 == 0 {
+        return Err(BootError::NoTape);
+    }
+    wait(m);
+    twr(m, t::FC, 0);
+    twr(m, t::CS1, t::cs1_cmd::REWIND as u16);
+    wait(m);
+    Ok(())
+}
+
+/// MTARST: controller clear, formatter 0, address and frame count.
+fn tape_reset(m: &mut Machine) {
+    twr(m, t::CS2, t::cs2::CLR as u16);
+    twr(m, t::CS2, 0);
+    twr(m, t::BA, 0o4000);
+    twr(m, t::FC, 0);
+}
+
+/// The `MB` command (MBINT): rewind, skip the first file (the microcode;
+/// the frame count error at its tape mark is expected), read the first
+/// record of the second file (the pre-boot) to 1000 to 1777, pass the
+/// controller, the formatter and DEN.SLV in words 36 to 40 (PASSSRC),
+/// and start at 1000. `MT` also loads the microcode from the first file;
+/// this emulator does not need it.
+pub fn boot_tape(m: &mut Machine, slave: u16) -> Result<(), BootError> {
+    m.reset();
+    tape_setup(m, slave)?;
+    let (cs1, fs, er) = tape_op(m, t::cs1_cmd::SPACEF);
+    if er & !(t::er::FCE as u16) != 0 || cs1 & t::cs1::MCPE as u16 != 0 {
+        return Err(BootError::Tape { cs1, fs, er });
+    }
+    if er != 0 {
+        tape_reset(m);
+        twr(m, t::TC, den_slv(slave));
+    }
+    let (cs1, fs, er) = tape_op(m, t::cs1_cmd::READF);
+    if er != 0 || fs & t::fs::ERR as u16 != 0 || cs1 & (t::cs1::TRE | t::cs1::MCPE) as u16 != 0 {
+        return Err(BootError::Tape { cs1, fs, er });
+    }
+    let d = devregs::TAPE;
+    m.mem[0o36] = W36::wrap(u64::from((d.adapter << 18) | d.base));
+    m.mem[0o37] = W36::ZERO;
+    m.mem[0o40] = W36::wrap(u64::from(den_slv(slave)));
     m.pc = Half::wrap(0o1000);
     Ok(())
 }

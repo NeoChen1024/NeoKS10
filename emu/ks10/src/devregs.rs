@@ -527,6 +527,13 @@ pub mod tm03 {
         /// INDUSTRY (%TMFIC).
         pub const INDUSTRY: u64 = 0o3;
     }
+    /// Values of TC.DEN.
+    pub mod tc_den {
+        /// D800 (%TMD08).
+        pub const D800: u64 = 0o3;
+        /// D1600 (%TMD16).
+        pub const D1600: u64 = 0o4;
+    }
 }
 
 /// DZ11 asynchronous multiplexer (8 lines) (dz11.10).

@@ -370,6 +370,14 @@ values = [
   { name = "INDUSTRY", its = "%TMFIC", value = 3 },
 ]
 
+[[device.values]]
+register = "TC"
+field = "DEN"
+values = [
+  { name = "D800", its = "%TMD08", value = 3 },
+  { name = "D1600", its = "%TMD16", value = 4 },
+]
+
 [[device]]
 name = "dz11"
 title = "DZ11 asynchronous multiplexer (8 lines)"

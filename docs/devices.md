@@ -353,6 +353,13 @@ Values of TC.FMT:
 | CORE_DUMP | 0 | %TMFCD |
 | INDUSTRY | 3 | %TMFIC |
 
+Values of TC.DEN:
+
+| Name | Value | ITS name |
+|---|---|---|
+| D800 | 3 | %TMD08 |
+| D1600 | 4 | %TMD16 |
+
 ## dz11: DZ11 asynchronous multiplexer (8 lines)
 
 Source: `dz11.10`.
