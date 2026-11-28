@@ -131,8 +131,14 @@ without documentation stops it with an error, not with a panic. The
 crate cites Intel 98-153B, but it is not a source of this project:
 statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
 
-- The board has the ROM at 0 to 17777 (octal), 1 KiB of RAM at 20000,
-  and two 8251 USARTs at ports 200 to 203. The USART model has the
+- **[manual]** EK-OKS10-TM-002 5.8.1 (p. 5-70 to 5-75): the board has an
+  8080A with an 8224 clock generator and an 8228 bus driver, two 8251
+  USARTs, 1 KiB of RAM (two 2114) and 8 KiB of ROM (four 2716). The
+  crystal is 14.746 MHz, and the 8080A clock is that frequency divided by
+  9: 1.638 MHz, so a state is 610 ns. Table 5-8 gives the ROM chips at 0,
+  4000, 10000 and 14000 (octal), the RAM at 20000 to 21777, and the
+  decode of the register reads and writes.
+- The model has the ROM, the RAM and the two USARTs at ports 200 to 203. The USART model has the
   asynchronous mode, the transmitter and the status (98-153B, p. 5-136 to
   5-142).
 - A write to a port of the KS10 goes into a log. A read of a port or an
@@ -144,7 +150,11 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   from power-up, the program prints `KS10 CSL.V5.2` on the CTY and makes
   the 22 writes that the listing gives, from `PWRUP` to `EMCONT`. It then
   stops at the read of port 301 in `BUSRESP`. With port 300 = 157 and a
-  character time of 0, this is after 450978 states. The
+  character time of 0, this is after 450978 states.
+- **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
+  the 244 opcodes of the 8080, `x80-core` takes the number of states of
+  98-153B p. 4-15, with the condition true and false. The other 12
+  opcodes stop it. The
   ROM checksum of `PWRUP` passes. With one changed byte in chip E73, the
   program prints `?CHK2` first.
 
@@ -153,8 +163,10 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
 **[measured]** 2026-11-28, a read of `KNS10.PNT` with a script: the
 `IN` and `OUT` instructions of version 5.2 use these ports (octal, names
 of `CONDEF.M80`). The model of the board needs a source for each one: the
-CSL drawings of MP00540 or EK-OKS10-TM-002. A port without a source goes
-into [`unknowns.md`](unknowns.md). A read of it stops the model.
+CSL drawings of MP00540 or EK-OKS10-TM-002. EK-OKS10-TM-002 Table 5-9
+gives the control flip-flops of each register write, and Table 5-10 the
+flip-flops of each bus operation. A port without a source goes into
+[`unknowns.md`](unknowns.md). A read of it stops the model.
 
 | Ports | IN | OUT |
 |---|---|---|
