@@ -159,6 +159,9 @@ fails.
   output of each job together. A commit message can name it in place of
   these four rows. `make diag` and `make its-boot` are also `diag-soft`,
   `diag-uop`, `its-boot-soft` and `its-boot-neoks10`.
+- `make mips KS10_ITS_DISK=<rp0.dsk>` runs the fixed workload of
+  `tests/mips/` three times and prints the rate of the soft core in
+  MIPS. Give its output before and after a change that is for speed.
 - `make csl` extracts the DEC 8080 console program (the ROM images of
   version 5.2 and the tape with its listing) from `references/` and runs
   the tests of `emu/ks10-csl`. Without the files, the tests print SKIPPED.

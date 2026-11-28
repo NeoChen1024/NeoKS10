@@ -18,7 +18,7 @@ use engine::{Engine, Input, Kind, Options, Out, Pace, Request};
 const USAGE: &str = "\
 usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
                    [--replay FILE] [--script FILE] [--pace normal|fast|realtime]
-                   [--no-idle]
+                   [--no-idle] [--stats]
        neoks10 console [--control PATH]
        neoks10 ctl [--control PATH] [--json] COMMAND...
        neoks10 help [--markdown]
@@ -72,6 +72,7 @@ struct RunArgs {
     control: Option<PathBuf>,
     no_control: bool,
     script: Option<PathBuf>,
+    stats: bool,
 }
 
 fn run_args(args: &[String]) -> Result<RunArgs, String> {
@@ -84,6 +85,7 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
         control: None,
         no_control: false,
         script: None,
+        stats: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -104,6 +106,7 @@ fn run_args(args: &[String]) -> Result<RunArgs, String> {
                 })
             }
             "--no-idle" => r.idle = false,
+            "--stats" => r.stats = true,
             "--control" => r.control = Some(value("--control")?),
             "--no-control" => r.no_control = true,
             "--script" => r.script = Some(value("--script")?),
@@ -207,9 +210,11 @@ fn run(args: &[String]) -> Result<i32, String> {
     let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = ended.clone();
     let machine = std::thread::spawn(move || {
+        let start = std::time::Instant::now();
         e.serve(&rx);
+        let time = start.elapsed();
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        e.exit
+        (e.exit, e.counts(), time)
     });
     // The control socket. While it listens, `run` ends only with `quit`.
     let socket = if a.no_control {
@@ -263,5 +268,35 @@ fn run(args: &[String]) -> Result<i32, String> {
     if let Some(p) = &socket {
         control::remove(p);
     }
-    joined.map_err(|_| "the machine thread failed".to_string())
+    let (exit, (count, skipped), time) =
+        joined.map_err(|_| "the machine thread failed".to_string())?;
+    if a.stats {
+        eprintln!("neoks10: {}", stats(count, skipped, time));
+    }
+    Ok(exit)
+}
+
+/// The statistics of `run --stats`: the instructions that the processor
+/// did one by one, the time of the machine thread, and their rate.
+fn stats(count: u64, skipped: u64, time: std::time::Duration) -> String {
+    let done = count - skipped;
+    let s = time.as_secs_f64();
+    let mips = if s > 0.0 { done as f64 / s / 1e6 } else { 0.0 };
+    format!(
+        "{done} instructions in {s:.3} s, {mips:.2} MIPS ({skipped} more as idle passes at once)"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_count_only_the_instructions_done_one_by_one() {
+        let t = std::time::Duration::from_millis(1500);
+        assert_eq!(
+            stats(3_000_500, 500, t),
+            "3000000 instructions in 1.500 s, 2.00 MIPS (500 more as idle passes at once)"
+        );
+    }
 }

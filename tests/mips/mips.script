@@ -1,0 +1,17 @@
+# `make mips`: a fixed workload for the speed of the soft core. Boot ITS
+# from the disk as `make its-boot` does, log in, and assemble STINK with
+# MIDAS, as build/build.tcl of the ITS tree does ("STINK linker").
+boot disk
+expect DSKDMP
+send "its\r"
+expect its
+send "\eg"
+expect "IN OPERATION" --steps 400000000
+expect DELRNM --steps 400000000
+send "\x1a"
+expect Fair
+send ":login neoks\r"
+expect "LOGIN  NEOKS"
+send ":midas sys1;ts stink_sysen2;stink\r"
+expect ":KILL" --steps 4000000000
+quit

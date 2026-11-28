@@ -409,7 +409,7 @@ The program `neoks10` has subcommands.
 neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
             [--replay FILE] [--script FILE]
             [--pace normal|fast|realtime]
-            [--no-idle] [--trace FILE] [--cpu soft|pl]
+            [--no-idle] [--stats] [--trace FILE] [--cpu soft|pl]
 neoks10 console [--control PATH]
 neoks10 ctl [--control PATH] [--json] COMMAND...
 neoks10 help [--markdown]
@@ -428,6 +428,10 @@ neoks10 trace diff A B
   is for scripts and coding agents.
 - `--trace` writes one record for each completed instruction, in the
   format that the co-simulation compares.
+- `--stats` writes one line to stderr at the end of the run: the
+  instructions that the processor did one by one, the time of the
+  machine thread, and the rate in MIPS. Idle passes that the run did at
+  once are counted apart and not in the rate.
 - `--script` reads operator commands from a file (see [Scripts](#scripts)).
 - `help --markdown` writes `docs/console.md`; `make gen` runs it.
 - `image convert` exists for KLH10 images; the step 0 images need no
@@ -727,6 +731,12 @@ listener on a LAN needs an explicit address.
   (the record has its SHA-256).
   **[measured]** 2026-11-27: 25 s on the x86-64 host. A script with an
   `expect` that fails makes the target fail.
+- `make mips KS10_ITS_DISK=PATH`: the speed of the soft core. `neoks10`
+  runs `tests/mips/mips.script` three times with `--stats`: the boot of
+  `make its-boot`, a login, and the assembly of STINK with MIDAS. The
+  number of instructions is the same in each run, so the rates compare.
+  **[measured]** 2026-11-28, x86-64 host, commit of `make mips`:
+  23384751 instructions, 18.36 to 18.96 MIPS in three runs.
 - `make its-build`: build ITS from source with the scripts of `its/`.
 
 ### Differential runs

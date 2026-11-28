@@ -1173,6 +1173,12 @@ impl Engine {
     /// The main loop: requests, recorded inputs, instructions. Returns when
     /// a `quit` comes, when all senders are gone, or at the end of a replay
     /// with the processor stopped.
+    /// The instructions that the processor did, and the idle passes of
+    /// them that the engine did at once (`Machine::step_idle`).
+    pub fn counts(&self) -> (u64, u64) {
+        (self.m.count, self.skipped)
+    }
+
     pub fn serve(&mut self, rx: &Receiver<Request>) {
         let mut connected = true;
         while !self.quit {

@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-capi check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop csl verify verify-build verify-jobs oracle oracle-sims oracle-klh10
+.PHONY: gen check check-gen check-py check-rust check-rtl check-capi check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 mips microcode microcode-test diag diag-soft diag-uop csl verify verify-build verify-jobs oracle oracle-sims oracle-klh10
 
 # The targets that need these give them to cargo themselves. Without this,
 # a variable on the command line reaches every recipe, and `cargo test` of
@@ -193,6 +193,25 @@ its-boot-neoks10:
 	cmp $(ITS_BOOT_DIR)/boot.out $(ITS_BOOT_DIR)/replay.out
 	rm -f $(ITS_BOOT_DIR)/rp0.start $(ITS_BOOT_DIR)/rp0.dsk
 	@echo "its-boot: ITS booted, listed SYS;, and the replay gave the same output"
+
+# The speed of the soft core: neoks10 runs the fixed workload of
+# tests/mips/mips.script three times on fresh copies of the disk image of
+# the ITS build, and prints the statistics of each run (`run --stats`).
+# The number of instructions is the same in each run. No nice: the times
+# are the result.
+MIPS_DIR = $(abspath $(BUILD_DIR))/mips
+mips:
+	@test -n "$(KS10_ITS_DISK)" || { echo "mips: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
+	cd emu && $(NICE) $(CARGO) build --locked --release -p neoks10
+	rm -rf $(MIPS_DIR) && mkdir -p $(MIPS_DIR)
+	cp tests/mips/its.toml tests/mips/mips.script $(MIPS_DIR)/
+	for k in 1 2 3; do \
+	    cp "$(KS10_ITS_DISK)" $(MIPS_DIR)/rp0.dsk && \
+	    (cd $(MIPS_DIR) && $(NEOKS10) run its.toml --no-control --script mips.script --stats \
+	        < /dev/null > run$$k.out 2> run$$k.err) && \
+	    grep -q ":KILL" $(MIPS_DIR)/run$$k.out && grep "^neoks10:" $(MIPS_DIR)/run$$k.err || exit 1; \
+	done
+	rm -f $(MIPS_DIR)/rp0.dsk
 
 # The microcode of the ITS build (emu/ks10-core-uop). KS10_ITS_DISK names rp0.dsk
 # of the ITS build; output.tape, the dump tape of the build, is in the same
