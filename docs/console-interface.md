@@ -197,8 +197,16 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   `INSTRUCTIONS_PER_MS` units of device time. The rule adds no new
   estimate. A transfer that never completed would send the program to
   its timeout path, and its error would look like a result.
-- The USART model has the asynchronous mode, the transmitter and the
-  status (98-153B, p. 5-136 to 5-142).
+- The USART model has the asynchronous mode, the transmitter, the
+  receiver and the status (98-153B, p. 5-136 to 5-142). A received
+  character sets RxRDY, and the read of the data clears it. If RxRDY is
+  still set, the new character replaces the old one and sets the overrun
+  flag. The line has no parity or framing errors.
+- A character typed on the CTY arrives one character time after the line
+  is free (`Csl::type_cty`). The 8080 program deposits each character in
+  word 32 and does not wait for the KS10 to take the one before
+  (`hcore.m80`, `TENCHR`). So a burst of input faster than the KS10
+  takes it loses characters, as on the board.
 - Each write to a port of the KS10 goes into a log. A port, an address or
   a function without a model stops the run with its reason. The 8080
   does not decode A14 and A15, and only A13 enables the RAM (CSL2 rev E,
@@ -206,8 +214,8 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   does not use those addresses, and the model stops at them.
 - At an interrupt, the 8228 gives `RST 7`: its INTA pin is on +12 V
   through 1 kOhm (CSL2 rev E, E50, R32; Intel 98-153B p. 5-8). INT is
-  RxRDY of either USART (CSL2 E23). The model of the USART has no
-  receiver yet.
+  RxRDY of either USART (CSL2 E23). The 8080 samples INT before each
+  instruction.
 - Time counts in 8080 states. The switches of port 300 (E173), the
   carrier inputs and the time of one character are parameters of the
   model ([`unknowns.md`](unknowns.md), "CSL board").
@@ -242,6 +250,21 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   program after 49000253 states (29.9 s). The text after `BT AUTO` is
   the text of the high-level console on the same disk. The boot writes
   to the disk, so the test boots from a copy.
+- **[measured]** 2026-11-28, `make csl KS10_ITS_DISK=<rp0.dsk>`, with a
+  character time of 1707 states (9600 baud, a choice of the test): the
+  test types `its` at the prompt, then ESC G. It types each character
+  100 ms after the one before, and only after the KS10 has cleared word
+  32. The 8080 program passes the input to the disk program, and ITS
+  prints `IN OPERATION` after 102513470 states (62.6 s) and 12135313
+  instructions. The text equals the text of the high-level console,
+  except for the place of the bell before `IN OPERATION`. ITS sends ^G
+  without a cursor motion (`ts3tty`, `TYOBEL`) **[its]**, and the place
+  changes with the character time: with 1707 and 3000 states the space
+  comes first, and with 17067 states the bell comes first.
+- **[measured]** 2026-11-28, the same test: if the characters arrive
+  without waits, characters are lost. One character for each 1707
+  states gave the echo `is` for `its`. ESC typed while the disk program
+  loads ITS is lost under the next character.
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
   98-153B p. 4-15, with the condition true and false. The other 12

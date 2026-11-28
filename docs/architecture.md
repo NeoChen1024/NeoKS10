@@ -58,7 +58,7 @@ see the same data without cache maintenance.
 | Device register table | Data file | One definition of each I/O device register |
 | Register map | Data file | One definition of the PS/PL interface. A SystemVerilog package and Rust constants come from it |
 | Emulator | Rust | Console, devices, image formats, and the software processor |
-| Microcode-level model | Rust | `emu/ks10-core-uop`: the data path and the assembled ITS microcode ([`microcode-model.md`](microcode-model.md)). For tests, a model of the CSL board that runs the DEC console program (`emu/ks10-csl`; it runs up to its first access to the KS10 bus) |
+| Microcode-level model | Rust | `emu/ks10-core-uop`: the data path and the assembled ITS microcode ([`microcode-model.md`](microcode-model.md)). For tests, a model of the CSL board that runs the DEC console program (`emu/ks10-csl`; with `ks10-core-uop` it boots ITS from the disk to `IN OPERATION`) |
 | Implementation differences | Data file | `spec/impldef.toml`: one case for each behaviour in which the implementations differ, with the choice of each core ([`impldef.md`](impldef.md)) |
 | Processor core | SystemVerilog | The KS10 data path. It is multi-cycle |
 | Pipelined core | SystemVerilog | Later: a PDP-10 of its own design that runs ITS. It follows levels A and B of [`conformance.md`](conformance.md), not the microcode steps |
@@ -127,7 +127,7 @@ project agree, that is not a proof that one of them is correct.
 | 1 | The Rust emulator with the software processor passes the diagnostics and boots ITS on a host computer | Done ([`emulator.md`](emulator.md), "Device model" and "Diagnostics") |
 | 2 | The same emulator runs on the PS of the board | It builds for the board and passes its tests in qemu-arm; no run on the board yet |
 | 3 | Measurements of the PS/PL memory path: latency of the HP ports, uncached mapping, write queue | The path is measured (Part B of [`mem-path-experiment.md`](mem-path-experiment.md)); the demand of the guest (Parts A and C) is open |
-| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The model runs the microcode that `spec/micro.py` assembles. It passes the DEC diagnostics that apply to the ITS microcode, and boots ITS to a login. It gives a record at each instruction, through a C interface for the co-simulation. Next: a record at each microcycle for the co-simulation, the model of the 8080 for tests, and the processor core ([`microcode-model.md`](microcode-model.md)) |
+| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The model runs the microcode that `spec/micro.py` assembles. It passes the DEC diagnostics that apply to the ITS microcode, and boots ITS to a login. It gives a record at each instruction, through a C interface for the co-simulation. The model of the 8080 boots ITS on it. Next: a record at each microcycle for the co-simulation, and the processor core ([`microcode-model.md`](microcode-model.md)) |
 | 5 | The core runs on the board with the devices on the PS | Not started |
 | 6 | Front panel on HDMI, Chaosnet, IMP interface | Not started |
 | 7 | The pipelined core ([`conformance.md`](conformance.md)) | Not started |

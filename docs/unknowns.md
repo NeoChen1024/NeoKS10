@@ -162,7 +162,8 @@ then, the model takes each value as a parameter, or stops.
 - **Answer not found.** The baud rate of a board. DIP switches set it
   (MP00540 CSL2 rev E, E10 and the 34702 E4; CSL9 rev D, E11), and the
   8080 cannot read it. The model takes the time of one character as a
-  parameter.
+  parameter. The place of a bell in the CTY output of ITS changes with
+  it ([`console-interface.md`](console-interface.md)).
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

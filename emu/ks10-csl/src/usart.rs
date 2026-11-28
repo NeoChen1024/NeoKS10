@@ -5,14 +5,19 @@
 //! data sheet:
 //! - p. 5-136, RESET: a reset makes the device wait for its control words.
 //! - p. 5-137, CTS: a low CTS enables the transmission if TxEN is set.
+//! - p. 5-137: RxRDY says that the 8251 has a character for the CPU; a
+//!   read of the character resets it.
 //! - p. 5-139: TxRDY is reset when the CPU writes a character; the 8251
 //!   cannot begin transmission until TxEN is set and CTS is low.
+//! - p. 5-139: at the end of the stop bit, the character goes into the
+//!   receiver buffer and RxRDY rises. If the CPU did not read the previous
+//!   character, the new one replaces it and the overrun flag rises.
 //! - p. 5-140: the mode instruction of the asynchronous mode; bits D1 D0
 //!   are the baud rate factor (00 is the synchronous mode), D3 D2 the
 //!   character length.
 //! - p. 5-142: after the mode, each control write is a command; command
-//!   bit D6 (IR) returns the device to the mode format, and D4 (ER) resets
-//!   the error flags. The status bits are D0 TxRDY, D1 RxRDY, D2 TxE,
+//!   bit D6 (IR) returns the device to the mode format, D4 (ER) resets
+//!   the error flags, and D2 (RxE) enables the receiver. The status bits are D0 TxRDY, D1 RxRDY, D2 TxE,
 //!   D3 PE, D4 OE, D5 FE, D6 SYNDET and D7 DSR.
 //!
 //! These are choices of the model, not statements of the manual:
@@ -20,12 +25,14 @@
 //!   moves to the shift register in the same state that the register
 //!   becomes empty.
 //! - TxRDY is 1 while the buffer is empty, also before the mode word.
-//! - There is no receiver input yet: RxRDY and the error flags stay
-//!   clear, and a data read gives the last received character, 0 at
-//!   first.
+//! - The line is perfect: no parity or framing error. A character that
+//!   arrives while RxE is 0 or before the mode word is lost. The data
+//!   read gives the last received character, 0 at first.
 
 /// A command bit: transmit enable.
 const TXEN: u8 = 1 << 0;
+/// A command bit: receive enable.
+const RXE: u8 = 1 << 2;
 /// A command bit: error reset.
 const ER: u8 = 1 << 4;
 /// A command bit: internal reset.
@@ -33,8 +40,12 @@ const IR: u8 = 1 << 6;
 
 /// A status bit: transmitter ready.
 pub const TXRDY: u8 = 1 << 0;
+/// A status bit: receiver ready.
+pub const RXRDY: u8 = 1 << 1;
 /// A status bit: the transmitter is empty.
 pub const TXE: u8 = 1 << 2;
+/// A status bit: overrun error.
+pub const OE: u8 = 1 << 4;
 
 /// A control word that the model does not implement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +73,9 @@ pub struct Usart {
     sent: Vec<u8>,
     /// The receiver buffer.
     received: u8,
+    /// RxRDY and the overrun flag.
+    rx_ready: bool,
+    overrun: bool,
 }
 
 impl Usart {
@@ -78,6 +92,8 @@ impl Usart {
             shifting: None,
             sent: Vec::new(),
             received: 0,
+            rx_ready: false,
+            overrun: false,
         }
     }
 
@@ -95,6 +111,9 @@ impl Usart {
             self.command = 0;
         } else {
             self.command = v;
+            if v & ER != 0 {
+                self.overrun = false;
+            }
         }
         self.advance(now);
         Ok(())
@@ -112,6 +131,12 @@ impl Usart {
     pub fn status(&mut self, now: u64) -> u8 {
         self.advance(now);
         let mut s = 0;
+        if self.rx_ready {
+            s |= RXRDY;
+        }
+        if self.overrun {
+            s |= OE;
+        }
         if self.holding.is_none() {
             s |= TXRDY;
             if self.shifting.is_none() {
@@ -124,7 +149,26 @@ impl Usart {
     /// A read with C/D = 0: the receiver buffer.
     pub fn read_data(&mut self, now: u64) -> u8 {
         self.advance(now);
+        self.rx_ready = false;
         self.received
+    }
+
+    /// A character whose stop bit ends now on RxD.
+    pub fn receive(&mut self, c: u8) {
+        if self.expect_mode || self.command & RXE == 0 {
+            return;
+        }
+        if self.rx_ready {
+            self.overrun = true;
+        }
+        let bits = 5 + ((self.mode >> 2) & 0b11);
+        self.received = c & ((1u16 << bits) - 1) as u8;
+        self.rx_ready = true;
+    }
+
+    /// The RxRDY output.
+    pub fn rx_ready(&self) -> bool {
+        self.rx_ready
     }
 
     /// The characters sent so far.
@@ -243,6 +287,35 @@ mod tests {
         assert_eq!(u.sent(), b"A");
         assert_eq!(u.status(2010), TXRDY | TXE);
         assert_eq!(u.sent(), b"AB");
+    }
+
+    #[test]
+    fn a_received_character_waits_for_the_read() {
+        let mut u = Usart::new(true, 0);
+        u.write_control(MODE_8, 0).unwrap();
+        // Before RxE (p. 5-142), a character is lost.
+        u.receive(b'x');
+        assert_eq!(u.status(0) & RXRDY, 0);
+        u.write_control(RUN, 0).unwrap();
+        u.receive(b'a');
+        assert_eq!(u.status(0) & (RXRDY | OE), RXRDY);
+        assert!(u.rx_ready());
+        assert_eq!(u.read_data(0), b'a');
+        assert_eq!(u.status(0) & RXRDY, 0);
+        // A second character before the read: overrun, the first is lost
+        // (p. 5-139). ER resets the flag (p. 5-142).
+        u.receive(b'b');
+        u.receive(b'c');
+        assert_eq!(u.status(0) & (RXRDY | OE), RXRDY | OE);
+        assert_eq!(u.read_data(0), b'c');
+        u.write_control(RUN, 0).unwrap();
+        assert_eq!(u.status(0) & OE, 0);
+        // 7 data bits (mode 312 of the CTY) mask bit 7.
+        let mut u = Usart::new(true, 0);
+        u.write_control(0o312, 0).unwrap();
+        u.write_control(RUN, 0).unwrap();
+        u.receive(0o341);
+        assert_eq!(u.read_data(0), 0o141);
     }
 
     #[test]

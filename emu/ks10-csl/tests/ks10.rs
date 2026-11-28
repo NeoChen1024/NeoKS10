@@ -321,6 +321,122 @@ fn the_boot_loads_the_control_ram_and_starts_the_disk_program() {
     };
     let want = format!("{banner}{}", high_level_boot(f2));
     let got = &out[..out.find(PROMPT).unwrap() + PROMPT.len()];
-    eprintln!("CTY {got:?}");
     assert_eq!(got, want);
+}
+
+/// One character on a line of 9600 baud, in 8080 states: 10 / 9600 s at
+/// 1.6384 MHz (EK-OKS10-TM-002 5.8.1). `PWRUP` sets 7 or 8 data bits and
+/// 1 or 2 stop bits from the switches; 10 bits for each character and the
+/// baud rate (docs/unknowns.md) are choices of the test.
+const CHAR_STATES: u64 = 1707;
+
+/// The time between two typed characters: 100 ms, the speed of a person.
+const TYPING_STATES: u64 = 163_840;
+
+/// The CTY input word of the 8080 program (`CTYIN`).
+const CTYIN: usize = 0o32;
+
+/// The CTY output of the boot on `ks10-core-uop` with the high-level
+/// console of `ks10-machine`, typed on like `ks10-core-uop/tests/its_boot.rs`
+/// does, up to `done`.
+fn high_level_its(f: std::fs::File, done: &str) -> String {
+    let mut m = Machine::its(W40::ZERO);
+    m.io.disk.attach(0, f, false);
+    ks10_machine::boot::boot_disk(&mut m, 0).expect("BT on the model");
+    let mut script = ks10_machine::console::Script::default();
+    script.answer("DSKDMP", "its\r");
+    script.answer("\r", "\x1bg");
+    let mut last = u64::MAX;
+    while m.instructions < 100_000_000 {
+        if m.instructions != last {
+            last = m.instructions;
+            script.tick(m.now(), &mut m.cty);
+            let out = String::from_utf8_lossy(&m.cty.output);
+            if let Some(k) = out.find(done) {
+                return out[..k + done.len()].to_string();
+            }
+        }
+        m.step().expect("a run of the model");
+    }
+    panic!("no {done:?} from the high-level console");
+}
+
+/// The 8080 program serves the CTY input of the disk program and of ITS:
+/// `its` at the prompt of the disk program, then ESC G, as
+/// `ks10-core-uop/tests/its_boot.rs` types. The program deposits each
+/// character in word 32 and does not wait for the KS10 to take the one
+/// before (hcore.m80, `TENCHR`); the disk program does not read the CTY
+/// while it loads ITS. So the test types a character only after the KS10
+/// has cleared word 32.
+///
+/// The CTY output up to `IN OPERATION` is the output of the high-level
+/// console after the banner, except for the place of the bell. ITS sends
+/// ^G without a cursor motion (ts3tty, `TYOBEL`, `TYONCC`), so a pending
+/// space can come before or after it: with 1707 and 3000 states for each
+/// character the space comes first, with 17067 states the bell comes
+/// first, as on the high-level console (2026-11-28, this test).
+#[test]
+fn the_8080_program_passes_the_cty_input_to_its() {
+    const DONE: &str = "IN OPERATION";
+    let Some(rom) = rom() else { return };
+    let Some(f) = disk_copy("csl-its.dsk") else {
+        return;
+    };
+    let empty = vec![Microword::default(); CRAM_WORDS];
+    let mut m = Machine::new(empty, ucode::DROM.to_vec(), W40::ZERO);
+    m.io.disk.attach(0, f, false);
+    let config = Config {
+        switches: 0o140,
+        cty_carrier: false,
+        klinik_carrier: false,
+        char_states: CHAR_STATES,
+    };
+    let mut c = Csl::new(rom, config, m).unwrap();
+    let mut answers = vec![("DSKDMP", "its\r"), ("\r", "\x1bg")].into_iter();
+    let mut next = answers.next();
+    let mut typing = std::collections::VecDeque::new();
+    let (mut from, mut typed) = (0, 0);
+    let mut out = String::new();
+    while c.now() < 400_000_000 && !out.contains(DONE) {
+        if let Err(s) = c.run(10_000) {
+            panic!("{s}; processor {:?}; CTY {out:?}", c.ks10().pending_stop);
+        }
+        if c.cty_output().len() != out.len() {
+            out = String::from_utf8_lossy(c.cty_output()).into_owned();
+        }
+        if typing.is_empty()
+            && let Some((prompt, text)) = next
+            && out[from..].contains(prompt)
+        {
+            typing.extend(text.bytes());
+            next = answers.next();
+        }
+        if c.cty_input_pending() == 0
+            && c.ks10().memory[CTYIN] == W36::ZERO
+            && c.now() >= typed + TYPING_STATES
+            && let Some(b) = typing.pop_front()
+        {
+            c.type_cty(&[b]);
+            typed = c.now();
+            if typing.is_empty() {
+                from = out.len();
+            }
+        }
+    }
+    eprintln!(
+        "after {} states, {} instructions",
+        c.now(),
+        c.ks10().instructions
+    );
+    let got = &out[..out.find(DONE).unwrap_or_else(|| panic!("{out:?}")) + DONE.len()];
+    let Some(f2) = disk_copy("csl-its-high-level.dsk") else {
+        return;
+    };
+    let want = format!(
+        "\r\nKS10 CSL.V5.2\r\nBT AUTO\r\n{}",
+        high_level_its(f2, DONE)
+    );
+    let bells = |t: &str| t.matches('\x07').count();
+    assert_eq!(bells(got), bells(&want));
+    assert_eq!(got.replace('\x07', ""), want.replace('\x07', ""));
 }

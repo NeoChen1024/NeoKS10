@@ -157,6 +157,10 @@ struct Board<K: Ks10> {
     pc: u16,
     writes: Vec<Write>,
     stop: Option<Stop>,
+    /// The characters on the CTY input line, with the time that the stop
+    /// bit of each ends; and the time that the line is free.
+    cty_in: std::collections::VecDeque<(u64, u8)>,
+    cty_line: u64,
 }
 
 impl<K: Ks10> Board<K> {
@@ -319,7 +323,12 @@ impl<K: Ks10> Control for Board<K> {
 
 /// INT is RxRDY of the two USARTs (MP00540 CSL2 rev E, E23). The model of
 /// the USART has no receiver yet, so INT stays inactive.
-impl<K: Ks10> Inputs for Board<K> {}
+/// CSL2 E23: INT of the 8080 is RxRDY of either USART (MP00540 CSL2 rev E).
+impl<K: Ks10> Inputs for Board<K> {
+    fn interrupt_requested(&mut self) -> bool {
+        self.cty.rx_ready() || self.rem.rx_ready()
+    }
+}
 
 /// The CSL board after power-up, with the KS10 `K`.
 pub struct Csl<K: Ks10> {
@@ -358,6 +367,8 @@ impl<K: Ks10> Csl<K> {
                 pc: 0,
                 writes: Vec::new(),
                 stop: None,
+                cty_in: std::collections::VecDeque::new(),
+                cty_line: 0,
             },
         })
     }
@@ -370,6 +381,12 @@ impl<K: Ks10> Csl<K> {
         while self.board.now < end {
             if self.board.stop.is_some() {
                 break;
+            }
+            while let Some(&(t, c)) = self.board.cty_in.front()
+                && t <= self.board.now
+            {
+                self.board.cty_in.pop_front();
+                self.board.cty.receive(c);
             }
             // The address of the last instruction that started.
             let last = self.board.pc;
@@ -399,6 +416,22 @@ impl<K: Ks10> Csl<K> {
     /// The time since power-up, in 8080 states.
     pub fn now(&self) -> u64 {
         self.board.now
+    }
+
+    /// Characters typed on the CTY: each takes one character time on the
+    /// line after the line is free (`Config::char_states`).
+    pub fn type_cty(&mut self, text: &[u8]) {
+        let b = &mut self.board;
+        for &c in text {
+            let t = b.cty_line.max(b.now) + b.config.char_states;
+            b.cty_in.push_back((t, c));
+            b.cty_line = t;
+        }
+    }
+
+    /// The characters on the CTY input line that have not arrived yet.
+    pub fn cty_input_pending(&self) -> usize {
+        self.board.cty_in.len()
     }
 
     /// The characters that the CTY USART sent.
@@ -591,6 +624,51 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    const EI: u8 = 0o373;
+    const LXI_SP: u8 = 0o061;
+
+    /// The stack at the top of the RAM, the USART of the CTY in asynchronous mode with TxEN, RxE and ER,
+    /// interrupts on, a loop; at 070 (RST 7) a handler that stores the
+    /// character at 20000 and halts.
+    fn receiver(char_states: u64) -> Csl<Detached> {
+        let mut rom = vec![0; rom::SIZE];
+        rom[..17].copy_from_slice(&[
+            LXI_SP, 0, 0o44, OUT, 0o101, MVI_A, 0o116, OUT, 0o201, MVI_A, 0o025, OUT, 0o201, EI,
+            JMP, 14, 0,
+        ]);
+        rom[0o70..0o76].copy_from_slice(&[IN, 0o200, STA, 0, 0o40, HLT]);
+        let config = Config {
+            char_states,
+            ..CONFIG
+        };
+        Csl::new(rom, config, Detached::default()).unwrap()
+    }
+
+    #[test]
+    fn a_received_character_interrupts_with_rst_7() {
+        let mut c = receiver(0);
+        c.run(100).unwrap();
+        c.type_cty(b"a");
+        // INT is RxRDY (CSL2 E23); the 8228 gives RST 7 (098-153B p. 5-8).
+        let r = c.run(1000);
+        assert!(matches!(r, Err(Stop::Halt { pc: 0o75 })), "{r:?}");
+        assert_eq!(c.board.ram[0], b'a');
+    }
+
+    #[test]
+    fn the_cty_line_takes_one_character_time_for_each_character() {
+        let mut c = receiver(1000);
+        c.run(100).unwrap();
+        let start = c.now();
+        c.type_cty(b"ab");
+        assert_eq!(c.cty_input_pending(), 2);
+        c.run(990).unwrap();
+        assert_eq!(c.cty_input_pending(), 2, "{} after {start}", c.now());
+        // The first stop bit ends at start + 1000: RST 7, then HLT.
+        assert!(matches!(c.run(100), Err(Stop::Halt { .. })));
+        assert_eq!(c.cty_input_pending(), 1);
     }
 
     #[test]
