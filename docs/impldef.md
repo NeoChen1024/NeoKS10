@@ -32,7 +32,9 @@ The programs are not assembled or run yet.
 | [div-min-by-zero](#div-min-by-zero) | A | decided | microcode | microcode | microcode | skip | exact | not-generated |
 | [hlle-klh10](#hlle-klh10) | A | decided | microcode | microcode | microcode | exact | skip | not-generated |
 | [div-high-equals-divisor](#div-high-equals-divisor) | A | decided | microcode | microcode | microcode | exact | skip | exact |
-| [trap-flags](#trap-flags) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
+| [trap-flags-clear](#trap-flags-clear) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
+| [ash-trap-last-step](#ash-trap-last-step) | A | open | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
+| [dmul-trap-old-overflow](#dmul-trap-old-overflow) | A | open | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [dmovn-carry](#dmovn-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [dmul-carry](#dmul-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [float-unnormalized](#float-unnormalized) | open | open | microcode | open | open | not-generated | not-generated | not-generated |
@@ -58,7 +60,8 @@ The operands of a case (`when` in the table):
 - `div_min70_by_zero`: a dividend of -2^70 and a divisor of 0.
 - `hlle_positive_bits_1_3`: a positive source word with a bit of 1 to 3 set.
 - `div_high_equals_divisor`: the high word of the magnitude of the dividend equals the magnitude of the divisor.
-- `or_start_flags`: the instructions, or any instruction that starts with one of the flags set.
+- `start_flags`: an instruction of the case that starts with one of the flags set.
+- `lost_bit_before_last_step`: a left shift that loses a bit in a step before the last step, and none in the last step.
 - `exponent_difference_over`: an exponent difference of more than n.
 - `unnormalized_operand`: an operand that is not normalized.
 - `page_fail`: a reference that page-fails.
@@ -395,31 +398,86 @@ Program:
 	HALT .
 ```
 
-### trap-flags
+### trap-flags-clear
 
-Trap 1 and Trap 2: each flag word loads them.
+Trap 1 and Trap 2: a later flag word clears them.
 
-- Instructions: ASH, ASHC, DMUL; operands: `or_start_flags` (flags ['TRAP1', 'TRAP2']).
+- Instructions: ADD, SUB, MOVN, MOVM, AOJ, AOS, SOJ, SOS, DADD, DSUB, DMOVN, DMOVNM, DMUL, JFCL, PUSHJ, JSR, JSP; operands: `start_flags` (flags ['TRAP1', 'TRAP2']).
 - Differs: flags:TRAP1,TRAP2.
-- Level B: Design decision 2026-11-28. No DEC KS10 diagnostic tests the case (a reading of the KLAD sources, 2026-11-27). The PRM defines Trap 1 for an ASH that loses a bit in any step (PRM 2.5), so the case does not meet the rule for level B of docs/conformance.md.
+- Level B: The case shows only with traps off: with traps on, the trap instruction clears the trap flags (PRM 1982, p. 2-78). With paging off, the PRM says that the trap flags have no effect, and it does not say that a later instruction clears them (p. 2-78). No DEC KS10 diagnostic tests the case: DSKDA clears TRAP 1 and TRAP 2 in its simulated flags (DSKDAM, SENTRY, CHECK; a reading of the KLAD sources, 2026-11-27).
 - Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
 
 Sources:
 
-- DPE9 **[microcode]** (M8620-0-DPE9 rev B, E60, E85, E78; ks10.47, MACROS -- PC FLAGS): each flag word loads Trap 1 and Trap 2; ASH gives Trap 1 the overflow of the last step.
-- PRM **[manual]** (PRM 1982, 2.5, ASH): Overflow and Trap 1 if a bit of significance is lost.
+- DPE9 **[microcode]** (M8620-0-DPE9 rev B, E60, E85, E78; ks10.47, MACROS -- PC FLAGS): each word with SPEC/FLAGS loads Trap 1 and Trap 2, so it clears a trap flag that it does not set.
+- PRM **[manual]** (PRM 1982, p. 2-78, overflow trapping): an overflow sets Trap 1; the trap instruction clears the trap flags; nothing else clears them.
+- SIMH **[emulator]** (sims 9556eca0, kx10_cpu.c): as the PRM.
+- KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c): as the PRM.
+- KS10FPGA **[emulator]** (KS10FPGA 5090e7a1, pcflags.v): as the microcode.
+
+Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The instructions are those with a word of SPEC/FLAGS (discrepancies.md).
+
+Program:
+
+```
+	MOVE 1,[377777,,777777]
+	ADD 1,[1]		; overflow: Trap 1
+	ADD 2,[1]		; no overflow
+	JSP 3,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
+	HALT .
+```
+
+### ash-trap-last-step
+
+ASH and ASHC: Trap 1 from the last step only.
+
+- Instructions: ASH, ASHC; operands: `lost_bit_before_last_step`.
+- Differs: flags:TRAP1, pc.
+- Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
+
+Sources:
+
+- DPE9 **[microcode]** (M8620-0-DPE9 rev B, E85, E78; simple.42, ASHL, ASHCL): each step loads Trap 1 with its own overflow, so Trap 1 is the overflow of the last step; Overflow holds.
+- PRM **[manual]** (PRM 1982, p. 2-41, ASH, ASHC): Overflow and Trap 1 if any bit of significance is lost.
 - SIMH **[emulator]** (sims 9556eca0, kx10_cpu.c, ASH): as the PRM.
 - KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c, x_ashflg): as the PRM.
-- KS10FPGA **[emulator]** (KS10FPGA 5090e7a1, pcflags.v): Trap 1 as the microcode; OV not held.
+- KS10FPGA **[emulator]** (KS10FPGA 5090e7a1, pcflags.v): Trap 1 as the microcode; Overflow not held.
 
-Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The uop_soft mask applies to ASH, ASHC and DMUL, and to each case that starts with a trap flag set.
+With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open.
 
 Program:
 
 ```
 	MOVE 1,[200000,,1]
 	ASH 1,2			; the first step overflows, the second does not
-	JSP 2,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
+	JSP 2,.+1		; with traps on: no trap in the microcode, a trap in the PRM
+	HALT .
+```
+
+### dmul-trap-old-overflow
+
+DMUL: Trap 1 from an Overflow that was set before.
+
+- Instructions: DMUL; operands: `start_flags` (flags ['AROV']).
+- Differs: flags:TRAP1, pc.
+- Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
+
+Sources:
+
+- microcode **[microcode]** (simple.42, DMTRAP): after CLR FPD, set Trap 1 if Overflow is set, also from an earlier instruction.
+- PRM **[manual]** (PRM 1982, p. 2-78, overflow trapping): the overflow condition sets Trap 1, not the state of the Overflow flag.
+- SIMH **[emulator]** (sims 9556eca0, kx10_cpu.c, DMUL): Trap 1 only for (-2^70)^2.
+- KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c, op10dmul): as SIMH.
+
+With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open.
+
+Program:
+
+```
+	JRST 2,@[400000,,.+1]	; Overflow set, Trap 1 clear
+	DMOVE 1,[EXP 0,2]
+	DMUL 1,[EXP 0,3]	; no overflow
+	JSP 5,.+1		; with traps on: a trap in the microcode, none in the PRM
 	HALT .
 ```
 
@@ -456,7 +514,7 @@ DMUL: the carry flags of QMULT.
 
 - Instructions: DMUL; operands: `any`.
 - Differs: flags:CRY0,CRY1.
-- Level B: Design decision 2026-11-28. No reading of the DEC diagnostics for the carry flags of DMUL is recorded yet.
+- Level B: The PRM names Overflow and Trap 1 for (-2^70)^2 and no carry flag for DMUL (PRM 1982, p. 2-16). DSKCF checks only Overflow after DMUL: MULTF tests the PC word with TLZE SCR2,AROV (DSKCFT, DMUL - TEST C), and DMUL - TEST E expects Overflow for (-2^70)^2. No DEC diagnostic tests the carry flags (a reading of the KLAD sources, 2026-11-28).
 - Origin: [`discrepancies.md`](discrepancies.md), "DMUL: the carry flags of QMULT".
 
 Sources:

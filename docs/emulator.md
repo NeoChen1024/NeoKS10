@@ -581,7 +581,8 @@ guest:
 
 #### Input without loss
 
-This is a design. The code changes only after a decision on it.
+This is a design (design decision 2026-11-28). The change below is not
+written yet.
 
 - **The queue.** Host input to the CTY goes into a queue. The next
   character goes to the guest only when the guest took the previous one.
@@ -922,13 +923,18 @@ of [`impldef.md`](impldef.md) or an item of level C of
   gives the same result, because the strings must not overlap (PRM 2.12).
 - Level C: the halt status block has 0 in the words of microcode
   temporaries ([`conformance.md`](conformance.md)).
-- Level B: the program flags follow the PRM where the microcode differs
-  only in its internal steps (the cases `trap-flags`, `dmovn-carry` and
-  `dmul-carry`):
-  - An instruction only sets Trap 1 and Trap 2; ASH sets Trap 1 for an
-    overflow in any step. The microcode loads both at each flag word.
-  - DMOVN and DMOVNM set no carry flag for a low word not 0.
-  - DMUL sets no carry flag; (-2^70)^2 sets Overflow and Trap 1.
+- The program flags follow the PRM where the microcode differs
+  (design decision 2026-11-28):
+  - An instruction only sets Trap 1 and Trap 2. The microcode loads both
+    at each flag word. Level B, case `trap-flags-clear`.
+  - ASH sets Trap 1 for an overflow in any step; DMUL sets Trap 1 only
+    for its own overflow. Level A with the state open, cases
+    `ash-trap-last-step` and `dmul-trap-old-overflow`: the PRM defines
+    them, and the microcode differs with traps on too.
+  - DMOVN and DMOVNM set no carry flag for a low word not 0 (case
+    `dmovn-carry`, level B).
+  - DMUL sets no carry flag; (-2^70)^2 sets Overflow and Trap 1 (case
+    `dmul-carry`, level B).
 - The case `pfw-address-high`: bits 16 and 17 of the page fail word of a memory reference are 0. The
   microcode keeps VMA 16 and 17 there **[microcode]** (`itspag.98`,
   `PFMAP`, `ADDRESS HIGH/MEMORY`). The hardware loads VMA 14 to 17 from
@@ -1029,7 +1035,7 @@ Open:
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
 
-- The model of the 8080 for tests, after a decision on the plan of
+- The model of the 8080 for tests, by the plan of
   [`console-interface.md`](console-interface.md), "Comparison".
 - A continue after a halt. The microcode turns off the PI system at a
   halt (`inout.50`, WRTHSB: "TURN OFF PI SYSTEM"), and the 8080 CO does

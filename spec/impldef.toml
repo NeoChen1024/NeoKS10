@@ -381,32 +381,87 @@ program = """
 note = "The KLH10 skip does not test the sign of the quotient."
 
 [[case]]
-name = "trap-flags"
-title = "Trap 1 and Trap 2: each flag word loads them"
+name = "trap-flags-clear"
+title = "Trap 1 and Trap 2: a later flag word clears them"
 area = "processor"
 level = "B"
-level_b = "Design decision 2026-11-28. No DEC KS10 diagnostic tests the case (a reading of the KLAD sources, 2026-11-27). The PRM defines Trap 1 for an ASH that loses a bit in any step (PRM 2.5), so the case does not meet the rule for level B of docs/conformance.md."
+level_b = "The case shows only with traps off: with traps on, the trap instruction clears the trap flags (PRM 1982, p. 2-78). With paging off, the PRM says that the trap flags have no effect, and it does not say that a later instruction clears them (p. 2-78). No DEC KS10 diagnostic tests the case: DSKDA clears TRAP 1 and TRAP 2 in its simulated flags (DSKDAM, SENTRY, CHECK; a reading of the KLAD sources, 2026-11-27)."
 state = "decided"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
-instructions = ["ASH", "ASHC", "DMUL"]
-when = { pred = "or_start_flags", flags = ["TRAP1", "TRAP2"] }
+instructions = ["ADD", "SUB", "MOVN", "MOVM", "AOJ", "AOS", "SOJ", "SOS", "DADD", "DSUB", "DMOVN", "DMOVNM", "DMUL", "JFCL", "PUSHJ", "JSR", "JSP"]
+when = { pred = "start_flags", flags = ["TRAP1", "TRAP2"] }
 differs = ["flags:TRAP1,TRAP2"]
 sources = [
-  { who = "DPE9", mark = "microcode", ref = "M8620-0-DPE9 rev B, E60, E85, E78; ks10.47, MACROS -- PC FLAGS", does = "each flag word loads Trap 1 and Trap 2; ASH gives Trap 1 the overflow of the last step" },
-  { who = "PRM", mark = "manual", ref = "PRM 1982, 2.5, ASH", does = "Overflow and Trap 1 if a bit of significance is lost" },
+  { who = "DPE9", mark = "microcode", ref = "M8620-0-DPE9 rev B, E60, E85, E78; ks10.47, MACROS -- PC FLAGS", does = "each word with SPEC/FLAGS loads Trap 1 and Trap 2, so it clears a trap flag that it does not set" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, p. 2-78, overflow trapping", does = "an overflow sets Trap 1; the trap instruction clears the trap flags; nothing else clears them" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c", does = "as the PRM" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c", does = "as the PRM" },
+  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "as the microcode" },
+]
+choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
+compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+program = """
+	MOVE 1,[377777,,777777]
+	ADD 1,[1]		; overflow: Trap 1
+	ADD 2,[1]		; no overflow
+	JSP 3,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
+	HALT .
+"""
+note = "Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The instructions are those with a word of SPEC/FLAGS (discrepancies.md)."
+
+[[case]]
+name = "ash-trap-last-step"
+title = "ASH and ASHC: Trap 1 from the last step only"
+area = "processor"
+level = "A"
+state = "open"
+discrepancy = "Trap 1 and Trap 2: each flag word loads them"
+instructions = ["ASH", "ASHC"]
+when = { pred = "lost_bit_before_last_step" }
+differs = ["flags:TRAP1", "pc"]
+sources = [
+  { who = "DPE9", mark = "microcode", ref = "M8620-0-DPE9 rev B, E85, E78; simple.42, ASHL, ASHCL", does = "each step loads Trap 1 with its own overflow, so Trap 1 is the overflow of the last step; Overflow holds" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, p. 2-41, ASH, ASHC", does = "Overflow and Trap 1 if any bit of significance is lost" },
   { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, ASH", does = "as the PRM" },
   { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, x_ashflg", does = "as the PRM" },
-  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "Trap 1 as the microcode; OV not held" },
+  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "Trap 1 as the microcode; Overflow not held" },
 ]
 choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
 compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
 program = """
 	MOVE 1,[200000,,1]
 	ASH 1,2			; the first step overflows, the second does not
-	JSP 2,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
+	JSP 2,.+1		; with traps on: no trap in the microcode, a trap in the PRM
 	HALT .
 """
-note = "Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The uop_soft mask applies to ASH, ASHC and DMUL, and to each case that starts with a trap flag set."
+note = "With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open."
+
+[[case]]
+name = "dmul-trap-old-overflow"
+title = "DMUL: Trap 1 from an Overflow that was set before"
+area = "processor"
+level = "A"
+state = "open"
+discrepancy = "Trap 1 and Trap 2: each flag word loads them"
+instructions = ["DMUL"]
+when = { pred = "start_flags", flags = ["AROV"] }
+differs = ["flags:TRAP1", "pc"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, DMTRAP", does = "after CLR FPD, set Trap 1 if Overflow is set, also from an earlier instruction" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, p. 2-78, overflow trapping", does = "the overflow condition sets Trap 1, not the state of the Overflow flag" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, DMUL", does = "Trap 1 only for (-2^70)^2" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, op10dmul", does = "as SIMH" },
+]
+choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
+compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+program = """
+	JRST 2,@[400000,,.+1]	; Overflow set, Trap 1 clear
+	DMOVE 1,[EXP 0,2]
+	DMUL 1,[EXP 0,3]	; no overflow
+	JSP 5,.+1		; with traps on: a trap in the microcode, none in the PRM
+	HALT .
+"""
+note = "With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open."
 
 [[case]]
 name = "dmovn-carry"
@@ -440,7 +495,7 @@ name = "dmul-carry"
 title = "DMUL: the carry flags of QMULT"
 area = "processor"
 level = "B"
-level_b = "Design decision 2026-11-28. No reading of the DEC diagnostics for the carry flags of DMUL is recorded yet."
+level_b = "The PRM names Overflow and Trap 1 for (-2^70)^2 and no carry flag for DMUL (PRM 1982, p. 2-16). DSKCF checks only Overflow after DMUL: MULTF tests the PC word with TLZE SCR2,AROV (DSKCFT, DMUL - TEST C), and DMUL - TEST E expects Overflow for (-2^70)^2. No DEC diagnostic tests the carry flags (a reading of the KLAD sources, 2026-11-28)."
 state = "decided"
 discrepancy = "DMUL: the carry flags of QMULT"
 instructions = ["DMUL"]

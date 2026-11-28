@@ -292,9 +292,10 @@ the control RAM.
   overflow of the last step of the shift (simple, `ASH36 LEFT`, `ASHL`,
   `ASHCL`). DMUL ends with `CLR FPD`, then sets Trap 1 if Overflow is set,
   also from an earlier instruction (simple, `DMTRAP`).
-- With traps on, the microcode takes the trap at the next instruction, so
-  the rule shows only with traps off. The boot loader of ITS runs with
-  traps off. An ADD of the loader clears a Trap 1 of an earlier
+- With traps on, the microcode takes the trap at the next instruction.
+  So the clear of a trap flag by a later word shows only with traps off
+  (case `trap-flags-clear` of [`impldef.md`](impldef.md)). The boot
+  loader of ITS runs with traps off. An ADD of the loader clears a Trap 1 of an earlier
   instruction (a boot of ITS on the model in step with
   `emu/ks10-core-soft`, 2026-11-27).
 - **[measured]** 2026-11-27, the microcode-level model
@@ -311,8 +312,17 @@ the control RAM.
   take the overflow of the step, with no hold. Its OV does not agree with
   DPE9: E68 holds OV, so OV after ASH 1,2 of 200000,,000001 is 1, but
   KS10FPGA gives 0. The model and `emu/ks10-core-soft` keep OV.
+- **[measured]** 2026-11-28, the microcode-level model with traps on
+  (`WREBR` 020000, an `AOS` as the trap instruction in EPT + 421), a
+  temporary test. ASH 1,2 of 200000,,000001 takes no trap and leaves
+  Overflow set. ASH 1,1 of the same word takes the trap. DMUL of 0,,2 by
+  0,,3 after `JRST 2,` with Overflow set takes the trap. So the last two
+  rules show with traps on too: the microcode does not take a trap that
+  the PRM gives, and it takes a trap that the PRM does not give (cases
+  `ash-trap-last-step` and `dmul-trap-old-overflow`).
 - **[manual]** The PRM sets Overflow and Trap 1 if a left shift loses a
-  bit of significance (PRM 2.5, ASH). **[emulator]** sims 9556eca0,
+  bit of significance (PRM 1982, p. 2-41, ASH). The overflow condition
+  sets Trap 1, not the state of the Overflow flag (p. 2-78). **[emulator]** sims 9556eca0,
   `kx10_cpu.c`, ASH (240), and KLH10 6d733f2, `kn10ops.c`, `x_ashflg`, do
   this.
 - No DEC KS10 diagnostic tests the case (a reading of the KLAD sources,
@@ -323,12 +333,16 @@ the control RAM.
   before the comparison (DSKDAM, `SENTRY`, `CHECK`). It enables the traps
   with `WREBR` 020000 (`LTRPEN`), so a trap clears the flags of the
   machine, and the arithmetic trap instruction in 421 is a JFCL (seen in
-  a run on `emu/ks10-core-soft`, 2026-11-27).
+  a run on `emu/ks10-core-soft`, 2026-11-27). DSKCF clears the flags with
+  `JFCL 17` before each of its two DMUL instructions (DSKCFM, `MSUBR`;
+  DSKCFT, "DMUL - TEST E"), so it does not test an Overflow from before.
 
 The microcode-level model uses the microcode and the schematics (rank
 1). `emu/ks10-core-soft` follows the PRM, as SIMH and KLH10 do: an
 instruction only sets a trap flag, and ASH sets Trap 1 for an overflow in
-any step. This is a design decision of 2026-11-28
+any step. This is a design decision of 2026-11-28. Only the first of the
+three cases meets the rule for level B of
+[`conformance.md`](conformance.md)
 ([`emulator.md`](emulator.md), "Differences from the microcode"). The
 single-instruction test of the model has the case in its table `KNOWN`,
 and `the_flag_rules_of_the_microcode` checks the rule on the model
@@ -394,6 +408,10 @@ word loads them").
   no carry flag. **[measured]** 2026-11-27: with `emu/ks10-core-soft` on
   the microcode rule, the differential run gave 3 differences with each
   emulator, all DMUL.
+- DSKCF checks only Overflow after DMUL. `MULTF` tests the PC word with
+  `TLZE SCR2,AROV` (DSKCFT, "DMUL - TEST C"), and "DMUL - TEST E"
+  expects Overflow for (-2^70)^2 (a reading of the KLAD sources,
+  2026-11-28). No DEC diagnostic tests the carry flags of DMUL.
 
 The microcode-level model uses the microcode (rank 1).
 `emu/ks10-core-soft` follows the PRM, SIMH and KLH10: Overflow and Trap

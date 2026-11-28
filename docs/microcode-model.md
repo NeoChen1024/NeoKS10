@@ -763,11 +763,14 @@ halt code there.
 
 **Known differences.** Design decision 2026-11-28: the two processors
 can differ by a decision ("Time and the boot of ITS"). Each such case is
-a case of level B in [`impldef.md`](impldef.md) ([`conformance.md`](conformance.md)).
+a case of [`impldef.md`](impldef.md): level B, or level A with the state
+open ([`conformance.md`](conformance.md)).
 The test has the table `KNOWN` for them. For a case of the table, the
 test leaves out the parts of the state that the entry names; the other
-parts must agree. The table has three entries, for the cases
-`trap-flags`, `dmovn-carry` and `dmul-carry`. The table is written by
+parts must agree. The table has three entries. The entry "Trap 1 and
+Trap 2" is for the cases `trap-flags-clear`, `ash-trap-last-step` and
+`dmul-trap-old-overflow`; the others are for `dmovn-carry` and
+`dmul-carry`. The table is written by
 hand until the generator of `spec/impldef.toml` writes it. **[measured]** 2026-11-28: 480
 of the 712 runs agree, and 232 differ only in the flags of these entries.
 The test `the_flag_rules_of_the_microcode` checks these flag rules on

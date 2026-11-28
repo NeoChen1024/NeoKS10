@@ -79,13 +79,21 @@ for its restart.
 - A move of a behaviour from level A to level B or C needs evidence: the
   PRM does not define the behaviour, and no DEC diagnostic checks it. A
   case of level B gives this evidence in `level_b`.
-- The three flag cases (`trap-flags`, `dmovn-carry`, `dmul-carry`) have
-  level B by the design decision of 2026-11-28. `trap-flags` does not meet
-  the rule above: the PRM defines Trap 1 for an ASH that loses a bit
-  (PRM 2.5). For `dmul-carry`, no reading of the diagnostics is recorded
-  yet.
+- The flag cases of the design decision of 2026-11-28 against this rule:
+  - `trap-flags-clear` and `dmul-carry` meet it, and have level B.
+  - `ash-trap-last-step` and `dmul-trap-old-overflow` do not: the PRM
+    defines them (PRM 1982, p. 2-41 and p. 2-78). They have level A and
+    the state open.
+  - `dmovn-carry` is not checked against the rule yet.
+- If the PRM and a KS10 source differ in a case of level A, the order of
+  the sources decides the behaviour of the KS10
+  ([`AGENTS.md`](../AGENTS.md), "Sources of truth"). The first core
+  follows it. For the other cores, such a case stays open until a
+  decision.
 - After each change of the levels, run the full ITS build (`make
-  its-build`).
+  its-build`). The target and the `its/` directory do not exist yet
+  ([`AGENTS.md`](../AGENTS.md), "Layout"). Until they exist, the check
+  is `make its-boot`.
 - The core with the KS10 data path stays available as a bitstream. It
   separates a question of the contract from an error of the pipelined
   core.
@@ -114,9 +122,10 @@ These are the masks of 2026-11-28 and their fit with the table:
   - ASH and ASHC above a count of places;
   - DIV in KLH10 without the sign of the quotient.
 - The table `KNOWN` of `emu/ks10-core-uop/tests/instructions.rs` masks
-  flags between the two models. Its three entries are the cases
-  `trap-flags`, `dmovn-carry` and `dmul-carry`. The masks cover more than
-  the cases: each ASH, ASHC and DMUL, and each DMOVN.
+  flags between the two models. Its three entries are for the cases
+  `trap-flags-clear`, `ash-trap-last-step`, `dmul-trap-old-overflow`
+  (one entry for the three), `dmovn-carry` and `dmul-carry`. The masks
+  cover more than the cases: each ASH, ASHC and DMUL, and each DMOVN.
 - These do not fit a case of the table:
   - The limits of the case generator: no jumps, I/O or EXTEND,
     normalized operands only, exponent differences of 60 or less. They
