@@ -4,7 +4,10 @@
 //!   36-bit guest word [`W36`] and the half word [`Half`].
 //! - [`instructions`]: the opcodes of the KS10 with the ITS microcode, from
 //!   `spec/instructions.toml` through `make gen`.
+//! - [`impldef`]: the implementation differences of `spec/impldef.toml`
+//!   for the differential runs, and the predicates of their operands.
 
+pub mod impldef;
 #[rustfmt::skip]
 pub mod instructions;
 pub mod word;

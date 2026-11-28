@@ -62,9 +62,7 @@ source.
      instruction. Each difference is a case of level B in
      `spec/impldef.toml`, an item of level C, or an error of one of the
      two. The masks of each comparison come from `spec/impldef.toml`
-     through a generator. Do not write a new mask by hand. The masks of
-     today stay until the generator writes them (`docs/conformance.md`,
-     "Masks of the differential runs").
+     through a generator (`pdp10::impldef`). Do not write a mask by hand.
 
 The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. The
 submodule `3rdparty/PYNQ-Z2` pins the commit that this repository uses. Do not
@@ -96,7 +94,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), the C interface (`capi.toml`), the implementation differences (`impldef.toml`), and their generators. `micro.py` is the microcode assembler |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type, the instruction tables and the implementation differences from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/capi/` is a C++ caller of the C interface. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -113,6 +111,7 @@ directory that `.gitignore` excludes.
 
 `make gen` writes files from `spec/`: `rtl/gen/`, `tb/gen/`,
 `emu/plio/src/regmap.rs`, `emu/pdp10/src/instructions.rs`,
+`emu/pdp10/src/impldef/table.rs`,
 `emu/ks10-machine/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
 `docs/devices.md`. It also writes `emu/ks10-core-uop/src/fields.rs` from the
 field definitions of the ITS microcode, and `emu/ks10-core-uop/src/ucode.rs`

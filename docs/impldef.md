@@ -22,7 +22,7 @@ The programs are not assembled or run yet.
 | [pi-request-off-level](#pi-request-off-level) | open | decided | microcode | microcode | open | not-generated | not-generated | not-generated |
 | [rdubr-bits-0-2](#rdubr-bits-0-2) | open | decided | microcode | microcode | open | not-generated | not-generated | not-generated |
 | [movsrj-ac](#movsrj-ac) | open | decided | microcode | microcode | open | not-generated | not-generated | not-generated |
-| [fad-large-exponent-difference](#fad-large-exponent-difference) | open | decided | microcode | microcode | open | not-generated | not-generated | not-generated |
+| [fad-large-exponent-difference](#fad-large-exponent-difference) | open | decided | microcode | microcode | open | not-generated | not-generated | exact |
 | [ash-left-many](#ash-left-many) | A | decided | microcode | microcode | microcode | skip | exact | exact |
 | [shift-count-minus-256](#shift-count-minus-256) | open | decided | microcode | microcode | open | skip | exact | not-generated |
 | [circ](#circ) | open | decided | microcode | microcode | open | skip | exact | not-generated |
@@ -32,9 +32,9 @@ The programs are not assembled or run yet.
 | [div-min-by-zero](#div-min-by-zero) | A | decided | microcode | microcode | microcode | skip | exact | not-generated |
 | [hlle-klh10](#hlle-klh10) | A | decided | microcode | microcode | microcode | exact | skip | not-generated |
 | [div-high-equals-divisor](#div-high-equals-divisor) | A | decided | microcode | microcode | microcode | exact | skip | exact |
-| [trap-flags-clear](#trap-flags-clear) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
+| [trap-flags-clear](#trap-flags-clear) | B | decided | microcode | PRM (design decision 2026-11-28) | open | not-generated | not-generated | mask |
 | [ash-trap-last-step](#ash-trap-last-step) | A | open | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
-| [dmul-trap-old-overflow](#dmul-trap-old-overflow) | A | open | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
+| [dmul-trap-old-overflow](#dmul-trap-old-overflow) | A | open | microcode | PRM (design decision 2026-11-28) | open | not-generated | not-generated | mask |
 | [dmovn-carry](#dmovn-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [dmul-carry](#dmul-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [float-unnormalized](#float-unnormalized) | open | open | microcode | open | open | not-generated | not-generated | not-generated |
@@ -61,8 +61,8 @@ The operands of a case (`when` in the table):
 - `hlle_positive_bits_1_3`: a positive source word with a bit of 1 to 3 set.
 - `div_high_equals_divisor`: the high word of the magnitude of the dividend equals the magnitude of the divisor.
 - `start_flags`: an instruction of the case that starts with one of the flags set.
-- `lost_bit_before_last_step`: a left shift that loses a bit in a step before the last step, and none in the last step.
-- `exponent_difference_over`: an exponent difference of more than n.
+- `lost_bit_before_last_step`: a left shift that loses a bit in a step before the last step, and none in the last step (one place in each step: simple.42, ASHL, ASHCL).
+- `exponent_difference_over`: two operands that are not 0, with an exponent difference of more than n.
 - `unnormalized_operand`: an operand that is not normalized.
 - `page_fail`: a reference that page-fails.
 
@@ -261,7 +261,7 @@ Program:
 
 FDV with normalized operands: bit 35 of the quotient.
 
-- Instructions: FDV, FDVL, FDVM, FDVB, FDVR, FDVRI, FDVRM, FDVRB; operands: `any`.
+- Instructions: FDV, FDVM, FDVB, FDVR, FDVRI, FDVRM, FDVRB; operands: `any`.
 - Differs: ac, mem.
 - Origin: [`discrepancies.md`](discrepancies.md), "FDV: the quotient".
 
@@ -402,7 +402,7 @@ Program:
 
 Trap 1 and Trap 2: a later flag word clears them.
 
-- Instructions: ADD, SUB, MOVN, MOVM, AOJ, AOS, SOJ, SOS, DADD, DSUB, DMOVN, DMOVNM, DMUL, JFCL, PUSHJ, JSR, JSP; operands: `start_flags` (flags ['TRAP1', 'TRAP2']).
+- Instructions: all; operands: `start_flags` (flags ['TRAP1', 'TRAP2']).
 - Differs: flags:TRAP1,TRAP2.
 - Level B: The case shows only with traps off: with traps on, the trap instruction clears the trap flags (PRM 1982, p. 2-78). With paging off, the PRM says that the trap flags have no effect, and it does not say that a later instruction clears them (p. 2-78). No DEC KS10 diagnostic tests the case: DSKDA clears TRAP 1 and TRAP 2 in its simulated flags (DSKDAM, SENTRY, CHECK; a reading of the KLAD sources, 2026-11-27).
 - Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
@@ -415,7 +415,7 @@ Sources:
 - KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c): as the PRM.
 - KS10FPGA **[emulator]** (KS10FPGA 5090e7a1, pcflags.v): as the microcode.
 
-Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The instructions are those with a word of SPEC/FLAGS (discrepancies.md).
+Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The case is each instruction whose microcode has a word with SPEC/FLAGS, SPEC/ASHOV or SPEC/EXPTST (discrepancies.md lists them), so the table gives all instructions.
 
 Program:
 
@@ -432,7 +432,7 @@ Program:
 ASH and ASHC: Trap 1 from the last step only.
 
 - Instructions: ASH, ASHC; operands: `lost_bit_before_last_step`.
-- Differs: flags:TRAP1, pc.
+- Differs: flags:TRAP1.
 - Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
 
 Sources:
@@ -459,7 +459,7 @@ Program:
 DMUL: Trap 1 from an Overflow that was set before.
 
 - Instructions: DMUL; operands: `start_flags` (flags ['AROV']).
-- Differs: flags:TRAP1, pc.
+- Differs: flags:TRAP1.
 - Origin: [`discrepancies.md`](discrepancies.md), "Trap 1 and Trap 2: each flag word loads them".
 
 Sources:

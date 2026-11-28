@@ -12,11 +12,11 @@
 //! the ACs, PC, the program flags and the words at 2000 and 2001.
 //!
 //! `ks10-core-soft` does not copy the microcode: the two can differ by a
-//! decision. Each such difference is an entry of [`KNOWN`], with the
-//! section of docs/emulator.md ("Differences from the microcode") that
-//! gives the reason. A new difference is a finding: record it there and
-//! here, or correct the model or `ks10-core-soft`. It is not a value to
-//! adjust (AGENTS.md, "Tests").
+//! decision. Each such difference is a case of spec/impldef.toml with the
+//! comparison `mask` for this run (`uop_soft`); the test leaves out the
+//! fields of the case ([`masks`]). A new difference is a finding: record
+//! it in the table with its sources, or correct the model or
+//! `ks10-core-soft`. It is not a value to adjust (AGENTS.md, "Tests").
 
 mod common;
 
@@ -24,6 +24,7 @@ use common::{FILLS, label, machine, run_until, symbol};
 use ks10_core_soft::flags::Flags;
 use ks10_core_uop::alu;
 use ks10_core_uop::machine::Machine;
+use pdp10::impldef::{self, Compare, Field, Operands};
 use pdp10::{Half, W36};
 
 const CODE: usize = 0o1000;
@@ -782,61 +783,63 @@ fn flag_cases() -> Vec<Case> {
     v
 }
 
-/// A known difference between the model and `ks10-core-soft`. For a case
-/// where `applies` is true, `normalize` takes the different parts out of
-/// both states before the comparison; the other parts must agree.
-struct Known {
-    /// The section of docs/emulator.md, "Differences from the microcode".
-    why: &'static str,
-    applies: fn(&Case) -> bool,
-    normalize: fn(&mut State),
-}
-
 const TRAPS: u32 = Flags::TRAP1 | Flags::TRAP2;
 const CARRIES: u32 = Flags::CRY0 | Flags::CRY1;
 
-/// The opcode of a case.
-fn opcode(c: &Case) -> u64 {
-    c.inst >> 27
+/// The operands of a case for the predicates of spec/impldef.toml.
+fn operands(c: &Case) -> Operands {
+    let word = |x: u64| match x {
+        0..0o20 => c.ac[x as usize],
+        x if x == E as u64 => c.mem[0],
+        x if x == E as u64 + 1 => c.mem[1],
+        _ => 0,
+    };
+    let y = c.inst & 0o777777;
+    Operands {
+        inst: W36::wrap(c.inst),
+        ac: c.ac.map(W36::wrap),
+        e: [word(y), word((y + 1) & 0o777777)].map(W36::wrap),
+        flags: c.flags,
+    }
 }
 
-/// The known differences (docs/discrepancies.md has the sources of each).
-const KNOWN: &[Known] = &[
-    // The microcode loads Trap 1 and Trap 2 at each flag word, and ASH
-    // gives Trap 1 the overflow of the last step; ks10-core-soft follows
-    // the PRM: an instruction only sets a trap flag, on any overflow.
-    Known {
-        why: "Trap 1 and Trap 2",
-        applies: |c| c.flags & TRAPS != 0 || matches!(opcode(c), 0o116 | 0o240 | 0o244),
-        normalize: |s| s.flags &= !TRAPS,
-    },
-    // The complement of the high word sets Carry 0 and Carry 1 in the
-    // microcode; ks10-core-soft follows the PRM.
-    Known {
-        why: "DMOVN carry flags",
-        applies: |c| matches!(opcode(c), 0o121 | 0o125),
-        normalize: |s| s.flags &= !CARRIES,
-    },
-    // Each QMULT of the microcode sets Carry 0 and Carry 1 from a partial
-    // product; ks10-core-soft follows the PRM.
-    Known {
-        why: "DMUL carry flags",
-        applies: |c| opcode(c) == 0o116,
-        normalize: |s| s.flags &= !CARRIES,
-    },
-];
-
-/// Do the two states agree, after the normalization of the known
-/// differences that apply to the case? The second value names them.
-fn agree(known: &[Known], c: &Case, got: &State, want: &State) -> (bool, Vec<&'static str>) {
-    let (mut got, mut want) = (got.clone(), want.clone());
-    let mut used = Vec::new();
-    for k in known.iter().filter(|k| (k.applies)(c)) {
-        (k.normalize)(&mut got);
-        (k.normalize)(&mut want);
-        used.push(k.why);
+/// The masks of spec/impldef.toml for a case: the name of each table
+/// case with the comparison `mask` in this run, and its flags. A table
+/// case that says that this run makes no such case, or a field that the
+/// test cannot leave out, is an error of the table.
+fn masks(c: &Case) -> Result<Vec<(&'static str, u32)>, String> {
+    let mut v = Vec::new();
+    for (t, cmp) in impldef::matching(impldef::Run::UopSoft, &operands(c)) {
+        match cmp {
+            Compare::Exact => {}
+            Compare::Mask => {
+                let mut m = 0;
+                for f in t.differs {
+                    match f {
+                        Field::Flags(bits) => m |= impldef::flag_mask(bits),
+                        _ => return Err(format!("{}: the test cannot mask {f:?}", t.name)),
+                    }
+                }
+                v.push((t.name, m));
+            }
+            Compare::Skip | Compare::NotGenerated => {
+                return Err(format!(
+                    "spec/impldef.toml: {} is {cmp:?} in uop_soft",
+                    t.name
+                ));
+            }
+        }
     }
-    (got == want, used)
+    Ok(v)
+}
+
+/// Do the two states agree without the flags of the masks?
+fn agree(masks: &[(&'static str, u32)], got: &State, want: &State) -> bool {
+    let m = masks.iter().fold(0, |m, (_, f)| m | f);
+    let (mut got, mut want) = (got.clone(), want.clone());
+    got.flags &= !m;
+    want.flags &= !m;
+    got == want
 }
 
 fn all_cases() -> Vec<Case> {
@@ -854,16 +857,24 @@ fn single_instructions_agree_with_the_software_processor() {
     let mut differences = Vec::new();
     let mut known = std::collections::BTreeMap::new();
     let mut known_cases = 0;
+    let mut table = Vec::new();
     for fill in FILLS {
         for c in all_cases() {
+            let m = match masks(&c) {
+                Ok(m) => m,
+                Err(e) => {
+                    table.push(format!("{}: {e}", c.name));
+                    continue;
+                }
+            };
             let want = reference(&c).expect(&c.name);
             let got = model(fill, &c);
             match got {
                 Ok(got) if got == want => {}
-                Ok(got) if agree(KNOWN, &c, &got, &want).0 => {
+                Ok(got) if agree(&m, &got, &want) => {
                     known_cases += 1;
-                    for why in agree(KNOWN, &c, &got, &want).1 {
-                        *known.entry(why).or_insert(0) += 1;
+                    for (why, _) in &m {
+                        *known.entry(*why).or_insert(0) += 1;
                     }
                 }
                 Ok(got) => differences.push(format!(
@@ -885,7 +896,10 @@ fn single_instructions_agree_with_the_software_processor() {
         stops.len()
     );
     for (why, count) in &known {
-        println!("KNOWN, applied to {count}: {why}");
+        println!("spec/impldef.toml, masked in {count}: {why}");
+    }
+    for t in &table {
+        println!("TABLE {t}");
     }
     for s in &stops {
         println!("STOP {s}");
@@ -893,45 +907,39 @@ fn single_instructions_agree_with_the_software_processor() {
     for d in &differences {
         println!("DIFF {d}");
     }
-    assert!(differences.is_empty() && stops.is_empty());
+    assert!(differences.is_empty() && stops.is_empty() && table.is_empty());
 }
 
-/// A known difference takes out only its own part of the states.
+/// A mask takes out only its own flags.
 #[test]
-fn a_known_difference_hides_only_its_part() {
-    let known = [Known {
-        why: "test",
-        applies: |c| c.name == "x",
-        normalize: |s| s.flags = 0,
-    }];
-    let c = |name: &str| Case {
-        name: name.into(),
-        inst: 0,
-        ac: [0; 16],
-        mem: [0; 2],
-        flags: 0,
-    };
+fn a_mask_hides_only_its_flags() {
     let want = State {
         pc: 0o1001,
         flags: 0,
         ac: [0; 16],
         mem: [0; 2],
     };
-    let flags = State {
-        flags: 0o400000,
+    let trap = State {
+        flags: Flags::TRAP1,
+        ..want.clone()
+    };
+    let carry = State {
+        flags: Flags::CRY0,
         ..want.clone()
     };
     let pc = State {
         pc: 0o1002,
-        ..flags.clone()
+        ..trap.clone()
     };
-    assert_eq!(agree(&known, &c("x"), &flags, &want), (true, vec!["test"]));
-    assert_eq!(agree(&known, &c("y"), &flags, &want), (false, vec![]));
-    assert!(!agree(&known, &c("x"), &pc, &want).0);
+    let m = [("t", Flags::TRAP1)];
+    assert!(agree(&m, &trap, &want));
+    assert!(!agree(&[], &trap, &want));
+    assert!(!agree(&m, &carry, &want));
+    assert!(!agree(&m, &pc, &want));
 }
 
 /// The flag rules of the microcode that `ks10-core-soft` does not have
-/// ([`KNOWN`]), on the model alone. The expected flags come from the
+/// (the masks of spec/impldef.toml), on the model alone. The expected flags come from the
 /// reading of DPE9 and the microcode in docs/discrepancies.md ("Trap 1 and
 /// Trap 2: each flag word loads them", "DMOVN: the carry flags of the
 /// complement", "DMUL: the carry flags of QMULT").

@@ -108,38 +108,38 @@ for its restart.
   Each difference between them is a case of level B in
   [`impldef.md`](impldef.md), or an item of level C.
 - The masks of each comparison come from `spec/impldef.toml` through a
-  generator. A mask written by hand is not permitted. Some masks of today
-  do not fit the table yet ("Masks of the differential runs").
+  generator. A mask written by hand is not permitted ("Masks of the
+  differential runs").
 
 ### Masks of the differential runs
 
-These are the masks of 2026-11-28 and their fit with the table:
+`spec/gen_impldef.py` writes the processor cases of the table into
+`emu/pdp10/src/impldef/table.rs`. `pdp10::impldef` has one Rust function
+for each predicate of the table, with its own tests. Each run uses them
+in this way:
 
 - The runs against SIMH and KLH10 (`emu/ks10-core-soft/tests/oracle.rs`)
-  skip whole cases. Each skip matches a case with the compare value
-  `skip`. Some skips cover more than the case:
-  - all FDV cases;
-  - ASH and ASHC above a count of places;
-  - DIV in KLH10 without the sign of the quotient.
-- The table `KNOWN` of `emu/ks10-core-uop/tests/instructions.rs` masks
-  flags between the two models. Its three entries are for the cases
-  `trap-flags-clear`, `ash-trap-last-step`, `dmul-trap-old-overflow`
-  (one entry for the three), `dmovn-carry` and `dmul-carry`. The masks
-  cover more than the cases: each ASH, ASHC and DMUL, and each DMOVN.
-- These do not fit a case of the table:
-  - The limits of the case generator: no jumps, I/O or EXTEND,
-    normalized operands only, exponent differences of 60 or less. They
-    belong to a list of coverage, not to cases.
-  - The exclusion of the halt status block (500 to 520) from E. It hides a
-    difference with no case yet: `emu/ks10-core-soft` writes the block at
-    a HALT, and KLH10 does not.
-- Some predicates need code: the IMUL product range and the DIV magnitude
-  test. The table names them from a fixed vocabulary (`PREDICATES` in
-  `spec/gen_impldef.py`). One Rust module will implement each name once,
-  with its own tests.
-- The generator does not write the masks yet. Until it does, the masks of
-  `oracle.rs` and `instructions.rs` stay, and each one has its case in
-  the table.
+  do not compare a case with the value `skip`. For a case with `mask`,
+  they leave out its flags in each PC word.
+- The single-instruction test of `ks10-core-uop` against
+  `ks10-core-soft` (`emu/ks10-core-uop/tests/instructions.rs`) leaves out
+  the flags of each case with `mask`.
+- If a case with `not-generated` matches an instruction of a run, the run
+  fails: the table is wrong. A mask of a field that the run cannot leave
+  out also fails the run.
+- A predicate that needs a run, not the operands (`page_fail`,
+  `unnormalized_operand`), does not match. Such a case has the value
+  `not-generated` in each run.
+
+These limits of the case generators are not cases of the table. They
+belong to the coverage of each run ([`emulator.md`](emulator.md),
+"Differential runs"):
+
+- no jumps, I/O or EXTEND, normalized operands only, exponent differences
+  of 60 or less in the runs against SIMH and KLH10;
+- no E in the halt status block (500 to 520). This hides a difference
+  with no case yet: `emu/ks10-core-soft` writes the block at a HALT, and
+  KLH10 does not.
 
 ## A test on a real KS10
 

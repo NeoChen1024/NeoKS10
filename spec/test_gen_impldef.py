@@ -13,7 +13,7 @@ DOCS = {
     "unknown": "- Floating point with odd operands.\n",
     "difference": "- Bits 16 and 17 of the page fail word.\n",
 }
-NAMES = {"CIRC", "ASH"}
+NAMES = {"CIRC": (0o247, None), "ASH": (0o240, None), "APRID": (0o700, 0)}
 CASE = {
     "name": "circ",
     "title": "CIRC",
@@ -64,6 +64,9 @@ class CheckTest(unittest.TestCase):
 
     def test_instructions_come_from_the_instruction_table(self):
         self.rejects(case(instructions=["CIRCX"]), "instructions")
+        self.rejects(case(instructions="some"), "instructions")
+        gi.check_case(case(instructions="all"), DOCS, NAMES)
+        self.rejects(case(instructions="all", when={"pred": "left_shift_over"}), "named instructions")
 
     def test_the_predicate_and_its_parameters(self):
         self.rejects(case(when={"pred": "every"}), "predicate")
@@ -103,11 +106,46 @@ class CheckTest(unittest.TestCase):
         gi.check_case(dev, DOCS, NAMES)
 
 
+class RustTest(unittest.TestCase):
+    def render(self, **change):
+        return gi.render_rust([case(**change)], NAMES)
+
+    def test_a_case_in_rust(self):
+        t = self.render()
+        self.assertIn('name: "circ"', t)
+        self.assertIn("ops: Ops::Codes(&[Op { code: 0o247, ac: None }])", t)
+        self.assertIn("pred: Pred::Any,", t)
+        self.assertIn("differs: &[Field::Ac],", t)
+        self.assertIn("simh: Skip,", t)
+        self.assertIn("uop_soft: Exact,", t)
+
+    def test_ac_dispatch_all_and_parameters(self):
+        t = self.render(instructions=["APRID"])
+        self.assertIn("Op { code: 0o700, ac: Some(0o0) }", t)
+        self.assertIn("ops: Ops::All", self.render(instructions="all"))
+        t = self.render(instructions=["ASH"], when={"pred": "left_shift_over", "ASH": 28})
+        self.assertIn("Pred::LeftShiftOver(&[(0o240, 28)])", t)
+        t = self.render(when={"pred": "start_flags", "flags": ["TRAP2", "TRAP1"]})
+        self.assertIn("Pred::StartFlags(&[9, 10])", t)
+        self.assertIn("Pred::ExponentDifferenceOver(60)",
+                      self.render(when={"pred": "exponent_difference_over", "n": 60}))
+
+    def test_flags_as_dec_bits(self):
+        # PRM 1982, 2.9: Overflow is bit 0, Carry 0 bit 1, No Divide bit 12.
+        t = self.render(differs=["flags:AROV,CRY0,NODIV", "pfw:16-17"])
+        self.assertIn("differs: &[Field::Flags(&[0, 1, 12]), Field::Pfw(16, 17)],", t)
+
+    def test_the_device_cases_are_left_out(self):
+        dev = case(area="device", choice={"machine": "KSDEFS"})
+        self.assertNotIn("circ", gi.render_rust([dev], NAMES))
+
+
 class TableTest(unittest.TestCase):
     def test_the_table_of_the_repository_passes(self):
         cases = gi.load(ROOT)
         self.assertTrue(cases)
         self.assertIn("### fdv-quotient", gi.render(cases))
+        self.assertIn('name: "fdv-quotient"', gi.render_rust(cases, gi.opcodes(ROOT)))
 
 
 if __name__ == "__main__":

@@ -758,15 +758,16 @@ in the cases:
 
 - Jumps, XCT, EXTEND, the stack and byte instructions, BLT, the
   instructions of the previous context and the I/O instructions.
-- For SIMH (`skip_simh`): CIRC, which SIMH does not have on the KS10;
+- The cases of [`impldef.md`](impldef.md) with the value `skip` for an
+  emulator (`pdp10::impldef`). For SIMH: CIRC, which SIMH does not have on the KS10;
   FDV and its forms, because SIMH fails a DSKCB test and differs in bit
   35 for many normalized operands; ASH and ASHC left shifts of many
   places, the shift count -256, IMUL products of magnitude 2^35 + 1 to
   2^36 - 1 with a negative sign, IDIV of -2^35 by 1 or -1, DIV of -2^70
   by 0.
-- For KLH10 (`skip_klh10`): HLLE of a positive source with a bit of 1 to
+- For KLH10: HLLE of a positive source with a bit of 1 to
   3 set; DIV with a high word of the magnitude equal to the divisor.
-- Each of these has its entry in `docs/discrepancies.md`, and `skip`
+- Each of these has its entry in `docs/discrepancies.md`, and the table
   decides from the inputs only. The test counts the cases that no named
   emulator compares; with both emulators, the count must be 0.
 - `tests/oracle/cases` also has directed cases for operands that the

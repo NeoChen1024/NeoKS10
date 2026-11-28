@@ -14,9 +14,10 @@
 //! words at E and E + 1.
 //!
 //! There is no paging and no interrupt. E is a direct address (no index,
-//! no indirect) outside the code. The generator and `skip` decide from the
+//! no indirect) outside the code. The generator and `plan` decide from the
 //! inputs only, before either emulator runs (docs/emulator.md,
-//! "Differential runs", has the coverage).
+//! "Differential runs", has the coverage). `plan` takes the skips and the
+//! masks of each emulator from spec/impldef.toml (`pdp10::impldef`).
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -26,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use ks10_core_soft::flags::Flags;
 use ks10_core_soft::{Machine, Stop};
+use pdp10::impldef::{self, Compare, Field, Operands};
 use pdp10::instructions::{self as ins, Class};
 use pdp10::{Half, W36};
 
@@ -161,99 +163,78 @@ enum Float {
     Double,
 }
 
-/// The shift count of E (ks10.47, SHIFT: bits 18 and 28 to 35).
-fn count(e: u32) -> i32 {
-    let low = (e & 0o377) as i32;
-    if e & 0o400000 != 0 { low - 256 } else { low }
-}
-
-/// Cases where a reference emulator does not do what the microcode does,
-/// from the inputs. Each arm has its entry in docs/discrepancies.md.
-fn skip(c: &Case, r: Ref) -> Option<&'static str> {
-    match r {
-        Ref::Simh => skip_simh(c),
-        Ref::Klh10 => skip_klh10(c),
-    }
-}
-
-fn skip_klh10(c: &Case) -> Option<&'static str> {
-    let op = &ins::OPS[(c.inst >> 27) as usize];
-    let e = (c.inst & 0o777777) as u32;
-    let a = ((c.inst >> 23) & 0o17) as usize;
+/// The operands of a case for the predicates of spec/impldef.toml. The
+/// cases start with all flags clear.
+fn operands(c: &Case) -> Operands {
+    let y = (c.inst & 0o777777) as u32;
     let word = |x: u32| {
         if x < 0o20 {
             c.ac[x as usize]
         } else {
-            c.mem[&x]
+            c.mem.get(&x).copied().unwrap_or(0)
         }
     };
-    match op.dram.j {
-        // "HLLE in KLH10": a positive source with a bit of 1 to 3 set.
-        // HLLEI has the source 0,,E.
-        // "DIV in KLH10: a high word equal to the divisor" (the special
-        // case of kn10ops.c, ddivstep).
-        "DIV" => {
-            let signed = |w: u64| (w as i64) << 28 >> 28;
-            let lo = c.ac[(a + 1) & 0o17];
-            let d = (i128::from(signed(c.ac[a])) << 35) | i128::from(lo & 0o377777_777777);
-            let v = if op.code & 0o3 == 1 {
-                u64::from(e)
-            } else {
-                word(e)
-            };
-            let dv = i128::from(signed(v)).abs();
-            let high = d.abs() >> 35;
-            (dv != 0 && high == dv).then_some("DIV high word equal to the divisor")
-        }
-        "HLLE" if op.code != 0o531 => {
-            let src = if op.code == 0o532 { c.ac[a] } else { word(e) };
-            (src >> 35 == 0 && (src >> 32) & 0o7 != 0).then_some("HLLE bits 1 to 3")
-        }
-        _ => None,
+    Operands {
+        inst: W36::wrap(c.inst),
+        ac: c.ac.map(W36::wrap),
+        e: [word(y), word((y + 1) & 0o777777)].map(W36::wrap),
+        flags: 0,
     }
 }
 
-fn skip_simh(c: &Case) -> Option<&'static str> {
-    let op = &ins::OPS[(c.inst >> 27) as usize];
-    let e = (c.inst & 0o777777) as u32;
-    let a = ((c.inst >> 23) & 0o17) as usize;
-    let n = count(e);
-    let signed = |w: u64| (w as i64) << 28 >> 28;
-    // C(E), or 0,,E for the immediate form (mode 1 of 220 to 227).
-    let operand = || {
-        if op.code & 0o3 == 1 {
-            u64::from(e)
-        } else if e < 0o20 {
-            c.ac[e as usize]
-        } else {
-            c.mem[&e]
-        }
+/// What the run does with a case, from spec/impldef.toml: skip it (with
+/// the name of the table case), or compare it without the flags of a mask
+/// (bits of the left half of the PC word).
+enum Plan {
+    Skip(&'static str),
+    Compare { flags: u32 },
+}
+
+fn plan(c: &Case, r: Ref) -> Plan {
+    let run = match r {
+        Ref::Simh => impldef::Run::Simh,
+        Ref::Klh10 => impldef::Run::Klh10,
     };
-    match op.dram.j {
-        // "CIRC".
-        "CIRC" => Some("CIRC"),
-        // "FDV: the quotient".
-        "FDV" => Some("FDV"),
-        // "IDIV of -2^35 by 1 or -1".
-        "IDIV" => (c.ac[a] == 1 << 35 && signed(operand()).unsigned_abs() == 1)
-            .then_some("IDIV -2^35 by 1 or -1"),
-        // "DIV of -2^70 by 0".
-        "DIV" => {
-            (c.ac[a] == 1 << 35 && c.ac[(a + 1) & 0o17] & 0o377777_777777 == 0 && operand() == 0)
-                .then_some("DIV of -2^70 by 0")
+    let mut flags = 0;
+    for (t, cmp) in impldef::matching(run, &operands(c)) {
+        match cmp {
+            Compare::Exact => {}
+            Compare::Skip => return Plan::Skip(t.name),
+            Compare::NotGenerated => panic!(
+                "seed {}: spec/impldef.toml says that the {} run makes no case of {}",
+                c.seed,
+                r.name(),
+                t.name
+            ),
+            Compare::Mask => {
+                for f in t.differs {
+                    match f {
+                        Field::Flags(bits) => flags |= impldef::flag_mask(bits),
+                        _ => panic!("{}: the run cannot mask {f:?}", t.name),
+                    }
+                }
+            }
         }
-        // "IMUL: a negative product that does not fit".
-        "IMUL" => {
-            let p = i128::from(signed(c.ac[a])) * i128::from(signed(operand()));
-            let m = p.unsigned_abs();
-            (p < 0 && m > 1 << 35 && m >> 35 == 1).then_some("IMUL negative overflow")
-        }
-        // "Shift count -256".
-        "ASH" | "LSH" | "ASHC" | "LSHC" if n == -256 => Some("shift count -256"),
-        // "ASH and ASHC: a left shift of many places".
-        "ASH" if n > 28 => Some("ASH left by more than 28"),
-        "ASHC" if n > 29 => Some("ASHC left by more than 29"),
-        _ => None,
+    }
+    Plan::Compare { flags }
+}
+
+fn skip(c: &Case, r: Ref) -> Option<&'static str> {
+    match plan(c, r) {
+        Plan::Skip(why) => Some(why),
+        Plan::Compare { .. } => None,
+    }
+}
+
+/// A run without the masked flags in its PC words.
+fn masked(run: &Run, flags: u32) -> Run {
+    let mut records = run.records.clone();
+    for r in &mut records {
+        r[0] &= !(u64::from(flags) << 18);
+    }
+    Run {
+        records,
+        mem: run.mem.clone(),
     }
 }
 
@@ -727,7 +708,8 @@ fn random_instructions() {
         .into_iter()
         .chain((first..first + count).map(Case::new))
         .collect();
-    // KS10_ORACLE_NOSKIP: run the cases of `skip` too (to count them).
+    // KS10_ORACLE_NOSKIP: run the skipped cases of spec/impldef.toml too
+    // (to count them).
     let noskip = std::env::var_os("KS10_ORACLE_NOSKIP").is_some();
     // KS10_ORACLE_SHOW: how many to print; KS10_ORACLE_ONLY: only these
     // instructions (names with commas).
@@ -755,24 +737,32 @@ fn random_instructions() {
         let r = *r;
         let mut skipped: BTreeMap<&str, usize> = BTreeMap::new();
         let mut cases = Vec::new();
+        let mut masks = Vec::new();
         for c in &all {
-            match skip(c, r).filter(|_| !noskip) {
-                Some(why) => *skipped.entry(why).or_default() += 1,
-                None => cases.push(c),
+            match plan(c, r) {
+                Plan::Skip(why) if !noskip => *skipped.entry(why).or_default() += 1,
+                Plan::Skip(_) => {
+                    cases.push(c);
+                    masks.push(0);
+                }
+                Plan::Compare { flags } => {
+                    cases.push(c);
+                    masks.push(flags);
+                }
             }
         }
         let mut failures: Vec<(&Case, String)> = Vec::new();
         let mut records = 0;
-        for chunk in cases.chunks(BATCH) {
+        for (chunk, mask) in cases.chunks(BATCH).zip(masks.chunks(BATCH)) {
             let batch: Vec<Case> = chunk.iter().map(|c| (*c).clone()).collect();
             let theirs =
                 reference(r, prog, &dir, &batch).unwrap_or_else(|e| panic!("{}: {e}", r.name()));
-            for (c, b) in chunk.iter().zip(theirs) {
+            for ((c, b), &m) in chunk.iter().zip(theirs).zip(mask) {
                 match ours(c) {
                     Err(e) => failures.push((c, format!("seed {}: ks10: {e}\n", c.seed))),
                     Ok(a) => {
                         records += a.records.len();
-                        if let Some(d) = difference(c, &a, &b, r) {
+                        if let Some(d) = difference(c, &masked(&a, m), &masked(&b, m), r) {
                             failures.push((c, d));
                         }
                     }

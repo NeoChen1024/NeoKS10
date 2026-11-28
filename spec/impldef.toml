@@ -1,7 +1,8 @@
 # Implementation differences of the KS10 with the ITS microcode: one case
 # for each behaviour in which the implementations differ. This file is the
 # only list of these cases (AGENTS.md, "Sources of truth"). spec/gen_impldef.py
-# checks it and writes docs/impldef.md. docs/conformance.md gives the levels.
+# checks it and writes docs/impldef.md and the table of the differential
+# runs (emu/pdp10/src/impldef/table.rs). docs/conformance.md gives the levels.
 #
 # A case comes from a section of docs/discrepancies.md (`discrepancy`, the
 # heading), from an item of docs/unknowns.md (`unknown`, a part of its
@@ -21,7 +22,9 @@
 #   level_b       for level "B": why the PRM does not define the behaviour
 #                 and no DEC diagnostic checks it (docs/conformance.md)
 #   state         "open", "decided", or "confirmed" (on a real KS10)
-#   instructions  mnemonics of spec/instructions.toml (processor cases)
+#   instructions  mnemonics of spec/instructions.toml (processor cases).
+#                 A mnemonic is one opcode (AOJ is 340 only). "all" is each
+#                 instruction.
 #   when          the operands of the case: a predicate of the vocabulary of
 #                 gen_impldef.py (PREDICATES) and its parameters
 #   differs       the state that differs: "ac", "mem", "pc", "flags:N,N",
@@ -156,7 +159,7 @@ sources = [
   { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, FAD", does = "0 for a difference of 65 or more" },
 ]
 choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
-compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "exact" }
 program = """
 	MOVE 1,[201400,,0]	; 1.0
 	FAD 1,[700400,,0]	; -2^-66: an exponent difference of 66
@@ -242,7 +245,7 @@ area = "processor"
 level = "A"
 state = "open"
 discrepancy = "FDV: the quotient"
-instructions = ["FDV", "FDVL", "FDVM", "FDVB", "FDVR", "FDVRI", "FDVRM", "FDVRB"]
+instructions = ["FDV", "FDVM", "FDVB", "FDVR", "FDVRI", "FDVRM", "FDVRB"]
 when = { pred = "any" }
 differs = ["ac", "mem"]
 sources = [
@@ -388,7 +391,7 @@ level = "B"
 level_b = "The case shows only with traps off: with traps on, the trap instruction clears the trap flags (PRM 1982, p. 2-78). With paging off, the PRM says that the trap flags have no effect, and it does not say that a later instruction clears them (p. 2-78). No DEC KS10 diagnostic tests the case: DSKDA clears TRAP 1 and TRAP 2 in its simulated flags (DSKDAM, SENTRY, CHECK; a reading of the KLAD sources, 2026-11-27)."
 state = "decided"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
-instructions = ["ADD", "SUB", "MOVN", "MOVM", "AOJ", "AOS", "SOJ", "SOS", "DADD", "DSUB", "DMOVN", "DMOVNM", "DMUL", "JFCL", "PUSHJ", "JSR", "JSP"]
+instructions = "all"
 when = { pred = "start_flags", flags = ["TRAP1", "TRAP2"] }
 differs = ["flags:TRAP1,TRAP2"]
 sources = [
@@ -399,7 +402,7 @@ sources = [
   { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "as the microcode" },
 ]
 choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
-compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "mask" }
 program = """
 	MOVE 1,[377777,,777777]
 	ADD 1,[1]		; overflow: Trap 1
@@ -407,7 +410,7 @@ program = """
 	JSP 3,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
 	HALT .
 """
-note = "Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The instructions are those with a word of SPEC/FLAGS (discrepancies.md)."
+note = "Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The case is each instruction whose microcode has a word with SPEC/FLAGS, SPEC/ASHOV or SPEC/EXPTST (discrepancies.md lists them), so the table gives all instructions."
 
 [[case]]
 name = "ash-trap-last-step"
@@ -418,7 +421,7 @@ state = "open"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
 instructions = ["ASH", "ASHC"]
 when = { pred = "lost_bit_before_last_step" }
-differs = ["flags:TRAP1", "pc"]
+differs = ["flags:TRAP1"]
 sources = [
   { who = "DPE9", mark = "microcode", ref = "M8620-0-DPE9 rev B, E85, E78; simple.42, ASHL, ASHCL", does = "each step loads Trap 1 with its own overflow, so Trap 1 is the overflow of the last step; Overflow holds" },
   { who = "PRM", mark = "manual", ref = "PRM 1982, p. 2-41, ASH, ASHC", does = "Overflow and Trap 1 if any bit of significance is lost" },
@@ -445,7 +448,7 @@ state = "open"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
 instructions = ["DMUL"]
 when = { pred = "start_flags", flags = ["AROV"] }
-differs = ["flags:TRAP1", "pc"]
+differs = ["flags:TRAP1"]
 sources = [
   { who = "microcode", mark = "microcode", ref = "simple.42, DMTRAP", does = "after CLR FPD, set Trap 1 if Overflow is set, also from an earlier instruction" },
   { who = "PRM", mark = "manual", ref = "PRM 1982, p. 2-78, overflow trapping", does = "the overflow condition sets Trap 1, not the state of the Overflow flag" },
@@ -453,7 +456,7 @@ sources = [
   { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, op10dmul", does = "as SIMH" },
 ]
 choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
-compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "mask" }
 program = """
 	JRST 2,@[400000,,.+1]	; Overflow set, Trap 1 clear
 	DMOVE 1,[EXP 0,2]

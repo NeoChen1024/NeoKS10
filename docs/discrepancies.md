@@ -344,8 +344,9 @@ any step. This is a design decision of 2026-11-28. Only the first of the
 three cases meets the rule for level B of
 [`conformance.md`](conformance.md)
 ([`emulator.md`](emulator.md), "Differences from the microcode"). The
-single-instruction test of the model has the case in its table `KNOWN`,
-and `the_flag_rules_of_the_microcode` checks the rule on the model
+single-instruction test of the model masks the cases by the table
+([`impldef.md`](impldef.md)), and `the_flag_rules_of_the_microcode`
+checks the rule on the model
 alone (`emu/ks10-core-uop/tests/instructions.rs`).
 
 ## DMOVN: the carry flags of the complement
