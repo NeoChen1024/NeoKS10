@@ -768,11 +768,14 @@ open ([`conformance.md`](conformance.md)).
 For a case of the table with the value `mask` in this run, the test
 leaves out the flags of the case; the other parts must agree
 (`pdp10::impldef`, generated from `spec/impldef.toml`). **[measured]**
-2026-11-28: 510 of the 712 runs agree, and 202 differ only in the masked
+2026-11-28: 512 of the 714 runs agree, and 202 differ only in the masked
 flags. The masks apply to 140 runs for `trap-flags-clear`, 24 for
 `dmovn-carry` and 70 for `dmul-carry`. Without the mask of `dmul-carry`,
 62 runs differ. `ks10-core-soft` follows the microcode in the cases
 `ash-trap-last-step` and `dmul-trap-old-overflow`, so they need no mask.
+The case "DMUL, with Overflow only" starts with Overflow set and the trap
+flags clear, so that `trap-flags-clear` does not hide the second one:
+without DMTRAP in `ks10-core-soft`, its two runs differ.
 The test `the_flag_rules_of_the_microcode` checks these flag rules on
 the model alone, with values from the reading of DPE9 and the microcode.
 A mutant of the model that holds Trap 1 fails it.

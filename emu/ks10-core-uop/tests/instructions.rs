@@ -780,6 +780,16 @@ fn flag_cases() -> Vec<Case> {
             });
         }
     }
+    // Overflow from an earlier instruction, with the trap flags clear: the
+    // case dmul-trap-old-overflow of spec/impldef.toml, which the fills
+    // above do not separate (the fill "all flags" sets Trap 1 too).
+    v.push(Case {
+        name: "DMUL, with Overflow only".into(),
+        inst: i(0o116, 1, e),
+        ac: acs(&[(1, 0), (2, 3)]),
+        mem: [0, 5],
+        flags: F::AROV,
+    });
     v
 }
 
