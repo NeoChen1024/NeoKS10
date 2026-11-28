@@ -570,7 +570,9 @@ guest:
 - While an `expect` waits, the thread looks at the CTY output after each
   instruction that prints. The match has the count of that instruction.
 - A `send` comes after the previous step of the script, when the CTY
-  output is quiet ("Input without loss").
+  output is quiet ("Input without loss"). If the output does not stop
+  within 1000000000 instructions of the previous step, the script stops
+  with an error.
 - Other commands run at once, at the count of the previous step.
 - If a step of a `run --script` script fails, `run` ends with exit
   status 1 and names the file and the line. If a step of a `script run`

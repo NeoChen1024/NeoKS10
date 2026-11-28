@@ -1079,6 +1079,9 @@ impl Engine {
                     // (docs/emulator.md, "Input without loss").
                     let quiet = self.m.console.quiet_at();
                     if !quiet.is_some_and(|t| self.m.count >= t.max(r.at)) {
+                        if self.m.count >= r.at.saturating_add(EXPECT_STEPS) {
+                            self.script_fail(line, "send: the CTY output did not stop");
+                        }
                         return;
                     }
                     r.s.steps.pop_front();
@@ -1133,7 +1136,8 @@ impl Engine {
             match (&r.wait, r.s.steps.front()) {
                 (Some((_, until, _)), _) => end = end.min(*until),
                 (None, Some((_, Command::CtySend(_)))) => {
-                    end = end.min(self.m.console.quiet_bound().max(r.at));
+                    let limit = r.at.saturating_add(EXPECT_STEPS);
+                    end = end.min(self.m.console.quiet_bound().max(r.at).min(limit));
                 }
                 _ => {}
             }
