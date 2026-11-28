@@ -452,7 +452,8 @@ tells the operator to give `halt` first.
 
 - CTY mode: the terminal is in raw mode. Each key goes to the CTY, and
   the CTY output goes to the terminal.
-- Command mode: the escape character Ctrl-\ (034) opens the prompt. The
+- Command mode: the escape character Ctrl-] (035) opens the prompt.
+  Ctrl-\ (034) opens it too (decision 3). The
   guest goes on. CTY output waits in a buffer and appears when the prompt
   closes. An empty line or `cty` returns to CTY mode.
 
@@ -977,7 +978,12 @@ Decided on 2026-11-26:
 1. The binary name is `neoks10`.
 2. The configuration file is TOML. The crates `toml` and `serde` read
    it.
-3. The escape character is Ctrl-\ (034), as in the ITS build scripts.
+3. The escape character is Ctrl-] (035), decided on 2026-11-28. Ctrl-\
+   (034) is the key of the console mode of the 8080 program **[its]**
+   (`hcore.m80`, `USER`). If the 8080 program is the console, Ctrl-\
+   goes to it. The high-level console has no console mode, so Ctrl-\
+   opens the operator prompt there too. A script of the ITS build for
+   `neoks10` sets `emulator_escape` to 035.
 4. The DZ11 listeners are on the loopback address only by default.
 
 Decided on 2026-11-27:

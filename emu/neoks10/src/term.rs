@@ -2,7 +2,9 @@
 //! CTY mode and command mode.
 //!
 //! - CTY mode: raw mode; each key goes to the CTY, the CTY output goes to
-//!   the terminal. The escape character Ctrl-\ (034) opens the prompt.
+//!   the terminal. The escape character Ctrl-] (035) opens the prompt.
+//!   Ctrl-\ (034) opens it too: it is the key of the console mode of the
+//!   8080 program, and the prompt has the functions of that mode.
 //! - Command mode: the reedline prompt. The guest goes on; its CTY output
 //!   waits until the prompt closes. An empty line, `cty`, Ctrl-C or Ctrl-D
 //!   close the prompt.
@@ -22,9 +24,14 @@ use reedline::{
 use crate::cmd::{self, Command, Units};
 use crate::engine::{Out, Reply, Request};
 
-/// The escape character of the ITS build scripts (build/pdp10-ks/build.tcl,
-/// `emulator_escape`).
-pub const ESCAPE: u8 = 0o34;
+/// The escape character of the operator prompt (docs/emulator.md, design
+/// decision 3).
+pub const ESCAPE: u8 = 0o35;
+
+/// Ctrl-\: the 8080 program leaves user mode with it and gives its prompt
+/// `KS10>` **[its]** (hcore.m80, `USER`, `CNBCK`). The high-level console
+/// has no such mode, so this key opens the operator prompt too.
+pub const CONSOLE_ESCAPE: u8 = 0o34;
 
 /// The completer of the console: the command table and the units. The
 /// console updates the units after each command.
@@ -142,8 +149,17 @@ fn printer(rx: Receiver<Out>, held: Arc<AtomicBool>) {
 /// The terminal loop. Returns when the operator quits or the machine
 /// thread ends.
 /// The bytes that a key sends on a terminal, for the CTY. `None` for
-/// the escape character and for keys without bytes.
+/// the escape characters and for keys without bytes.
 pub fn key_bytes(k: &KeyEvent) -> Option<Vec<u8>> {
+    terminal_bytes(k).filter(|b| !is_escape_bytes(b))
+}
+
+fn is_escape_bytes(b: &[u8]) -> bool {
+    b == [ESCAPE] || b == [CONSOLE_ESCAPE]
+}
+
+/// The bytes that a key sends on a terminal.
+fn terminal_bytes(k: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let alt = k.modifiers.contains(KeyModifiers::ALT);
     let mut b = match k.code {
@@ -171,9 +187,6 @@ pub fn key_bytes(k: &KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Left => b"\x1b[D".to_vec(),
         _ => return None,
     };
-    if b == [ESCAPE] {
-        return None;
-    }
     if alt {
         b.insert(0, 0o33);
     }
@@ -181,7 +194,7 @@ pub fn key_bytes(k: &KeyEvent) -> Option<Vec<u8>> {
 }
 
 fn is_escape(k: &KeyEvent) -> bool {
-    k.code == KeyCode::Char('4') && k.modifiers.contains(KeyModifiers::CONTROL)
+    terminal_bytes(k).is_some_and(|b| is_escape_bytes(&b))
 }
 
 /// Text in raw mode: each line ends with CR LF.
@@ -249,7 +262,7 @@ pub fn run(tx: Sender<Request>, ended: &AtomicBool) {
 
 /// The prompt, until it closes. True if the operator quits. The terminal
 /// is in raw mode also while a command runs, so that Ctrl-C and Ctrl-\
-/// do not stop the program.
+/// (SIGQUIT) do not stop the program.
 fn command_mode(
     tx: &Sender<Request>,
     ed: &mut Reedline,
@@ -311,15 +324,21 @@ mod tests {
         assert_eq!(key_bytes(&key(KeyCode::Char('a'), n)), Some(b"a".to_vec()));
         assert_eq!(key_bytes(&key(KeyCode::Char('z'), c)), Some(vec![0o32]));
         assert_eq!(key_bytes(&key(KeyCode::Char('c'), c)), Some(vec![3]));
-        assert_eq!(key_bytes(&key(KeyCode::Char('5'), c)), Some(vec![0o35]));
+        assert_eq!(key_bytes(&key(KeyCode::Char('6'), c)), Some(vec![0o36]));
         assert_eq!(key_bytes(&key(KeyCode::Enter, n)), Some(b"\r".to_vec()));
         assert_eq!(key_bytes(&key(KeyCode::Backspace, n)), Some(vec![0o177]));
         assert_eq!(
             key_bytes(&key(KeyCode::Char('g'), KeyModifiers::ALT)),
             Some(b"\x1bg".to_vec())
         );
-        // Ctrl-\ (034) is the escape character, not a key for the CTY.
-        assert!(is_escape(&key(KeyCode::Char('4'), c)));
-        assert_eq!(key_bytes(&key(KeyCode::Char('4'), c)), None);
+        // Ctrl-] (035) and Ctrl-\ (034) open the prompt; they are not
+        // keys for the CTY. A terminal reports them as Ctrl-5 and Ctrl-4,
+        // or as Ctrl-] and Ctrl-\.
+        for ch in ['5', ']', '4', '\\'] {
+            assert!(is_escape(&key(KeyCode::Char(ch), c)), "{ch}");
+            assert_eq!(key_bytes(&key(KeyCode::Char(ch), c)), None, "{ch}");
+        }
+        assert!(!is_escape(&key(KeyCode::Char('6'), c)));
+        assert!(!is_escape(&key(KeyCode::Char(']'), n)));
     }
 }

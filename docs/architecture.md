@@ -18,7 +18,7 @@ program `neoks10`, which supplies the memory and all the devices.
 | Memory bridge | PL | A cache in block RAM and a write queue to the PS memory. The measurements of [`mem-path-experiment.md`](mem-path-experiment.md) decide its size and its write policy |
 | Devices | PS, software | Disk (RH11, RP06), tape (RH11, TM03), terminal lines (DZ11), Chaosnet (CH11), IMP interface |
 | Front panel | PL to HDMI | Lamps only. The PL makes the video signal. It has no switches and does not change the processor state |
-| Operation | PS, software | The operator console of `neoks10`: a command line, a configuration file, a control socket and scripts. Its escape character is Ctrl-\. The functions of the prompt `KS10>` of the 8080 program (`msg.m80`, `KSPRMT`) **[its]** are commands of the operator console |
+| Operation | PS, software | The operator console of `neoks10`: a command line, a configuration file, a control socket and scripts. Its escape character is Ctrl-]. The functions of the prompt `KS10>` of the 8080 program (`msg.m80`, `KSPRMT`) **[its]** are commands of the operator console |
 
 The processor implements the behaviour of the ITS microcode: ITS paging
 and the ITS I/O instructions. The paging of TOPS-10 and TOPS-20 is not a

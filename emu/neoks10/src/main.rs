@@ -23,7 +23,7 @@ usage: neoks10 run [CONFIG] [--control PATH | --no-control] [--record FILE]
        neoks10 ctl [--control PATH] [--json] COMMAND...
        neoks10 help [--markdown]
 
-In `run`, Ctrl-\\ opens the operator prompt; `help` there lists the commands.
+In `run`, Ctrl-] opens the operator prompt; `help` there lists the commands.
 Pace: `normal` takes the clock of the KS10 from the wall clock (as SIMH
 does) and cannot be recorded; `fast` does not wait; `realtime` keeps the
 virtual time to the wall clock. `run` with a terminal or a control socket

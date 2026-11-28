@@ -80,7 +80,7 @@ octal. Bits have DEC numbers.
 | Input: word 32 ← 400 + the character, then register 116 ← 1, twice. The 8080 does not read word 32 first: a character that the KS10 did not take is overwritten | `hcore.m80`, `TENCHR`, `INTCH` | simpler: the next character comes only after the KS10 took the previous one (word 32 is 0) and after `INPUT_GAP` instructions (`console.rs`, `poll`). See [`emulator.md`](emulator.md), "Input without loss" |
 | Input: the 8080 clears bit 7 (parity) of the character | `hcore.m80`, `INTCH` | not done: the byte goes as it is. A terminal sends ASCII; `cty send \xHH` can set bit 7 |
 | Output: the KS10 writes 400 + the character into word 33 and sets APR flag 2.2. The 8080 looks at word 35 first, then word 33; byte 20–27 must be 1. It waits for its UART, writes 0 into word 33 and sets APR flag 1.5 | `hcore.m80`, `LIVE10`, `CHRRDY`, `TTOCOM`, `POKE10`; ksdefs, `80INT` | same words and flags; simpler time: the output comes `OUTPUT_DELAY` instructions later (`console.rs`) |
-| User mode: the 8080 serves word 33 and checks word 31 only in user mode. A halt or Ctrl-\ ends user mode | `hcore.m80`, `N4`, `LIVE10`, `USER`, `END.USR`, `CLRUSE` | simpler: no user mode; word 33 is served at all times. Ctrl-\ opens the operator prompt |
+| User mode: the 8080 serves word 33 and checks word 31 only in user mode. A halt or Ctrl-\ ends user mode | `hcore.m80`, `N4`, `LIVE10`, `USER`, `END.USR`, `CLRUSE` | simpler: no user mode; word 33 is served at all times. Ctrl-\ opens the operator prompt, as Ctrl-] does ([`emulator.md`](emulator.md), decision 3) |
 
 ## Keep-alive and KLINIK
 

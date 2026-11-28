@@ -58,7 +58,7 @@ printf '[disk.0]\nimage = "/tmp/rp0.dsk"\n' > /tmp/its.toml
 target/release/neoks10 run /tmp/its.toml
 ```
 
-The terminal is the KS10 console terminal (CTY). Ctrl-\ opens the
+The terminal is the KS10 console terminal (CTY). Ctrl-] opens the
 console prompt. Type `boot disk`, then an empty line to return to the CTY.
 At the `DSKDMP` prompt, type `its`, then ESC and `g`. The console commands
 are in [`docs/console.md`](docs/console.md).
