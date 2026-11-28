@@ -140,30 +140,16 @@ schematics (MP00540):
 
 ## CSL board
 
-The model of the board in `emu/ks10-csl` needs these answers. The CSL
-drawings (MP00540) and EK-OKS10-TM-002 are the places to look. Until
+The model of the board in `emu/ks10-csl` needs these answers. Until
 then, the model takes each value as a parameter, or stops.
 
-- **Answer not found.** The meaning of each bit of port 300 (`TTYSW`) and its value on
-  a board. `PWRUP` takes the stop bit and the length bit of each line
-  from bits 4 to 7 (KNS10.PNT).
-- **Answer not found.** The level of the CTS input of the two USARTs.
-- **Answer not found.** The baud rate of each line. The baud rate generators get
-  2.45 MHz (EK-OKS10-TM-002 5.8.1); their division is not in the text.
-- **Answer not found.** The KLINIK USART as a source of INT, and the instruction that
-  the board gives when the 8080 takes an interrupt. The CTY R RDY drives
-  INT (EK-OKS10-TM-002 5.8.1), and the code at 70 is the interrupt
-  handler (KNS10.PNT, "BEGIN CODE FOR HANDLING INTERRUPTS"). The model
-  keeps INT inactive.
-- **Answer not found.** The addresses above 21777, and the effect of a write to the
-  ROM. CSL2 ADR 13 and CSL2 8 ENB enable the RAM (EK-OKS10-TM-002
-  Table 5-8), so the RAM can appear at more addresses. The model stops at
-  such an access.
-- **Answer not found.** The bit of the data byte that sets each control flip-flop of
-  the register writes 100 to 212, and the bits of the reads 0 to 3, 100
-  to 103 and 300 to 303. EK-OKS10-TM-002 Tables 5-9 and 5-10 give only
-  the register of each flip-flop. The CSL3 and CSL4 drawings (MP00540)
-  have the bits.
+- **Answer not found.** The level of the bits 4 to 7 of the ports 302 and
+  303. No element of the CSL drawings drives them (MP00540 CSLA rev C,
+  E157). The model reads them as 1.
+- **Answer not found.** The baud rate of a board. DIP switches set it
+  (MP00540 CSL2 rev E, E10 and the 34702 E4; CSL9 rev D, E11), and the
+  8080 cannot read it. The model takes the time of one character as a
+  parameter.
 
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 

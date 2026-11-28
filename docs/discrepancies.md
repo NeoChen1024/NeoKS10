@@ -437,3 +437,35 @@ The microcode-level model uses the microcode (rank 1).
 The project uses KSDEFS (rank 1): a write of 1 clears the bit
 (`emu/ks10-machine/src/unibus.rs`, `MemStatus`). ITS does not write the
 register.
+
+## Register 210 bit 7 (MEM) and the NXM check
+
+- **[manual]** EK-OKS10-TM-002 Table 5-9, CSL3 MEM (register 210):
+  "Enable reception of DATA CYCLE on KS10 bus. When 0, allows check of
+  nonexistent memory (NXM) circuit."
+- **[its]** KNS10.PNT (version 5.2), `EMCONT` and `DMGO`: the value 343
+  and 362 set bit 7, with the comment "CHECK NXM".
+- **[manual]** MP00540 CSL3 rev D: E135 takes CSL3 MEM H at CSL4 GRANT (1),
+  and its output starts the counter E134. After four R clocks, NON XMEM
+  sets NEXM (E145), unless CSL8 MEM BUSY L clears E135 first.
+
+The project uses the drawing and the program: bit 7 = 1 enables the NXM
+check (`emu/ks10-csl/src/ks10.rs`).
+
+## The clear of NEXM
+
+- **[its]** KNS10.PNT, `NIXOM`: `OUT BUSCTL` with 0, "CLR NXM BIT AFTR
+  REPORT".
+- **[manual]** MP00540 CSL3 rev D, E145: only CSL3 CSL REG WRT 114 L
+  clears NEXM. A write to 210 changes E135, the start of the NXM counter.
+
+The project uses the drawing: a write to 114 or 115 clears NEXM.
+
+## The bits of register 210 for a memory write
+
+- **[manual]** EK-OKS10-TM-002 Table 5-10: a memory write sets BUS REQ,
+  XMIT ADR and XMIT DATA.
+- **[its]** KNS10.PNT, `DMGO`: 362 also sets MEM and LATCH DATA, with the
+  comment "LATCH DATA SENT PREVENTS FALSE PAR ERR".
+
+The model has no bus write yet. When it has one, it follows the program.

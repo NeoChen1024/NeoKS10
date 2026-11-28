@@ -4,14 +4,16 @@
 //! The 8080 is the crate `x80-core` (design decision 2026-11-28,
 //! docs/console-interface.md). Time counts in 8080 states.
 //!
-//! The model has no KS10 yet. A write to a port of the KS10 goes into a
-//! log. A read of a port, or an access to an address, that has no model
-//! stops the run with the reason; the model does not return a guessed
-//! value (docs/unknowns.md, "CSL board").
+//! The ports of the KS10 go to `ks10::Interface`, and through it to a
+//! `Ks10`. Each write to them goes into a log for the tests. A port, an
+//! address or a function without a model stops the run with the reason;
+//! the model does not return a guessed value (docs/unknowns.md, "CSL
+//! board").
 
 use x80_core::i8080::{I8080, Inputs};
 use x80_core::{Bus, Control, Exit, MemoryAccess};
 
+use crate::ks10::{Interface, Ks10};
 use crate::rom;
 use crate::usart::{self, Usart};
 
@@ -27,23 +29,24 @@ const CTYDAT: u8 = 0o200;
 const CTYCTL: u8 = 0o201;
 const REMDAT: u8 = 0o202;
 const REMCTL: u8 = 0o203;
-/// The port of the switches that `PWRUP` reads (CONDEF.M80: `TTYSW`).
-const TTYSW: u8 = 0o300;
+/// The instruction that the 8228 gives at an interrupt acknowledge: RST 7.
+/// Its INTA pin is on +12 V through 1 kOhm (MP00540 CSL2 rev E, E50, R32),
+/// which selects this instruction (Intel 98-153B p. 5-8).
+const RST_7: u8 = 0o377;
 
-/// The output ports of the KS10 that the console program uses (KNS10.PNT,
-/// all `OUT` instructions). The model logs a write to them.
-fn ks10_output(port: u8) -> bool {
-    matches!(port, 0o100..=0o116 | 0o204..=0o206 | 0o210 | 0o212)
-}
-
-/// The inputs of the board that have no source yet (docs/unknowns.md).
+/// The inputs of the board that are not part of the drawings.
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
-    /// The value of port 300 (`TTYSW`).
+    /// Bits 7 to 4 of port 300 (`TTYSW`) as the 8080 reads them: the DIP
+    /// switches E173 #3, #2, #7 and #4 (CSLA E166). A switch that is on
+    /// reads 1. The bits 3 to 0 come from the board.
     pub switches: u8,
-    /// The CTS input of both USARTs is low (asserted).
-    pub cts: bool,
-    /// The time of one character on the serial lines, in 8080 states.
+    /// The carrier inputs of the CTY and of the KLINIK line (port 302
+    /// bits 1 and 0, CSL9).
+    pub cty_carrier: bool,
+    pub klinik_carrier: bool,
+    /// The time of one character on the serial lines, in 8080 states. The
+    /// baud rate is open (docs/unknowns.md).
     pub char_states: u64,
 }
 
@@ -69,6 +72,15 @@ pub enum Stop {
     Usart { pc: u16, port: u8, mode: u8 },
     /// An opcode that `x80-core` does not execute.
     Opcode { pc: u16, opcode: u8 },
+    /// A KS10 register or bus function without a model.
+    Ks10 {
+        pc: u16,
+        port: u8,
+        value: u8,
+        what: &'static str,
+    },
+    /// A USART access while CSL9 USART CLR holds it in reset.
+    UsartReset { pc: u16, port: u8 },
     /// The 8080 halted. No interrupt can come yet.
     Halt { pc: u16 },
     /// An exit of `x80-core` that this model does not know.
@@ -105,6 +117,18 @@ impl std::fmt::Display for Stop {
                     "PC {pc:06o}: opcode {opcode:03o} not executed by x80-core"
                 )
             }
+            Stop::Ks10 {
+                pc,
+                port,
+                value,
+                what,
+            } => write!(
+                f,
+                "PC {pc:06o}: OUT {port:03o} ({value:03o}): {what} without a model"
+            ),
+            Stop::UsartReset { pc, port } => {
+                write!(f, "PC {pc:06o}: USART {port:03o} while it is held in reset")
+            }
             Stop::Halt { pc } => write!(f, "PC {pc:06o}: HLT, and no interrupt can come"),
             Stop::Other { pc } => write!(f, "PC {pc:06o}: an exit of x80-core without a model"),
         }
@@ -112,10 +136,12 @@ impl std::fmt::Display for Stop {
 }
 
 /// Everything around the 8080.
-struct Board {
+struct Board<K: Ks10> {
     rom: Vec<u8>,
     ram: Vec<u8>,
-    switches: u8,
+    config: Config,
+    interface: Interface,
+    ks10: K,
     cty: Usart,
     rem: Usart,
     now: u64,
@@ -125,7 +151,7 @@ struct Board {
     stop: Option<Stop>,
 }
 
-impl Board {
+impl<K: Ks10> Board<K> {
     fn ram_index(address: u16) -> Option<usize> {
         let i = usize::from(address.wrapping_sub(RAM_START));
         (address >= RAM_START && i < RAM_SIZE).then_some(i)
@@ -148,12 +174,15 @@ impl Board {
     }
 }
 
-impl Bus for Board {
-    fn read(&mut self, address: u16, _kind: MemoryAccess) -> u8 {
+impl<K: Ks10> Bus for Board<K> {
+    fn read(&mut self, address: u16, kind: MemoryAccess) -> u8 {
+        if kind == MemoryAccess::InterruptAcknowledge {
+            return RST_7;
+        }
         if usize::from(address) < rom::SIZE {
             return self.rom[usize::from(address)];
         }
-        if let Some(i) = Board::ram_index(address) {
+        if let Some(i) = Self::ram_index(address) {
             return self.ram[i];
         }
         let pc = self.pc;
@@ -166,7 +195,7 @@ impl Bus for Board {
     }
 
     fn write(&mut self, address: u16, value: u8, _kind: MemoryAccess) {
-        if let Some(i) = Board::ram_index(address) {
+        if let Some(i) = Self::ram_index(address) {
             self.ram[i] = value;
             return;
         }
@@ -179,61 +208,85 @@ impl Bus for Board {
     }
 
     fn input(&mut self, port: u8) -> u8 {
+        let pc = self.pc;
+        if matches!(port, CTYDAT..=REMCTL) && self.interface.power_up_reset {
+            self.stop(Stop::UsartReset { pc, port });
+            return 0;
+        }
         match port {
             CTYDAT => self.cty.read_data(self.now),
             CTYCTL => self.cty.status(self.now),
             REMDAT => self.rem.read_data(self.now),
             REMCTL => self.rem.status(self.now),
-            TTYSW => self.switches,
             _ => {
-                let pc = self.pc;
-                self.stop(Stop::Input { pc, port });
-                0
+                let c = self.config;
+                let carrier = (c.cty_carrier, c.klinik_carrier);
+                match self.interface.read(port, c.switches, carrier, &self.ks10) {
+                    Some(v) => v,
+                    None => {
+                        self.stop(Stop::Input { pc, port });
+                        0
+                    }
+                }
             }
         }
     }
 
     fn output(&mut self, port: u8, value: u8) {
-        match port {
-            CTYDAT => self.cty.write_data(value, self.now),
-            REMDAT => self.rem.write_data(value, self.now),
-            CTYCTL | REMCTL => self.control(port, value),
-            _ => {}
+        let pc = self.pc;
+        if matches!(port, CTYDAT..=REMCTL) && self.interface.power_up_reset {
+            self.stop(Stop::UsartReset { pc, port });
+            return;
         }
-        if ks10_output(port) || matches!(port, CTYCTL | REMCTL) {
+        if !matches!(port, CTYDAT | REMDAT) {
             self.writes.push(Write {
                 at: self.now,
                 port,
                 value,
             });
-        } else if !matches!(port, CTYDAT | REMDAT) {
-            let pc = self.pc;
-            self.stop(Stop::Output { pc, port, value });
+        }
+        match port {
+            CTYDAT => self.cty.write_data(value, self.now),
+            REMDAT => self.rem.write_data(value, self.now),
+            CTYCTL | REMCTL => self.control(port, value),
+            _ => match self.interface.write(port, value, self.now, &mut self.ks10) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.writes.pop();
+                    self.stop(Stop::Output { pc, port, value });
+                }
+                Err(what) => self.stop(Stop::Ks10 {
+                    pc,
+                    port,
+                    value,
+                    what,
+                }),
+            },
         }
     }
 }
 
-impl Control for Board {
+impl<K: Ks10> Control for Board<K> {
     fn stop_requested(&mut self) -> bool {
         self.stop.is_some()
     }
 }
 
-/// The INT input of the 8080 stays high: its source on the board is not
-/// known yet (docs/unknowns.md).
-impl Inputs for Board {}
+/// INT is RxRDY of the two USARTs (MP00540 CSL2 rev E, E23). The model of
+/// the USART has no receiver yet, so INT stays inactive.
+impl<K: Ks10> Inputs for Board<K> {}
 
-/// The CSL board after power-up.
-pub struct Csl {
+/// The CSL board after power-up, with the KS10 `K`.
+pub struct Csl<K: Ks10> {
     cpu: I8080,
-    board: Board,
+    board: Board<K>,
 }
 
-impl Csl {
+impl<K: Ks10> Csl<K> {
     /// The board with the ROM `rom` (`rom::load`), at the power-up state:
     /// the 8080 at address 0 (`HCORE.M80`, "AT POWER UP, ALWAYS BEGIN AT
-    /// 0000") and the USARTs after RESET.
-    pub fn new(rom: Vec<u8>, config: Config) -> Result<Csl, String> {
+    /// 0000") and the USARTs in reset.
+    pub fn new(rom: Vec<u8>, config: Config, ks10: K) -> Result<Csl<K>, String> {
         if rom.len() != rom::SIZE {
             return Err(format!("ROM of {} bytes, not {}", rom.len(), rom::SIZE));
         }
@@ -246,9 +299,12 @@ impl Csl {
                 // The content of the RAM at power-up has no source; PWRUP
                 // clears it before it reads it.
                 ram: vec![0; RAM_SIZE],
-                switches: config.switches,
-                cty: Usart::new(config.cts, config.char_states),
-                rem: Usart::new(config.cts, config.char_states),
+                config,
+                interface: Interface::default(),
+                ks10,
+                // CTS is on GND (CSL2 E42, CSL9 E6).
+                cty: Usart::new(true, config.char_states),
+                rem: Usart::new(true, config.char_states),
                 now: 0,
                 pc: 0,
                 writes: Vec::new(),
@@ -314,23 +370,39 @@ impl Csl {
     pub fn writes(&self) -> &[Write] {
         &self.board.writes
     }
+
+    /// The KS10 side of the board.
+    pub fn interface(&self) -> &Interface {
+        &self.board.interface
+    }
+
+    pub fn ks10(&self) -> &K {
+        &self.board.ks10
+    }
+
+    pub fn ks10_mut(&mut self) -> &mut K {
+        &mut self.board.ks10
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::ks10::Detached;
+
     const CONFIG: Config = Config {
         switches: 0,
-        cts: true,
+        cty_carrier: false,
+        klinik_carrier: false,
         char_states: 0,
     };
 
     /// A ROM with `code` at address 0 and zero bytes after it.
-    fn csl(code: &[u8]) -> Csl {
+    fn csl(code: &[u8]) -> Csl<Detached> {
         let mut rom = vec![0; rom::SIZE];
         rom[..code.len()].copy_from_slice(code);
-        Csl::new(rom, CONFIG).unwrap()
+        Csl::new(rom, CONFIG, Detached::default()).unwrap()
     }
 
     // Opcodes of 98-153B p. 4-15 (the summary of the instructions).
@@ -358,9 +430,10 @@ mod tests {
 
     #[test]
     fn a_read_of_an_unknown_port_stops_the_run() {
-        let mut c = csl(&[IN, 0o301]);
-        assert_eq!(c.run(1000), Err(Stop::Input { pc: 0, port: 0o301 }));
-        assert_eq!(c.run(1000), Err(Stop::Input { pc: 0, port: 0o301 }));
+        // CSL3 E93 decodes no read of 204 to 277 but the USARTs.
+        let mut c = csl(&[IN, 0o204]);
+        assert_eq!(c.run(1000), Err(Stop::Input { pc: 0, port: 0o204 }));
+        assert_eq!(c.run(1000), Err(Stop::Input { pc: 0, port: 0o204 }));
     }
 
     #[test]
@@ -379,7 +452,7 @@ mod tests {
     #[test]
     fn the_ram_is_one_kib_at_20000() {
         let mut c = csl(&[
-            MVI_A, 0o42, STA, 0o377, 0o43, LDA, 0o377, 0o43, OUT, 0o210, HLT,
+            MVI_A, 0o42, STA, 0o377, 0o43, LDA, 0o377, 0o43, OUT, 0o204, HLT,
         ]);
         assert_eq!(c.run(1000), Err(Stop::Halt { pc: 10 }));
         assert_eq!(c.writes()[0].value, 0o42);
@@ -402,6 +475,29 @@ mod tests {
                 write: true
             })
         );
+    }
+
+    #[test]
+    fn the_usarts_wait_for_the_first_write_to_100() {
+        let mut c = csl(&[OUT, 0o201]);
+        assert_eq!(c.run(1000), Err(Stop::UsartReset { pc: 0, port: 0o201 }));
+        // An asynchronous mode word (98-153B p. 5-140).
+        let mut c = csl(&[MVI_A, 0o116, OUT, 0o101, OUT, 0o201, JMP, 6, 0]);
+        assert_eq!(c.run(1000), Ok(()));
+    }
+
+    #[test]
+    fn a_bus_function_needs_a_ks10() {
+        let mut c = csl(&[MVI_A, 0o343, OUT, 0o210]);
+        assert!(matches!(
+            c.run(1000),
+            Err(Stop::Ks10 {
+                pc: 2,
+                port: 0o210,
+                value: 0o343,
+                ..
+            })
+        ));
     }
 
     #[test]

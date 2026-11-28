@@ -14,3 +14,5 @@ workspace = true
 # The 8080 of the board (docs/console-interface.md, design decision
 # 2026-11-28).
 x80-core = "0.1.0"
+ks10-core-uop = { path = "../ks10-core-uop" }
+pdp10 = { path = "../pdp10" }

@@ -95,7 +95,7 @@ octal. Bits have DEC numbers.
 
 This is the plan of the comparison (design decision 2026-11-28). The
 model of the board (`emu/ks10-csl`) runs the program up to its first
-access to the KS10 bus.
+bus write, with `ks10-core-uop` as the KS10.
 
 ### The program
 
@@ -138,19 +138,51 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   9: 1.638 MHz, so a state is 610 ns. Table 5-8 gives the ROM chips at 0,
   4000, 10000 and 14000 (octal), the RAM at 20000 to 21777, and the
   decode of the register reads and writes.
-- The model has the ROM, the RAM and the two USARTs at ports 200 to 203. The USART model has the
+- The model has the ROM, the RAM and the two USARTs at ports 200 to 203.
+  The USARTs stay in reset until the first write to port 100 or 101
+  (MP00540 CSL5 rev D, E145; CSL9 rev D, E65).
+- The KS10 side (`emu/ks10-csl/src/ks10.rs`) has the bits of each register
+  from the drawings: MP00540 CSL3 rev D, CSL4 rev C, CSL5 rev D, CSL6
+  rev C, CSL7 and CSL8 rev B, CSLA rev C. The multiplexers of the reads
+  invert, so the program complements each read (`CMA`). The program
+  writes the KS10 word into the 4x4 memories (ports 102 to 115): an odd
+  port writes the word of the command/address cycle, an even port the
+  word of the data cycle.
+- It reaches the KS10 through the trait `Ks10`, at the level of the bus
+  functions of EK-OKS10-TM-002 Table 5-10. `Detached` is a board without
+  a KS10. The microcode-level model implements the trait: its memory, and
+  its inputs RUN, EXECUTE, CONTINUE, TRAP EN, CACHE EN and 1 MSEC EN.
+- A bus function completes at the write to register 210. The KS10 clock
+  is stopped while the program runs one: only the command CS (`CSCMD`)
+  writes 206 to start it. The model has the memory read and the examine
+  bus. The other functions, INT 10, the KS10 clock and the maintenance
+  clock stop the run. The USART model has the
   asynchronous mode, the transmitter and the status (98-153B, p. 5-136 to
   5-142).
-- A write to a port of the KS10 goes into a log. A read of a port or an
-  access to an address without a model stops the run with its reason.
-- Time counts in 8080 states. The inputs without a source are parameters
-  of the model: port 300, the CTS input and the time of one character
-  ([`unknowns.md`](unknowns.md), "CSL board").
+- Each write to a port of the KS10 goes into a log. A port, an address or
+  a function without a model stops the run with its reason. The 8080
+  does not decode A14 and A15, and only A13 enables the RAM (CSL2 rev E,
+  E36, E65): the ROM and the RAM repeat in the address space. The program
+  does not use those addresses, and the model stops at them.
+- At an interrupt, the 8228 gives `RST 7`: its INTA pin is on +12 V
+  through 1 kOhm (CSL2 rev E, E50, R32; Intel 98-153B p. 5-8). INT is
+  RxRDY of either USART (CSL2 E23). The model of the USART has no
+  receiver yet.
+- Time counts in 8080 states. The switches of port 300 (E173), the
+  carrier inputs and the time of one character are parameters of the
+  model ([`unknowns.md`](unknowns.md), "CSL board").
 - **[measured]** 2026-11-28, `make csl` (`emu/ks10-csl/tests/power_up.rs`):
   from power-up, the program prints `KS10 CSL.V5.2` on the CTY and makes
-  the 22 writes that the listing gives, from `PWRUP` to `EMCONT`. It then
-  stops at the read of port 301 in `BUSRESP`. With port 300 = 157 and a
-  character time of 0, this is after 450978 states.
+  the 22 writes that the listing gives, from `PWRUP` to `EMCONT`. The ROM
+  checksum of `PWRUP` passes. With one changed byte in chip E73, the
+  program prints `?CHK2` first. Without a KS10, the run stops at the
+  memory read of `EMCONT`: with the switches 0110 and a character time
+  of 0, after 450916 states.
+- **[measured]** 2026-11-28, `make csl` (`emu/ks10-csl/tests/ks10.rs`): with
+  `ks10-core-uop`, `EM1` reads memory location 0 and `EBCMD` examines the
+  bus. `SYSUP` waits 35396146 states (21.6 s), prints `BT AUTO`, and
+  `BTAUT` starts the boot. The run stops at the first bus write: 140001
+  to register 763001 of UBA 1, the first element of `DSKSEQ`.
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
   98-153B p. 4-15, with the condition true and false. The other 12
@@ -165,8 +197,7 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
 of `CONDEF.M80`). The model of the board needs a source for each one: the
 CSL drawings of MP00540 or EK-OKS10-TM-002. EK-OKS10-TM-002 Table 5-9
 gives the control flip-flops of each register write, and Table 5-10 the
-flip-flops of each bus operation. A port without a source goes into
-[`unknowns.md`](unknowns.md). A read of it stops the model.
+flip-flops of each bus operation. The CSL drawings give the bits.
 
 | Ports | IN | OUT |
 |---|---|---|

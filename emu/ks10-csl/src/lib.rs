@@ -8,7 +8,9 @@
 //! and `KS10_CSL_DIR` names that directory.
 
 pub mod board;
+pub mod ks10;
 pub mod rom;
+pub mod uop;
 pub mod usart;
 
 pub use board::{Config, Csl, Stop, Write};

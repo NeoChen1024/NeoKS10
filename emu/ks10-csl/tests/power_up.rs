@@ -1,5 +1,5 @@
 //! The power-up of the console program version 5.2 on the model of the
-//! board, up to the first read of a port without a model.
+//! board without a KS10, up to its first bus function.
 //!
 //! The expected values come from the listing KNS10.PNT (labels `PWRUP`,
 //! `MRINT`, `SMFINI`, `STATEM`, `XXX230`, `XXX235`, `INIMS`, `EM1`,
@@ -8,21 +8,22 @@
 //! instruction that it uses prints `?CHK`.
 
 use ks10_csl::board::{Config, Csl, Stop, Write};
+use ks10_csl::ks10::Detached;
 use ks10_csl::rom;
 
-/// Port 300 (`TTYSW`). `PWRUP` complements it and takes the CTY stop bit
-/// from bit 7, the CTY length bit from bit 6, the KLINIK stop bit from
-/// bit 5 and the KLINIK length bit from bit 4. This value gives
-/// 10010000 after the complement: two stop bits and 7 data bits on the
-/// CTY (mode 312), one stop bit and 8 data bits on the KLINIK line
-/// (mode 116).
-const SWITCHES: u8 = 0o157;
+/// The switches of port 300 (`TTYSW`), bits 7 to 4 as the 8080 reads
+/// them. `PWRUP` complements the port and takes the CTY stop bit from bit
+/// 7, the CTY length bit from bit 6, the KLINIK stop bit from bit 5 and
+/// the KLINIK length bit from bit 4. This value gives 1001 after the
+/// complement: two stop bits and 7 data bits on the CTY (mode 312), one
+/// stop bit and 8 data bits on the KLINIK line (mode 116).
+const SWITCHES: u8 = 0o140;
 
 /// The banner `INIMS`: a backslash is a CR and an LF (`PLNE`).
 const BANNER: &[u8] = b"\r\nKS10 CSL.V5.2\r\n";
 
-/// The writes from power-up to the read of port 301 in `BUSRESP`, without
-/// the characters of the USARTs. `PARBT`, `TRAPEN` and `STATE` are zero at
+/// The writes from power-up to the bus function of `EMCONT`, without the
+/// characters of the USARTs. `PARBT`, `TRAPEN` and `STATE` are zero at
 /// the first `MRINT`: `CLRLP` cleared the RAM, and `PRMLST` comes later.
 const WRITES: [(u8, u8); 22] = [
     (0o212, 0o000), // PWRUP: OUT CPUCTL
@@ -49,10 +50,13 @@ const WRITES: [(u8, u8); 22] = [
     (0o210, 0o343), // EMCONT
 ];
 
-/// The stop: `BUSRESP` reads port 301 (`SMSTS`), which has no model yet.
-const STOP: Stop = Stop::Input {
-    pc: 0o15232,
-    port: 0o301,
+/// The stop: `EMCONT` starts a memory read (343 to register 210), and the
+/// board has no KS10.
+const STOP: Stop = Stop::Ks10 {
+    pc: 0o5017,
+    port: 0o210,
+    value: 0o343,
+    what: "a bus function without a KS10",
 };
 
 /// More 8080 states than the power-up needs, at the longest character time
@@ -67,14 +71,15 @@ fn rom() -> Option<Vec<u8>> {
     Some(rom::load(&rom::image_dir(&d)).expect("the ROM images"))
 }
 
-fn power_up(rom: Vec<u8>, char_states: u64) -> Csl {
+fn power_up(rom: Vec<u8>, char_states: u64) -> Csl<Detached> {
     let config = Config {
         switches: SWITCHES,
-        cts: true,
+        cty_carrier: false,
+        klinik_carrier: false,
         char_states,
     };
-    let mut c = Csl::new(rom, config).unwrap();
-    let cty = |c: &Csl| String::from_utf8_lossy(c.cty_output()).into_owned();
+    let mut c = Csl::new(rom, config, Detached::default()).unwrap();
+    let cty = |c: &Csl<Detached>| String::from_utf8_lossy(c.cty_output()).into_owned();
     match c.run(LIMIT) {
         Err(s) if s == STOP => {}
         Err(s) => panic!("{s}, not {STOP}; CTY: {:?}", cty(&c)),
@@ -83,17 +88,18 @@ fn power_up(rom: Vec<u8>, char_states: u64) -> Csl {
     c
 }
 
-fn writes(c: &Csl) -> Vec<(u8, u8)> {
+fn writes(c: &Csl<Detached>) -> Vec<(u8, u8)> {
     c.writes()
         .iter()
         .map(|&Write { port, value, .. }| (port, value))
         .collect()
 }
 
-/// A character time for the second run: about one character at 9600 baud
-/// with an 8080 state of 500 ns. An example for the test, not a value of
-/// the board (docs/unknowns.md).
-const SLOW: u64 = 2292;
+/// A character time for the second run: about one character of 11 bits
+/// at 9600 baud with an 8080 state of 610 ns (docs/console-interface.md).
+/// An example for the test: the baud rate of the board is open
+/// (docs/unknowns.md).
+const SLOW: u64 = 1877;
 
 #[test]
 fn the_rom_prints_its_banner() {
@@ -108,7 +114,7 @@ fn the_rom_prints_its_banner() {
         assert_eq!(c.klinik_output(), b"");
         assert_eq!(writes(&c), WRITES);
         eprintln!(
-            "character time {char_states}: the banner and the stop at port 301 after {} states",
+            "character time {char_states}: the banner and the stop at the bus function after {} states",
             c.now()
         );
         now.push(c.now());
