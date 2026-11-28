@@ -93,6 +93,14 @@ pub mod memctl {
         pub const ECC_LSB: u32 = 24;
         /// Backup power low (R/C) (%KEPWR).
         pub const PWR: u64 = 0o40000000;
+        /// Error address: bits 14-35 of the last command/address cycle (R).
+        pub const ERA: u64 = 0o17777777;
+        pub const ERA_LSB: u32 = 0;
+        /// Force check bits CP, C40, C20, C10, C04, C02, C01 (W).
+        pub const FRC: u64 = 0o376;
+        pub const FRC_LSB: u32 = 1;
+        /// Disable error correction (W).
+        pub const OFF: u64 = 0o1;
     }
 }
 

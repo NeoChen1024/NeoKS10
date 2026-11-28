@@ -33,6 +33,12 @@ const UBA_BUSY_CYCLES: u32 = 4;
 /// (EK-OKS10-TM-002 5.3.6), taken as microcycles.
 const CONSOLE_DATA_CYCLES: u32 = 2;
 
+/// The microcycles from the command/address of a read of the memory
+/// status register to its data cycle **[estimate]**: the memory controller
+/// sends the word with I/O DATA CYCLE and no I/O BUSY (EK-OKS10-TM-002
+/// 5.7.8); the time is taken as that of the console.
+const MEMORY_STATUS_CYCLES: u32 = 2;
+
 /// The register address bit that the console decodes for a read of its
 /// instruction register: R DATA 19 (M8616-0-CSL4 rev C, E90, E106).
 const CONSOLE_REGISTER_BIT: u32 = 0o200000;
@@ -1000,6 +1006,9 @@ impl Machine {
                 io_written =
                     self.io
                         .write_cycle(&mut self.memory, self.instructions, a, dp.get(), byte);
+                if self.io.memstat.force != 0 {
+                    return Err(self.unmodelled("force check bits: the model has no check bits"));
+                }
             } else {
                 self.memory[address] = dp;
                 self.writes += 1;
@@ -1760,10 +1769,16 @@ impl Machine {
             return Ok(());
         }
         if ctl == 0 {
+            if a == ks10_machine::devregs::memctl::STATUS {
+                let v = self.io.memstat.read();
+                self.bus.reply = Some(W36::wrap(v));
+                self.bus.data_in = Some((MEMORY_STATUS_CYCLES, true));
+                return Ok(());
+            }
             if a & CONSOLE_REGISTER_BIT == 0 {
-                return Err(
-                    self.unmodelled("I/O read of controller 0 other than the console register")
-                );
+                return Err(self.unmodelled(
+                    "I/O read of controller 0 other than the console and memory status registers",
+                ));
             }
             let c = self.csl;
             self.bus.reply = Some(c.data);

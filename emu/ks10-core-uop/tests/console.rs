@@ -114,6 +114,51 @@ fn io_instructions() {
     }
 }
 
+/// IORD and IOWR of the memory status register, 0,,100000 (ksdefs,
+/// KSECCS, IORD, IOWR). The values come from EK-OKS10-TM-002 figure 5-30,
+/// with bits from the left: 3 PAR ERR, 4 ECC ON, 12 POWER FAIL, 14-35 the
+/// error address. RESET turns on ECC, the power-up sets POWER FAIL, and
+/// the error address is that of the read (M8618-0-MMC3 E131, MMC5 E58,
+/// E48). The write sets PAR ERR (bit 3) and ECC OFF (bit 35).
+#[test]
+fn memory_status_register() {
+    let haltlp = label("HALTLP");
+    let i = |op: u64, ac: u64, e: u64| op << 27 | ac << 23 | e;
+    let program: [(usize, u64); 7] = [
+        (0o1000, i(0o712, 1, 0o1100)), // IORD 1,1100
+        (0o1001, i(0o200, 2, 0o1101)), // MOVE 2,1101
+        (0o1002, i(0o713, 2, 0o1100)), // IOWR 2,1100
+        (0o1003, i(0o712, 3, 0o1100)), // IORD 3,1100
+        (0o1004, i(0o254, 4, 0o1004)), // HALT
+        (0o1100, 0o100000),
+        (0o1101, 0o040_000_000_001),
+    ];
+    let want: [u64; 2] = [0o020_040_100_000, 0o040_040_100_000];
+    for fill in FILLS {
+        let mut m = machine(fill);
+        m.master_reset();
+        for &(a, w) in &program {
+            m.memory[a] = W36::wrap(w);
+        }
+        m.start_at(0o1000);
+        assert_eq!(
+            run_to_halt(&mut m, haltlp),
+            Ok(true),
+            "fill {:o}",
+            fill.get()
+        );
+        assert_eq!(m.memory[1].get() & 0o777777, 0o1004, "halt PC");
+        let block = usize::from(m.cur_block & 7) << 4;
+        let got = [1, 3].map(|k| format!("{:o}", m.ram_file[block + k].get()));
+        assert_eq!(
+            got,
+            want.map(|w| format!("{w:o}")),
+            "AC 1, AC 3, fill {:o}",
+            fill.get()
+        );
+    }
+}
+
 /// WRUBR ends with SWEEP, which invalidates the whole page table and the
 /// cache directory: SET SWEEP and PAGE WRITE with DP 18 0, for two entries
 /// at a time (EK-OKS10-TM-002 5.6.3; inout, `WRUBR`, `SWEEP`). The ITS

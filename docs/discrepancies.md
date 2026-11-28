@@ -399,3 +399,17 @@ The microcode-level model uses the microcode (rank 1).
 `emu/ks10-core-soft` follows the PRM, SIMH and KLH10: Overflow and Trap
 1 for (-2^70)^2, and no carry flag (design decision 2026-11-28, as in
 "Trap 1 and Trap 2: each flag word loads them").
+
+## Memory status register: the write of POWER FAIL
+
+- **[its]** `src/system/ksdefs.194`, `%KEPWR`: "Memory backup power is
+  low [R/C]". A write of 1 clears the bit, as for `%KEHLD`.
+- **[manual]** KS10 reference card, memory status register, bit 12:
+  "CLEARED WHEN WRITTEN WITH A 1".
+- **[manual]** EK-OKS10-TM-002, figure 5-30, the write format: "POWER
+  FAIL (0 BIT CLEARS FLAG)". M8618-0-MMC5 rev B, E61, E51 and E58 agree:
+  STATUS LOAD EN with bit 12 at 0 clears POWER FAILED.
+
+The project uses KSDEFS (rank 1): a write of 1 clears the bit
+(`emu/ks10-machine/src/unibus.rs`, `MemStatus`). ITS does not write the
+register.

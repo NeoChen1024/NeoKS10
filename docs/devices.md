@@ -76,6 +76,9 @@ Fields of STATUS:
 | ENA | 31 | 20000000000 | %KEENA | ECC enabled (R) |
 | ECC | 30-24 | 17700000000 | %KEECC | ECC bits (R) |
 | PWR | 23 | 40000000 | %KEPWR | Backup power low (R/C) |
+| ERA | 21-0 | 17777777 |  | Error address: bits 14-35 of the last command/address cycle (R) |
+| FRC | 7-1 | 376 |  | Force check bits CP, C40, C20, C10, C04, C02, C01 (W) |
+| OFF | 0 | 1 |  | Disable error correction (W) |
 
 ## rh11: RH11 Massbus controller and RP06 disk drive
 

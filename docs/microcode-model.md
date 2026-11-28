@@ -705,8 +705,9 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - a virtual I/O cycle with PAGE EN; a page table entry or a cache tag
   that nothing wrote, where the model needs it;
 - a page fail in a word with `SPEC/NICOND`;
-- an I/O read of controller 0 without bit 19 (the memory status register), and an I/O read that no
-  controller answers;
+- an I/O read of controller 0 other than the console instruction
+  register and the memory status register, and an I/O read that no
+  controller answers; a status write with force check bits;
 - DP on the DBus where DP depends on D, except the byte loop of DBM
   ("DBus and DBM inputs"); SCAD on DBM where SCAD depends on DP; a byte
   loop whose undefined bits reach a result;
@@ -890,6 +891,7 @@ The controllers:
 | Cycle | Answer | Source |
 |---|---|---|
 | Read, controller 0, address bit 19 | The console instruction register, after 2 microcycles, with I/O DATA CYCLE if the 8080 set it in register 114 | CSL4 E90, E106; 5.3.6 **[manual]**; `cmds.m80` EXINT **[its]** |
+| Read, controller 0, address 100000 | The memory status register (`ks10-machine`, `MemStatus`), after 2 microcycles, with I/O DATA CYCLE and no I/O BUSY | 5.7.8 **[manual]**; time **[estimate]** |
 | Read, controller 1 or 3 | I/O BUSY for 4 microcycles, then I/O DATA CYCLE | 5.3.6, 5.9.5 **[manual]**; time **[estimate]** |
 | Write, controller 0, 1 or 3 | I/O BUSY for 4 microcycles after the data | 5.3.6 **[manual]**; time **[estimate]** |
 | WRU | Bit 18 + n for each adapter n that requests on the level; no data cycle and no I/O BUSY | 5.3.7, 5.6.2 **[manual]** |
@@ -897,9 +899,9 @@ The controllers:
 
 The WRU cycle sends PI CURRENT, the highest level in progress, on bus
 data 15–17 (DPEB E134, E96). A register with no device gives no answer
-([`unknowns.md`](unknowns.md)). The model stops on a read of controller
-0 without bit 19 (the memory status register), and on a read that no
-controller answers.
+([`unknowns.md`](unknowns.md)). The model stops on a read of another
+register of controller 0, and on a read that no controller answers. It
+has no check bits, so it stops on a status write with force check bits.
 
 ### The console
 

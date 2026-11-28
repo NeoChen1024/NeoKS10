@@ -110,9 +110,76 @@ pub struct Io {
     pub imp: Imp,
     /// Pending events, unordered.
     pub events: Vec<(u64, Event)>,
-    /// The memory status register: the bits a program wrote that stay
-    /// (PAR). The error bits are never set (no memory errors).
-    pub memstat: u64,
+    /// The memory status register.
+    pub memstat: MemStatus,
+}
+
+/// The memory status register of the memory controller **[manual]**
+/// (EK-OKS10-TM-002 5.7.8 and figure 5-30; M8618-0-MMC3, MMC4, MMC5, MMC8).
+/// The model has no memory errors, so HOLD, BAD DATA and REF ERR are 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemStatus {
+    /// PAR ERR: a write loads it from its bit.
+    pub par: bool,
+    /// MMC3 E131 loads ECC ON from the complement of bit 35 at each status
+    /// write, and at RESET.
+    pub ecc_off: bool,
+    /// The force check bits CP to C01 (MMC3 E144, E131). The model has no
+    /// check bits, so they have no effect (docs/emulator.md).
+    pub force: u8,
+    /// POWER FAILED (MMC5 E58): the power-up clears E58, which sets the
+    /// flag. A write with bit 12 set clears it **[its]** (ksdefs,
+    /// `%KEPWR` "[R/C]"; docs/discrepancies.md).
+    pub power_failed: bool,
+}
+
+impl Default for MemStatus {
+    /// The state at power on.
+    fn default() -> Self {
+        MemStatus {
+            par: false,
+            ecc_off: false,
+            force: 0,
+            power_failed: true,
+        }
+    }
+}
+
+impl MemStatus {
+    /// The bus RESET: STATUS LOAD EN with the data lines 0 (MMC3 E70):
+    /// ECC ON, no force bits. It clears PAR ERR **[manual]** (KS10
+    /// reference card, memory status register, bit 3). POWER FAILED stays.
+    fn reset(&mut self) {
+        *self = MemStatus {
+            power_failed: self.power_failed,
+            ..MemStatus::default()
+        };
+    }
+
+    /// A status read. ERR ADD LOAD loads the error address at each
+    /// command/address cycle while no error is held (MMC5 E48; MMCA E53;
+    /// MMC8 E100, E149, E135), so it has the address of this read. The
+    /// correction code is the syndrome of the last data strobe (MMC4
+    /// E104): 0 for a correct word **[estimate]** (docs/unknowns.md).
+    pub fn read(&self) -> u64 {
+        use devregs::memctl::status as s;
+        let bit = |on: bool, m: u64| if on { m } else { 0 };
+        bit(self.par, s::PAR)
+            | bit(!self.ecc_off, s::ENA)
+            | bit(self.power_failed, s::PWR)
+            | u64::from(devregs::memctl::STATUS)
+    }
+
+    /// A status write (figure 5-30).
+    pub fn write(&mut self, v: u64) {
+        use devregs::memctl::status as s;
+        self.par = v & s::PAR != 0;
+        self.ecc_off = v & s::OFF != 0;
+        self.force = ((v & s::FRC) >> s::FRC_LSB) as u8;
+        if v & s::PWR != 0 {
+            self.power_failed = false;
+        }
+    }
 }
 
 impl Default for Io {
@@ -126,7 +193,7 @@ impl Default for Io {
             chaos: Ch11::new(devregs::CHAOS, 0o177002),
             imp: Imp::new(devregs::IMP),
             events: Vec::new(),
-            memstat: 0,
+            memstat: MemStatus::default(),
         }
     }
 }
@@ -254,7 +321,7 @@ impl Io {
         self.chaos.reset();
         self.imp.reset();
         self.events.clear();
-        self.memstat = 0;
+        self.memstat.reset();
     }
 
     /// A read of I/O address `addr` (adapter in bits 14 to 17).
@@ -263,7 +330,7 @@ impl Io {
         let ub = addr & 0o777777;
         if a == 0 {
             return if ub == devregs::memctl::STATUS {
-                Reply::Value(self.memstat)
+                Reply::Value(self.memstat.read())
             } else {
                 Reply::NoDevice
             };
@@ -307,7 +374,7 @@ impl Io {
         let ub = addr & 0o777777;
         if a == 0 {
             if ub == devregs::memctl::STATUS {
-                self.memstat = value & devregs::memctl::status::PAR;
+                self.memstat.write(value);
                 return true;
             }
             return false;
@@ -455,6 +522,30 @@ impl Io {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // EK-OKS10-TM-002 figure 5-30, with bits from the left: 3 PAR ERR, 4
+    // ECC ON, 12 POWER FAIL, 14-35 the error address (here the address
+    // of the read, 0,,100000); written 3 PAR ERR, 12 POWER FAIL, 35 ECC
+    // OFF. ksdefs: %KEPWR is "[R/C]".
+    #[test]
+    fn memory_status_register() {
+        let mut io = Io::default();
+        let mut mem = vec![W36::ZERO; 16];
+        let a = 0o100000;
+        let read = |io: &mut Io| match io.read(a, 0) {
+            Reply::Value(v) => format!("{v:o}"),
+            _ => panic!(),
+        };
+        assert_eq!(read(&mut io), "20040100000", "power on");
+        assert!(io.write(&mut mem, 0, a, 0o040_000_000_001, 0o177777));
+        assert_eq!(read(&mut io), "40040100000", "PAR ERR, ECC OFF");
+        io.reset();
+        assert_eq!(read(&mut io), "20040100000", "after RESET");
+        assert!(io.write(&mut mem, 0, a, 0o000_040_000_000, 0o177777));
+        assert_eq!(read(&mut io), "20000100000", "POWER FAIL cleared");
+        assert!(io.write(&mut mem, 0, a, 0o000_000_000_376, 0o177777));
+        assert_eq!(io.memstat.force, 0o177, "force bits");
+    }
 
     // ksdefs.194, UBAPAG: written 2.6 valid, 2.7 fast, 2.2-1.1 the page;
     // read back as 4.1 valid, 4.2 fast, 3.2-2.1 the page.

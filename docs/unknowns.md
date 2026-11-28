@@ -90,9 +90,11 @@ schematics (MP00540):
   device. The model gives no I/O BUSY and no data cycle, so IOWAIT ends
   in the page fail "nonexistent I/O register" (inout, IOW5; ksdefs,
   `%PFNXI`), as `emu/ks10-core-soft` does.
-- Whether the memory controller answers a read of its status register
-  (0,,100000) with DATA CYCLE or I/O DATA CYCLE. The model stops on a
-  read of controller 0 without bit 19. ITS does not read the register.
+- The correction code bits of the memory status register after a
+  correct word. MMC4 E104 loads the syndrome at each data strobe. The
+  emulator gives 0 **[estimate]**: the syndrome of a correct word.
+- The time from the command/address of a status read to its data cycle.
+  The microcode-level model takes 2 microcycles, as for the console.
 - Which registers DP RESET and CRAM RESET clear (hcore.m80, MRINT). DP
   RESET clears the APR flags (DPMA E23, E87; DPMB). The model also sets
   the CRAM address to 0 and leaves the rest; the power-up sequence sets

@@ -82,6 +82,10 @@ fields = [
   { name = "ENA", lsb = 31, its = "%KEENA", lh = true, title = "ECC enabled (R)" },
   { name = "ECC", lsb = 24, width = 7, its = "%KEECC", lh = true, title = "ECC bits (R)" },
   { name = "PWR", lsb = 23, its = "%KEPWR", lh = true, title = "Backup power low (R/C)" },
+  # EK-OKS10-TM-002 figure 5-30; the right half has no ITS name.
+  { name = "ERA", lsb = 0, width = 22, title = "Error address: bits 14-35 of the last command/address cycle (R)" },
+  { name = "FRC", lsb = 1, width = 7, title = "Force check bits CP, C40, C20, C10, C04, C02, C01 (W)" },
+  { name = "OFF", lsb = 0, title = "Disable error correction (W)" },
 ]
 
 [[device]]

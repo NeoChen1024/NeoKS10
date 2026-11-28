@@ -94,6 +94,14 @@ with code 102.
 An I/O reference to an address without a device gives a page fail with
 bit `%PFNXI` **[its]** (`ksdefs.194`, page fail word). The memory status
 register is at I/O address 100000 **[its]** (`ksdefs.194`, `KSECCS`).
+Its bits come from EK-OKS10-TM-002 figure 5-30 and the memory controller
+drawings (`unibus.rs`, `MemStatus`) **[manual]**:
+
+- The emulator has no memory errors, so HOLD, BAD DATA and REF ERR are 0.
+- POWER FAIL is 1 after power on. ECC ON is 1 after the bus RESET.
+- The error address is that of the read itself.
+- The emulator has no check bits, so the force check bits of a write have
+  no effect.
 
 ### Processor registers outside the Unibus
 
