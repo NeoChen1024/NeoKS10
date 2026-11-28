@@ -222,6 +222,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         control::listen(&p, tx.clone())?;
         Some(p)
     };
+    let mut printer = None;
     if interactive {
         term::run(tx.clone(), &ended);
         let (rtx, _rrx) = channel();
@@ -235,7 +236,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         // processor stops.
         let (otx, orx) = channel();
         let _ = tx.send(Request::Subscribe(otx));
-        std::thread::spawn(move || {
+        printer = Some(std::thread::spawn(move || {
             for o in orx {
                 let mut so = std::io::stdout().lock();
                 match o {
@@ -250,10 +251,15 @@ fn run(args: &[String]) -> Result<i32, String> {
                 }
                 let _ = so.flush();
             }
-        });
+        }));
     }
     drop(tx);
     let joined = machine.join();
+    // The engine and its subscribers end with the machine thread; the
+    // printer then writes the rest of the CTY output and ends.
+    if let Some(p) = printer {
+        let _ = p.join();
+    }
     if let Some(p) = &socket {
         control::remove(p);
     }
