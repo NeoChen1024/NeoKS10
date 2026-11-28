@@ -162,8 +162,8 @@ fails.
 - `make csl` extracts the DEC 8080 console program (the ROM images of
   version 5.2 and the tape with its listing) from `references/` and runs
   the tests of `emu/ks10-csl`. Without the files, the tests print SKIPPED.
-  With `KS10_ITS_DISK=<rp0.dsk>`, a test also boots from that disk image,
-  which it opens read-only.
+  With `KS10_ITS_DISK=<rp0.dsk>`, a test also boots from a copy of that
+  disk image.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example

@@ -85,6 +85,8 @@ pub enum Stop {
     Halt { pc: u16 },
     /// An exit of `x80-core` that this model does not know.
     Other { pc: u16 },
+    /// The processor of the KS10 stopped while its clock ran.
+    Processor { pc: u16, what: &'static str },
 }
 
 /// Addresses, ports and values in octal.
@@ -131,6 +133,7 @@ impl std::fmt::Display for Stop {
             }
             Stop::Halt { pc } => write!(f, "PC {pc:06o}: HLT, and no interrupt can come"),
             Stop::Other { pc } => write!(f, "PC {pc:06o}: an exit of x80-core without a model"),
+            Stop::Processor { pc, what } => write!(f, "PC {pc:06o}: {what}"),
         }
     }
 }
@@ -145,6 +148,11 @@ struct Board<K: Ks10> {
     cty: Usart,
     rem: Usart,
     now: u64,
+    /// The 8080 states while the KS10 clock ran, and while it was stopped.
+    running: u64,
+    stopped: u64,
+    /// The T clocks that the KS10 ran.
+    ticks: u64,
     /// The address of the current instruction.
     pc: u16,
     writes: Vec<Write>,
@@ -157,10 +165,39 @@ impl<K: Ks10> Board<K> {
         (address >= RAM_START && i < RAM_SIZE).then_some(i)
     }
 
+    /// The 8080 ran `states`. With CLK RUN, the KS10 runs for the same
+    /// time: 9375/2304 T clocks for each state, an 8080 state of 9 /
+    /// 14.7456 MHz and a T clock of 150 ns (EK-OKS10-TM-002 5.8.1, 5.2.1).
+    /// The two clocks have separate crystals (MP00540 CSL1, CSL2); the
+    /// model runs them at the nominal rates.
+    fn advance(&mut self, states: u64) {
+        if !self.interface.clk_run {
+            self.stopped += states;
+            return;
+        }
+        self.running += states;
+        let target = u64::try_from(u128::from(self.running) * 9375 / 2304).unwrap_or(u64::MAX);
+        if let Some(n) = target.checked_sub(self.ticks).filter(|&n| n > 0) {
+            match self.ks10.run_ticks(n) {
+                Ok(ran) => self.ticks += ran,
+                Err(what) => {
+                    let pc = self.pc;
+                    self.stop(Stop::Processor { pc, what });
+                }
+            }
+        }
+        if self.ks10.take_doorbell() {
+            self.interface.ten_int = true;
+        }
+        if std::mem::take(&mut self.interface.int_10) {
+            self.ks10.int_10();
+        }
+    }
+
     /// A write to a port of the KS10 side, after the devices of the KS10
     /// run to the time of the write.
     fn ks10_write(&mut self, port: u8, value: u8) -> Result<bool, &'static str> {
-        self.ks10.idle_to(self.now);
+        self.ks10.idle_to(self.stopped);
         self.interface.write(port, value, self.now, &mut self.ks10)
     }
 
@@ -226,7 +263,7 @@ impl<K: Ks10> Bus for Board<K> {
             REMDAT => self.rem.read_data(self.now),
             REMCTL => self.rem.status(self.now),
             _ => {
-                self.ks10.idle_to(self.now);
+                self.ks10.idle_to(self.stopped);
                 let c = self.config;
                 let carrier = (c.cty_carrier, c.klinik_carrier);
                 match self.interface.read(port, c.switches, carrier, &self.ks10) {
@@ -315,6 +352,9 @@ impl<K: Ks10> Csl<K> {
                 cty: Usart::new(true, config.char_states),
                 rem: Usart::new(true, config.char_states),
                 now: 0,
+                running: 0,
+                stopped: 0,
+                ticks: 0,
                 pc: 0,
                 writes: Vec::new(),
                 stop: None,
@@ -337,6 +377,7 @@ impl<K: Ks10> Csl<K> {
             self.board.pc = pc;
             let r = self.cpu.step(&mut self.board);
             self.board.now += r.cycles;
+            self.board.advance(r.cycles);
             match r.exit {
                 Exit::Budget | Exit::Stop => {}
                 // The HLT ran in the step before.
@@ -348,7 +389,7 @@ impl<K: Ks10> Csl<K> {
                 _ => self.board.stop(Stop::Other { pc }),
             }
         }
-        self.board.ks10.idle_to(self.board.now);
+        self.board.ks10.idle_to(self.board.stopped);
         match self.board.stop {
             Some(s) => Err(s),
             None => Ok(()),
@@ -464,6 +505,92 @@ mod tests {
         let mut c = Csl::new(rom, CONFIG, Clock::default()).unwrap();
         assert!(matches!(c.run(1000), Err(Stop::Halt { .. })));
         assert_eq!(c.ks10().0, [0, 10, 27]);
+    }
+
+    /// A KS10 whose processor runs exactly the T clocks that it gets.
+    #[derive(Default)]
+    struct Runner {
+        ticks: u64,
+        stopped: u64,
+        doorbell: bool,
+        int_10: u32,
+        inputs: crate::ks10::Inputs,
+    }
+
+    impl Ks10 for Runner {
+        fn memory_read(&mut self, _a: u32) -> Result<crate::ks10::Reply, &'static str> {
+            Err("no memory")
+        }
+        fn memory_write(&mut self, _a: u32, _v: pdp10::W36) -> Result<bool, &'static str> {
+            Err("no memory")
+        }
+        fn io_read(&mut self, _a: u32, _b: bool) -> Result<crate::ks10::Reply, &'static str> {
+            Err("no device")
+        }
+        fn io_write(&mut self, _a: u32, _v: pdp10::W36, _b: bool) -> Result<bool, &'static str> {
+            Err("no device")
+        }
+        fn idle_to(&mut self, stopped: u64) {
+            self.stopped = stopped;
+        }
+        fn run_ticks(&mut self, ticks: u64) -> Result<u64, &'static str> {
+            self.ticks += ticks;
+            Ok(ticks)
+        }
+        fn take_doorbell(&mut self) -> bool {
+            std::mem::take(&mut self.doorbell)
+        }
+        fn int_10(&mut self) {
+            self.int_10 += 1;
+        }
+        fn inputs(&self) -> crate::ks10::Inputs {
+            self.inputs
+        }
+        fn set_inputs(&mut self, i: crate::ks10::Inputs) {
+            self.inputs = i;
+        }
+        fn halt_loop(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_ks10_clock_runs_with_the_8080() {
+        // OUT 101 ends the power-up reset; MVI A,1 (7 states) and OUT 206
+        // (10 states) start the clock; then INT 10 by OUT 116, and a loop.
+        let mut rom = vec![0; rom::SIZE];
+        rom[..12].copy_from_slice(&[OUT, 0o101, MVI_A, 1, OUT, 0o116, OUT, 0o206, JMP, 8, 0, 0]);
+        let mut c = Csl::new(rom, CONFIG, Runner::default()).unwrap();
+        // Before the clock: INT 10 waits in E171.
+        c.run(27).unwrap();
+        assert_eq!((c.ks10().ticks, c.ks10().int_10), (0, 0));
+        assert!(c.interface().int_10);
+        c.run(10_000).unwrap();
+        // The clock runs from the OUT 206 on (state 27): 9375/2304 T
+        // clocks for each state (EK-OKS10-TM-002 5.8.1, 5.2.1).
+        let running = c.now() - 27;
+        assert_eq!(c.ks10().ticks, running * 9375 / 2304);
+        assert_eq!(c.ks10().stopped, 27);
+        assert_eq!(c.ks10().int_10, 1);
+        assert!(!c.interface().int_10);
+        // The doorbell of the KS10 presets 10 INT (port 301 bit 7).
+        assert!(!c.interface().ten_int);
+        c.ks10_mut().doorbell = true;
+        c.run(10).unwrap();
+        assert!(c.interface().ten_int);
+    }
+
+    #[test]
+    fn a_single_clock_alone_stops_the_run() {
+        let mut c = csl(&[OUT, 0o101, MVI_A, 2, OUT, 0o206, 0]);
+        assert!(matches!(
+            c.run(1000),
+            Err(Stop::Ks10 {
+                port: 0o206,
+                value: 2,
+                ..
+            })
+        ));
     }
 
     #[test]

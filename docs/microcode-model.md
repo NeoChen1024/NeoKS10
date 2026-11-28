@@ -716,7 +716,7 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - `RAMADR` 3 and 5, and `ACALU` other than `B` and `AC+N`;
 - `SPEC` group 40 code 2; group 20 codes 2 and 3 (code 2 has no name in
   ks10);
-- the dispatches DIAG ADR and PAGE FAIL, and `DISP/MUL` with `J`
+- the dispatch PAGE FAIL, and `DISP/MUL` with `J`
   bit 10 clear;
 - `MULTI SHIFT` with a memory function, `FMWRITE` or a special function
   of group 10, 20 or 40, and `CALL` with a return in one word;
@@ -896,7 +896,10 @@ time in microcycles.
 - **The CRAM load of the console.** The CRA has a diagnostic address
   register and the 12-bit latch of its 8646 transceivers (EK-OKS10-TM-002
   5.3.8, 5.4.6). `cram_address_load` loads the register.
-  `cram_reset` clears the microinstruction register (`mir_clear`).
+  `cram_reset` clears the microinstruction register (`mir_clear`). The
+  next cycle runs the zero word, whose dispatch selects the diagnostic
+  address (5.4.6). `run_ticks` runs the processor for a number of ticks;
+  the model of the board uses it while CLK RUN is set.
   `cram_write` writes 12 bits of the control RAM word at the diagnostic
   address, with the diagnostic function 0 to 7. The bits of each
   function come from the 8080 program and `.RAMFILE`

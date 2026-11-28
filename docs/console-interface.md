@@ -94,8 +94,8 @@ octal. Bits have DEC numbers.
 ## Comparison
 
 This is the plan of the comparison (design decision 2026-11-28). The
-model of the board (`emu/ks10-csl`) runs the program up to the start of
-the KS10 clock in the boot, with `ks10-core-uop` as the KS10.
+model of the board (`emu/ks10-csl`) runs the program through the boot
+to the prompt of the disk program, with `ks10-core-uop` as the KS10.
 
 ### The program
 
@@ -156,12 +156,21 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   a KS10. The microcode-level model implements the trait: its memory,
   its Unibus adapters and devices, its device time, and its inputs RUN,
   EXECUTE, CONTINUE, TRAP EN, CACHE EN and 1 MSEC EN.
-- A bus function completes at the write to register 210. On the path
-  from power-up to the boot, the KS10 clock is stopped: only the command
-  CS (`CSCMD`, also through `BT.GO`) writes 206 to start it. The model has
+- A bus function completes at the write to register 210. The model has
   the memory read and write, the I/O register read and write, and the
-  examine bus. The other functions, the KS10 clock and the maintenance
-  clock stop the run.
+  examine bus. The other functions, SINGLE CLK alone and the maintenance
+  clock stop the run. If the KS10 clock runs, the function completes
+  between two processor cycles.
+- Register 206 bit 0 is CLK RUN (CSL5; RESETB clears it). While it is
+  set, the KS10 runs with the 8080: after each 8080 instruction, the
+  processor runs for the same time. An 8080 state is 9 / 14.7456 MHz
+  (EK-OKS10-TM-002 5.8.1). A T clock is 150 ns, and a processor cycle is
+  2 + T T clocks (5.2.1). So a state is 9375/2304 T clocks. The two
+  clocks have separate crystals (MP00540 CSL1, CSL2), and the model runs
+  both at the nominal rate.
+- At the start of the clock, a clear microinstruction register runs one
+  cycle with the zero word. Its dispatch selects the diagnostic address,
+  so the microcode starts there (EK-OKS10-TM-002 5.4.6; SM1 loads 0).
 - The CRAM load goes through the CRA (EK-OKS10-TM-002 5.3.8): 210/144
   latches bits 24 to 35 of the COM/ADR word (CRA R CLK). Register 204
   gives CRA/M RESET, DP RESET, CRAM ADR LOAD and CRAM WRITE, and register
@@ -170,19 +179,26 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
 - INT 10 (register 116 bit 0) sets CSL4 E171. The request reaches the
   KS10 through E170 and E163, which clock on CSL5 ENABLE (0) H
   (MP00540 CSL4 rev C). The model holds it while the KS10 clock is
-  stopped ([`unknowns.md`](unknowns.md)).
+  stopped ([`unknowns.md`](unknowns.md)), and gives it to the KS10 when
+  the clock runs: it presets APR flag 31.
+- The doorbell of the KS10 (APR flag 25, DPMB CSL INTERRUPT) presets
+  CSL4 10 INT (E161), which the program reads on port 301 bit 7.
+- The data word of ports 102 to 112 is the console instruction register
+  (CSL4 E90, E106), and register 114 bit 1 gives I/O DATA CYCLE.
 - **Design decision, 2026-11-28: device time with the KS10 clock
   stopped.** At power-up the 8080 starts the disk transfers of the boot
   and waits for them (`DSKSEQ`, `WAIT`), and the KS10 clock is stopped.
   The devices of `ks10-core-uop` count time in instructions, so they need
-  time from the board. Before each access to a KS10 port, the board runs
-  the devices to the 8080 time (`Ks10::idle_to`). One millisecond is
+  time from the board while the clock is stopped. Before each access to a
+  KS10 port, the board runs the devices to the 8080 time of the stopped
+  clock (`Ks10::idle_to`). While the clock runs, the instructions give
+  the time, as without the board. One millisecond is
   1638.4 states, the 8080 clock (EK-OKS10-TM-002 5.8.1), and
   `INSTRUCTIONS_PER_MS` units of device time. The rule adds no new
   estimate. A transfer that never completed would send the program to
-  its timeout path, and its error would look like a result. The USART model has the
-  asynchronous mode, the transmitter and the status (98-153B, p. 5-136 to
-  5-142).
+  its timeout path, and its error would look like a result.
+- The USART model has the asynchronous mode, the transmitter and the
+  status (98-153B, p. 5-136 to 5-142).
 - Each write to a port of the KS10 goes into a log. A port, an address or
   a function without a model stops the run with its reason. The 8080
   does not decode A14 and A15, and only A13 enables the RAM (CSL2 rev E,
@@ -219,8 +235,13 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   `ks10-core-uop`, `MEM2CRAM` loads all 2048 words. The result equals
   the control RAM that `spec/micro.py` assembles. `LBINT` reads the
   pointer to the monitor pre-boot (word 1004). `SM1` deposits all ones in
-  location 0 and loads the CRAM address 0. The run stops when `CSCMD`
-  starts the KS10 clock, 45026145 states (27.5 s) after power-up.
+  location 0 and loads the CRAM address 0. `CSCMD` starts the KS10 clock
+  45026145 states (27.5 s) after power-up. The microcode reaches the halt
+  loop, `PASSSRC` deposits 36, 37 and 40, and `STINT` starts the pre-boot
+  at 1000. The disk program prints its prompt `DSKDMP` through the 8080
+  program after 49000253 states (29.9 s). The text after `BT AUTO` is
+  the text of the high-level console on the same disk. The boot writes
+  to the disk, so the test boots from a copy.
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
   98-153B p. 4-15, with the condition true and false. The other 12

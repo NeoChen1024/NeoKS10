@@ -10,10 +10,9 @@
 //! 5.3.4.
 //!
 //! Choices of the model, not statements of the drawings:
-//! - A bus function completes at the write to register 210. On the path
-//!   from power-up to the boot the KS10 clock is stopped (it starts only
-//!   with the command CS, `CSCMD`), and the program reads the result at
-//!   once (`EM`, `BUSRESP`).
+//! - A bus function completes at the write to register 210, so the
+//!   program reads the result at once (`EM`, `BUSRESP`). If the KS10 clock
+//!   runs, the function comes between two processor cycles.
 //! - The levels of the error, parity and PI request inputs of the reads
 //!   100 to 103 are those of a KS10 without errors and requests. The bits
 //!   without a driver read as high (docs/unknowns.md).
@@ -67,9 +66,9 @@ pub trait Ks10 {
     fn io_read(&mut self, address: u32, byte: bool) -> Result<Reply, &'static str>;
     /// An I/O register write. `false` if no device takes it.
     fn io_write(&mut self, address: u32, value: W36, byte: bool) -> Result<bool, &'static str>;
-    /// The 8080 time is `now` states since power-up, and the KS10 clock
-    /// is stopped: the devices of the KS10 run to that time.
-    fn idle_to(&mut self, now: u64);
+    /// The KS10 clock was stopped for `stopped` 8080 states since
+    /// power-up: the devices of the KS10 run to that time.
+    fn idle_to(&mut self, stopped: u64);
     /// The bus RESET (register 100 bit 7) starts.
     fn bus_reset(&mut self) {}
     /// DP RESET (register 204 bit 2) starts.
@@ -81,6 +80,21 @@ pub trait Ks10 {
     fn cram_address_load(&mut self, _data: u16) -> Result<(), &'static str> {
         Err("the CRAM of the KS10")
     }
+    /// The KS10 clock runs for at least `ticks` T clocks (150 ns each,
+    /// EK-OKS10-TM-002 5.2.1). Returns the T clocks that ran: the last
+    /// processor cycle can end later. `Err` if the processor stops.
+    fn run_ticks(&mut self, _ticks: u64) -> Result<u64, &'static str> {
+        Err("the processor of the KS10")
+    }
+    /// CSL4 DPMB CSL INTERRUPT since the last call: the KS10 presets 10 INT.
+    fn take_doorbell(&mut self) -> bool {
+        false
+    }
+    /// CSL4 INT 10 reaches the KS10.
+    fn int_10(&mut self) {}
+    /// The console instruction register (the data word of ports 102 to
+    /// 112) and I/O DATA CYCLE of register 114 bit 1.
+    fn set_console(&mut self, _data: W36, _io_data_cycle: bool) {}
     /// CRAM WRITE (register 204 bit 5) with the diagnostic function of
     /// register 205 and the 12 bits of the CRA latch.
     fn cram_write(&mut self, _function: u8, _data: u16) -> Result<(), &'static str> {
@@ -201,6 +215,8 @@ pub struct Interface {
     pub int_10: bool,
     /// The 12 bits that CRA R CLK latched on the CRA (CRA5).
     pub cra_latch: u16,
+    /// Register 206 bit 0: CSL5 CLK RUN.
+    pub clk_run: bool,
     /// Register 210 bits 0 to 5 (CSL4 E121), BUS REQ (E129) and MEM (CSL3
     /// E151).
     pub bus_ctl: u8,
@@ -229,6 +245,7 @@ impl Default for Interface {
             ten_int: false,
             int_10: false,
             cra_latch: 0,
+            clk_run: false,
             bus_ctl: 0,
             bus_req: false,
             mem: false,
@@ -338,8 +355,10 @@ impl Interface {
                 inputs.trap_en = v & 0o20 != 0;
                 self.ten_int = v & 0o40 != 0;
             }
-            0o206 if v & 0o3 != 0 => return Err("the KS10 clock (register 206)"),
-            0o206 => {}
+            // CSL5: bit 0 CLK RUN, bit 1 SINGLE CLK, one clock enable. With
+            // CLK RUN, the clock runs anyway (CSCMD writes 3).
+            0o206 if v & 0o3 == 0o2 => return Err("SINGLE CLK (register 206 bit 1)"),
+            0o206 => self.clk_run = v & 1 != 0,
             0o210 if self.bus_reset() => self.bus_ctl = 0,
             0o210 => {
                 self.bus_ctl = v & 0o77;
@@ -356,6 +375,10 @@ impl Interface {
                 inputs.run = v & 4 != 0;
             }
             _ => return Ok(false),
+        }
+        // The console instruction register (CSL4 E90, E106) is the data word.
+        if (0o102..=0o115).contains(&port) && port & 1 == 0 {
+            ks10.set_console(self.data.0, self.data.1 & 2 != 0);
         }
         if self.bus_reset() {
             self.reset(&mut inputs);
@@ -374,6 +397,8 @@ impl Interface {
     /// 10 INT and register 101 have no reset (CSL3 E151, E107; CSL4 E142,
     /// E161).
     fn reset(&mut self, inputs: &mut Inputs) {
+        // CSL5 E48, E47: CLR is RESETB.
+        self.clk_run = false;
         (self.cram_ctl, self.diag, self.bus_ctl) = (0, 0, 0);
         (self.bus_req, self.mem) = (false, false);
         (inputs.run, inputs.execute, inputs.cont, inputs.trap_en) = (false, false, false, false);
@@ -400,9 +425,9 @@ impl Interface {
             return Err("a diagnostic function of the CRA (register 210)");
         }
         if self.bus_req {
-            // The console is the arbitrator (CSL1); with the KS10 clock
-            // stopped it grants the bus at once, and GRANT clears BUS REQ
-            // (CSL4 E114, E129).
+            // The console is the arbitrator (CSL1). The model grants the
+            // bus at once, between two processor cycles if the KS10 clock
+            // runs; GRANT clears BUS REQ (CSL4 E114, E129).
             self.bus_req = false;
             let com_adr = self.com_adr.0;
             // EK-OKS10-TM-002 5.3.4: bit 0 I/O, bit 1 read, bit 2 write,
@@ -534,7 +559,9 @@ impl Interface {
                 // DIAG PROT and ENB (high), TERMINAL CARRIER, CARRIER.
                 2 => 0b1111_1100 | u8::from(carrier.0) << 1 | u8::from(carrier.1),
                 // R CLK ENB (0), CRAM CLK ENB, -DPE/M CLK ENABLE,
-                // -RAM ERROR, with the KS10 clock stopped and no error.
+                // -RAM ERROR, with the KS10 clock stopped and no error. The
+                // model has no level of the clock enables while it runs.
+                _ if self.clk_run => return None,
                 _ => 0b1111_1011,
             },
         };
@@ -697,6 +724,10 @@ mod tests {
             self.0.push(format!("write {function} {data:o}"));
             Ok(())
         }
+        fn set_console(&mut self, data: W36, io_data_cycle: bool) {
+            self.0
+                .push(format!("console {:o} {io_data_cycle}", data.get()));
+        }
         fn inputs(&self) -> Inputs {
             self.1
         }
@@ -752,8 +783,26 @@ mod tests {
         );
         assert_eq!(i.cycles.len(), 2);
         assert_eq!(i.cycles[1].function, Function::CraLatch { data: 0o5670 });
+        // RESETB clears CLK RUN (CSL5 E48, E47).
+        i.write(0o206, 0o3, 0, &mut k).unwrap();
+        assert!(i.clk_run);
+        i.write(0o100, 0o200, 0, &mut k).unwrap();
+        assert!(!i.clk_run);
+        i.write(0o100, 0o174, 0, &mut k).unwrap();
         // STACK RESET has no model.
         assert!(i.write(0o204, 0o2, 0, &mut k).is_err());
+    }
+
+    #[test]
+    fn the_data_word_is_the_console_instruction_register() {
+        // EXINT: the instruction into the data word (WDATP, even ports),
+        // then 114/2, I/O DATA CYCLE (cmds.m80).
+        let mut k = Cra::default();
+        let mut i = after_reset();
+        i.write(0o102, 0o1, 0, &mut k).unwrap();
+        i.write(0o103, 0o7, 0, &mut k).unwrap();
+        i.write(0o114, 0o2, 0, &mut k).unwrap();
+        assert_eq!(k.0, ["console 1 false", "console 1 true"]);
     }
 
     #[test]

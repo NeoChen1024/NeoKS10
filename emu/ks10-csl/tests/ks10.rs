@@ -10,7 +10,7 @@ use ks10_core_uop::alu::W40;
 use ks10_core_uop::cram::{CRAM_WORDS, Microword};
 use ks10_core_uop::machine::Machine;
 use ks10_core_uop::ucode;
-use ks10_csl::board::{Config, Csl, Stop};
+use ks10_csl::board::{Config, Csl};
 use ks10_csl::ks10::{Function, Reply};
 use ks10_csl::rom;
 use pdp10::W36;
@@ -126,38 +126,83 @@ fn without_a_disk_the_boot_fails_at_the_drive_check() {
     assert!(c.interface().int_10);
 }
 
-/// The stop: SM1 starts the KS10 clock (`CSCMD`, 3 to register 206),
-/// which the model does not have yet.
-const CLOCK_STOP: Stop = Stop::Ks10 {
-    pc: 0o6173,
-    port: 0o206,
-    value: 0o3,
-    what: "the KS10 clock (register 206)",
-};
+/// A copy of the disk image in the build output: the boot writes to the
+/// disk.
+fn disk_copy(name: &str) -> Option<std::fs::File> {
+    let Some(src) = std::env::var_os("KS10_ITS_DISK").filter(|d| !d.is_empty()) else {
+        eprintln!("SKIPPED: KS10_ITS_DISK is not set");
+        return None;
+    };
+    let copy = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::copy(src, &copy).expect("copy the disk image");
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&copy)
+        .expect("open the copy");
+    Some(f)
+}
+
+/// The prompt of the disk program, as the 8080 prints it after BT.
+const PROMPT: &str = "DSKDMP";
+
+/// The CTY output of the boot on `ks10-core-uop` with the high-level
+/// console of `ks10-machine` (`boot::boot_disk`), up to the end of the
+/// prompt: the expected text from another implementation of the console.
+fn high_level_boot(f: std::fs::File) -> String {
+    let mut m = Machine::its(W40::ZERO);
+    m.io.disk.attach(0, f, false);
+    ks10_machine::boot::boot_disk(&mut m, 0).expect("BT on the model");
+    for _ in 0..200_000_000u64 {
+        m.step().expect("a run of the model");
+        let out = String::from_utf8_lossy(&m.cty.output).into_owned();
+        if let Some(k) = out.find(PROMPT) {
+            return out[..k + PROMPT.len()].to_string();
+        }
+    }
+    panic!("no prompt from the high-level console");
+}
 
 /// The boot from the disk of the ITS build, with an empty control RAM:
-/// the 8080 reads the RAM file and loads the control RAM. The expected
-/// control RAM is the one that spec/micro.py assembles from the ITS
-/// microcode sources (`Machine::its`); the RAM file on the disk comes
-/// from the MICRO of the ITS build.
+/// the 8080 reads the RAM file, loads the control RAM, starts the
+/// microcode (SM1) and the pre-boot (STINT), and serves the CTY output of
+/// the disk program. The expected control RAM is the one that
+/// spec/micro.py assembles from the ITS microcode sources
+/// (`Machine::its`); the RAM file on the disk comes from the MICRO of the
+/// ITS build.
 #[test]
-fn the_boot_loads_the_control_ram_from_the_disk() {
+fn the_boot_loads_the_control_ram_and_starts_the_disk_program() {
     let Some(rom) = rom() else { return };
-    let Some(disk) = std::env::var_os("KS10_ITS_DISK").filter(|d| !d.is_empty()) else {
-        eprintln!("SKIPPED: KS10_ITS_DISK is not set");
+    let Some(f) = disk_copy("csl-boot.dsk") else {
         return;
     };
     let empty = vec![Microword::default(); CRAM_WORDS];
     let mut m = Machine::new(empty, ucode::DROM.to_vec(), W40::ZERO);
-    let f = std::fs::File::open(disk).expect("the disk image");
-    m.io.disk.attach(0, f, true);
+    m.io.disk.attach(0, f, false);
     let mut c = board(rom, m);
-    match c.run(200_000_000) {
-        Err(s) if s == CLOCK_STOP => {}
-        r => panic!("{:?}, not {CLOCK_STOP}", r.map_err(|s| s.to_string())),
+    let banner = "\r\nKS10 CSL.V5.2\r\nBT AUTO\r\n";
+    let mut out = String::new();
+    while c.now() < 200_000_000 && !out.contains(PROMPT) {
+        if let Err(s) = c.run(1_000_000) {
+            panic!("{s}; processor {:?}; CTY {out:?}", c.ks10().pending_stop);
+        }
+        out = String::from_utf8_lossy(c.cty_output()).into_owned();
     }
-    assert_eq!(c.cty_output(), b"\r\nKS10 CSL.V5.2\r\nBT AUTO\r\n");
-    let f: Vec<Function> = c.interface().cycles.iter().map(|b| b.function).collect();
+    eprintln!("the prompt after {} states", c.now());
+    // The first start of the KS10 clock: CSCMD of SM1 (206/3).
+    let start = c
+        .writes()
+        .iter()
+        .find(|w| (w.port, w.value) == (0o206, 0o3))
+        .expect("SM1")
+        .at;
+    let f: Vec<Function> = c
+        .interface()
+        .cycles
+        .iter()
+        .filter(|b| b.at < start)
+        .map(|b| b.function)
+        .collect();
     let first_latch = f
         .iter()
         .position(|x| matches!(x, Function::CraLatch { .. }))
@@ -233,7 +278,7 @@ fn the_boot_loads_the_control_ram_from_the_disk() {
     assert_eq!(after.len(), 3 * 2048 + 3);
     let pages = (0..12u64).flat_map(|_| (0..512u64).map(|k| 0o1000 + k));
     assert!(after[..3 * 2048].iter().copied().eq(pages));
-    assert_eq!(after[3 * 2048..], [0o1000, 0o1103, 0o1004]);
+    assert_eq!(after[3 * 2048..], [0o1000, 0o1103, 0o1002 + 2]);
     let k = c.ks10();
     let its = Machine::its(W40::ZERO);
     let wrong: Vec<usize> = (0..CRAM_WORDS)
@@ -245,9 +290,37 @@ fn the_boot_loads_the_control_ram_from_the_disk() {
         wrong.len(),
         wrong[0]
     );
-    // SM1: all ones in location 0 (DMINT), the CRAM address 0 (CADWR) with
-    // the microinstruction register clear.
-    assert_eq!(k.memory[0], W36::ONES);
-    assert_eq!((k.diag_address, k.mir_clear), (0, true));
-    eprintln!("the KS10 clock starts after {} states", c.now());
+    // PASSSRC deposits the RH11 base with the UBA number (.DSBASE 776700,
+    // DSKUBA 4 in bits 12 to 19) in 36, the unit in 37 and DEN.SLV
+    // (D 0,0,,2,0) in 40 (PRMLST). The disk program uses these locations
+    // later, so the test reads the bus log, not the memory.
+    let deposits: Vec<(u64, W36)> = c
+        .interface()
+        .cycles
+        .iter()
+        .filter_map(|b| match b.function {
+            Function::MemoryWrite { com_adr, data, .. } if b.at > start => {
+                Some((com_adr.field(16, 35), data))
+            }
+            _ => None,
+        })
+        .filter(|(a, _)| (0o36..=0o40).contains(a))
+        .collect();
+    assert_eq!(
+        deposits,
+        [
+            (0o36, W36::wrap(0o1_776700)),
+            (0o37, W36::ZERO),
+            (0o40, W36::wrap(0o2000)),
+        ]
+    );
+    // After the banner, the CTY output is that of the disk program, as the
+    // high-level console gives it.
+    let Some(f2) = disk_copy("csl-boot-high-level.dsk") else {
+        return;
+    };
+    let want = format!("{banner}{}", high_level_boot(f2));
+    let got = &out[..out.find(PROMPT).unwrap() + PROMPT.len()];
+    eprintln!("CTY {got:?}");
+    assert_eq!(got, want);
 }

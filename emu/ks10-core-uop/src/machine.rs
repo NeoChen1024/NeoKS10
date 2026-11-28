@@ -727,6 +727,13 @@ impl Machine {
         if let Some(s) = self.pending_stop.take() {
             return Err(s);
         }
+        // A clear microinstruction register: J 0, no skip, and the
+        // dispatch selects the diagnostic address (EK-OKS10-TM-002 5.4.6).
+        if self.mir_clear {
+            self.step_word(Microword::default())?;
+            self.mir_clear = false;
+            return Ok(());
+        }
         let mw = self.cram[usize::from(self.upc & 0o3777)];
         if get(mw, u::MULTI_SHIFT) == 0 {
             return self.step_word(mw);
@@ -1710,10 +1717,7 @@ impl Machine {
             self.millisecond();
         }
         if !self.csl_model && self.cty.run(now, &mut self.memory) {
-            // CSL4 INT 10 L, a pulse of the 8080 write to 116, presets APR
-            // flag 31 **[manual]** (M8616-0-CSL4 rev C, E171, E170, E163;
-            // DPMB E158).
-            self.apr_flags |= 1;
+            self.int_10();
         }
         self.io.poll(now);
         if !self.io.events.is_empty() {
@@ -1954,6 +1958,27 @@ impl Machine {
         self.mir_clear = true;
     }
 
+    /// CSL4 INT 10 L, a pulse of the 8080 write to 116, presets APR flag 31
+    /// **[manual]** (M8616-0-CSL4 rev C, E171, E170, E163; DPMB E158).
+    pub fn int_10(&mut self) {
+        self.apr_flags |= 1;
+    }
+
+    /// The doorbell to the CSL board since the last call (`csl_interrupt`).
+    pub fn take_doorbell(&mut self) -> bool {
+        std::mem::take(&mut self.csl_interrupt)
+    }
+
+    /// Run microcycles for at least `n` ticks, or to a stop. Returns the
+    /// ticks that ran: the last microcycle can end after `n`.
+    pub fn run_ticks(&mut self, n: u64) -> Result<u64, Stop> {
+        let start = self.ticks;
+        while self.ticks - start < n {
+            self.step()?;
+        }
+        Ok(self.ticks - start)
+    }
+
     /// CRAM ADR LOAD: the diagnostic address register takes the 12 bits
     /// that CRA R CLK latched (EK-OKS10-TM-002 5.3.8).
     pub fn cram_address_load(&mut self, data: u16) {
@@ -2097,7 +2122,8 @@ impl Machine {
         if en & 2 == 0 {
             let rom_j_high = (dr(d::J) >> 4) & 15;
             high |= match sel & 3 {
-                0 => return Err(self.unmodelled("DISP DIAG ADR")),
+                // The diagnostic address register (CRA1 E516 to E521).
+                0 => self.diag_address >> 4 & 0o377,
                 1 => sbr_ret >> 4,
                 2 => 0b0011_0000 | rom_j_high,
                 _ => {
@@ -2108,7 +2134,7 @@ impl Machine {
         }
         if en & 1 == 0 {
             low |= match sel {
-                0 => return Err(self.unmodelled("DISP DIAG ADR")),
+                0 => self.diag_address & 15,
                 1 => sbr_ret & 15,
                 2 => {
                     // MUL: 0, FLAG QR 37, FK2, 0. FK2 is a backplane pin
@@ -2286,6 +2312,28 @@ mod tests {
         assert_eq!(m.io.events, [(INSTRUCTIONS_PER_MS + 1, Event::Dz)]);
         assert!(m.one_ms);
         assert_eq!(m.instructions, INSTRUCTIONS_PER_MS + 1);
+    }
+
+    #[test]
+    fn a_clear_microinstruction_register_dispatches_to_the_diagnostic_address() {
+        // EK-OKS10-TM-002 5.4.6: with the register clear, J is 0, no skip,
+        // and the dispatch selects the diagnostic address. The word takes
+        // 2 ticks (T = 0, 5.2.1).
+        let mut m = Machine::new(
+            vec![Microword::from_bits(0); CRAM_WORDS],
+            vec![0; DROM_WORDS],
+            W40::ZERO,
+        );
+        m.upc = 0o7;
+        m.cram_address_load(0o1234);
+        m.cram_reset();
+        m.step().unwrap();
+        assert_eq!((m.upc, m.mir_clear, m.ticks), (0o1234, false, 2));
+        // The next word comes from the control RAM at that address: the
+        // zero word there dispatches to the diagnostic address again.
+        m.cram_address_load(0o2345);
+        m.step().unwrap();
+        assert_eq!(m.upc, 0o2345);
     }
 
     #[test]

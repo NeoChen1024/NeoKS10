@@ -53,8 +53,8 @@ impl Ks10 for Machine {
     /// 1 ms clock of the model. One millisecond is 1638.4 states, the
     /// 8080 clock of 14.7456 MHz / 9 **[manual]** (EK-OKS10-TM-002 5.8.1,
     /// "14.746 MHz"), and `INSTRUCTIONS_PER_MS` units of device time.
-    fn idle_to(&mut self, now: u64) {
-        let target = u128::from(now) * u128::from(INSTRUCTIONS_PER_MS) * 5 / 8192;
+    fn idle_to(&mut self, stopped: u64) {
+        let target = u128::from(stopped) * u128::from(INSTRUCTIONS_PER_MS) * 5 / 8192;
         let target = u64::try_from(target).unwrap_or(u64::MAX);
         if let Some(d) = target.checked_sub(self.idle) {
             self.idle(d);
@@ -80,6 +80,28 @@ impl Ks10 for Machine {
 
     fn cram_write(&mut self, function: u8, data: u16) -> Result<(), &'static str> {
         Machine::cram_write(self, function, data)
+    }
+
+    /// A stop of the processor stays in `pending_stop`; the next `step`
+    /// returns it again.
+    fn run_ticks(&mut self, ticks: u64) -> Result<u64, &'static str> {
+        Machine::run_ticks(self, ticks).map_err(|s| {
+            self.pending_stop = Some(s);
+            "the processor stopped (Machine::pending_stop)"
+        })
+    }
+
+    fn take_doorbell(&mut self) -> bool {
+        Machine::take_doorbell(self)
+    }
+
+    fn int_10(&mut self) {
+        Machine::int_10(self);
+    }
+
+    fn set_console(&mut self, data: W36, io_data_cycle: bool) {
+        self.csl.data = data;
+        self.csl.io_data_cycle = io_data_cycle;
     }
 
     fn inputs(&self) -> Inputs {
