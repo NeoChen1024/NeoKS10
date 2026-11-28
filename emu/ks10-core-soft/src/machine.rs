@@ -339,7 +339,11 @@ impl Machine {
         }
     }
 
-    /// The physical address of a memory reference (not an AC).
+    /// The physical address of a memory reference (not an AC). A page
+    /// that maps to nonexistent memory is a hard failure: its page fail
+    /// word keeps only the user bit, the physical bit, the I/O bits and
+    /// the address of the VMA, not the write bit **[microcode]** (itspag,
+    /// `HARD`; ksdefs, `%PFWRT` is for a soft failure only).
     fn map(&mut self, a: Half, user: bool, write: bool) -> Result<usize, Fault> {
         let p = pager::translate(self, a, user, write)? as usize;
         if p < self.mem.len() {
@@ -348,7 +352,7 @@ impl Machine {
             Err(Fault::PageFail(pager::fail_word(
                 a,
                 user,
-                write,
+                false,
                 pfw::NO_MEMORY,
             )))
         }
@@ -527,7 +531,14 @@ impl Machine {
     /// three words at EPT + 440 if no interrupt is in progress, else at
     /// 443, 446, ..., 465 for the highest level in progress: the page fail
     /// word, the PC word, the new PC word.
+    ///
+    /// A reference to nonexistent memory also sets APR flag 27: NXM ERR
+    /// presets it **[manual]** (M8621-0-DPMB rev B, E139; EK-OKS10-TM-002
+    /// 5.6.5).
     fn page_fail(&mut self, w: W36) -> Result<(), Stop> {
+        if w.get() & pfw::NO_MEMORY != 0 {
+            self.apr.flags |= flag::NO_MEMORY;
+        }
         let off = match (1..=7u8).find(|&n| self.pi.in_progress & Pi::level_bit(n) != 0) {
             None => 0o440,
             Some(n) => 0o440 + 3 * u32::from(n),
@@ -969,6 +980,38 @@ mod tests {
         m.step().unwrap();
         assert_eq!(m.mem[0o440].get(), pfw::WRITE | 0o2000);
         assert_eq!(m.pc.get(), 0o1500);
+    }
+
+    // A page that maps to nonexistent memory (ITS page 1000, the first
+    // above 512 Ki words) is a hard failure (itspag, `PFD` code 5, `HARD`):
+    // the page fail word is %PFNXM (4.7) and the VMA, without %PFWRT for a
+    // write (ksdefs). NXM ERR sets APR flag 27 (M8621-0-DPMB rev B, E139).
+    #[test]
+    fn nonexistent_memory_page_fails() {
+        for (op, user) in [(0o200, false), (0o202, false), (0o200, true)] {
+            let mut m = paged();
+            // Word 1 of each table maps the pages 4000-5777 (ITS page 2).
+            put(&mut m, 0o101, 0o601000_000000);
+            put(&mut m, 0o201, 0o601000_000000);
+            if user {
+                m.flags = Flags(Flags::USER);
+            }
+            // MOVE(M) 1,4000 at 1000: physical 5000 in user mode, which
+            // maps page 0 to ITS page 2.
+            let at = if user { 0o5000 } else { 0o1000 };
+            put(&mut m, at, op << 27 | 1 << 23 | 0o4000);
+            put(&mut m, 0o442, 0o1500);
+            m.step().unwrap();
+            let want = if user {
+                0o500000_004000
+            } else {
+                0o100000_004000
+            };
+            assert_eq!(m.mem[0o440].get(), want, "{op:o}, user {user}");
+            assert_eq!(m.mem[0o441].get() & 0o777777, 0o1000);
+            assert_eq!(m.pc.get(), 0o1500);
+            assert_eq!(m.apr.flags, flag::NO_MEMORY);
+        }
     }
 
     // PRM 2.9 (traps): with paging on, an overflow executes the

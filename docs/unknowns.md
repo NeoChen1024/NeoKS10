@@ -21,8 +21,9 @@ tapes"). Not known yet:
 - The halt status block (`inout.50`, DUMP) has the 2901 registers AR,
   ARX, BR, BRX, FLG, T0 and the VMA. Their values at a halt come from the
   microcode steps before the halt. `emu/ks10-core-soft` writes 0 for them.
-- Whether a reference to nonexistent memory sets the APR flag "no
-  memory" (KSDEFS, RDAPR 1.9) in addition to the page failure.
+- The time of a reference to nonexistent memory. NXM ERR sets three
+  bus cycles after COM/ADR (EK-OKS10-TM-002 5.6.5; M8621-0-DPMC rev
+  D, E4). The microcode-level model adds no time for the wait.
 - The halt turns off the PI system in the hardware (`inout.50`, WRTHSB:
   "TURN OFF PI SYSTEM"). `emu/ks10-core-soft` does not model a continue after a
   halt.

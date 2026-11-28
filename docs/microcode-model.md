@@ -684,7 +684,8 @@ where the hardware also depends on its state at power on.
 - the RAM file with `RAMADR` 0, 1 (`ACALU` `B` and `AC+N`), 2, 4, 6 and 7,
   and RAMFILE WRITE;
 - memory cycles on 512 Ki words of main memory: VMA and the VMA flags,
-  the cycle type, MEMORY CYCLE, AC references, MB;
+  the cycle type, MEMORY CYCLE, AC references, MB; NXM ERR for a cycle
+  above 512 Ki words ("The page fail from INT OR ERR");
 - SCAD with `SCADA` SC or `S#`, `SCADB` FE; SC and FE;
 - IR, AC, XR with XR PREV; the program flags with `SPEC/FLAGS`,
   `SPEC/ASHOV` and `SPEC/EXPTST`; `SPEC/LDACBLK`, `SPEC/LDPI`, `SPEC/APR
@@ -704,8 +705,7 @@ The rest stops (the `unmodelled` branches of `machine.rs`):
 - a virtual I/O cycle with PAGE EN; a page table entry or a cache tag
   that nothing wrote, where the model needs it;
 - a page fail in a word with `SPEC/NICOND`;
-- a memory cycle above 512 Ki words; an I/O read of controller 0
-  without bit 19 (the memory status register), and an I/O read that no
+- an I/O read of controller 0 without bit 19 (the memory status register), and an I/O read that no
   controller answers;
 - DP on the DBus where DP depends on D, except the byte loop of DBM
   ("DBus and DBM inputs"); SCAD on DBM where SCAD depends on DP; a byte
@@ -1049,6 +1049,14 @@ insertion of DBM and the byte dispatch. All come from the schematics
   DPM5 E21 gives PAGE FAIL DELAY in the word that completes the cycle:
   MEMORY DELAY AND PAGE FAIL EN AND NOT VMA JUST LOADED (M8621-0-DPM5
   rev B).
+- **NXM ERR** (M8621-0-DPMC rev D, E4, E10). If MEM BUSY does not come
+  within three bus cycles of a BUS MEM CYCLE (COM/ADR +2), NXM ERR sets
+  (EK-OKS10-TM-002 5.6.5). An I/O cycle is no BUS MEM CYCLE (DPMC E39).
+  NXM ERR holds until CLEAR MEM CYCLE, which is MEM WAIT AND SYNC (DPM5
+  E54). RESET A gives MEM WAIT (DPM5 E8). NXM ERR presets APR flag 27
+  (DPMB E139). The microcode reaches `HARD` with code 5 and clears NXM
+  ERR with `ABORT MEM CYCLE` (itspag, `PFD`, `HARD`). The model takes
+  no time for the three bus cycles ([`unknowns.md`](unknowns.md)).
 - **The word.** CSL5 E32 gives PAGE FAIL, which turns off the DPE/M
   clock (E54; M8616-0-CSL5 rev D). The CRA clock runs. CRA2 E34 moves
   the stack as for a CALL, so the stack holds the address of the word,
@@ -1063,7 +1071,9 @@ insertion of DBM and the byte dispatch. All come from the schematics
 - **Page fail dispatch.** DBM input 0 gives the dispatch in bits 18–21
   (DPM6 E116, E115, E9, E47, E124, E41). PAGING OK enables the 74148
   E116. Its inputs are page not valid, USER of the page and of VMA
-  differ, and a write test of a page that is not writeable. The codes
+  differ, and a write test of a page that is not writeable. NXM ERR
+  gives 1 in bit 19 (PF DISP 04), and BAD DATA ERR in bit 20 (PF DISP
+  02; E115). The codes
   agree with the dispatch table of the microcode **[microcode]** (itspag,
   `PFD`: 12, 13, 10, and 11 for the 1 ms timer; 1, 3, 5 for an
   interrupt, parity, NXM).

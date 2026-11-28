@@ -41,6 +41,9 @@ const CONSOLE_REGISTER_BIT: u32 = 0o200000;
 /// microcode, as the delay loops of the 8080 do (cmds.m80, HLTCM, DNF).
 const CONSOLE_WAIT_CYCLES: u64 = 100_000;
 
+/// APR flag 27, NXM, in [`Machine::apr_flags`] (bit 0 is flag 31).
+const APR_NXM: u8 = 1 << (31 - 27);
+
 /// Why the machine stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stop {
@@ -277,6 +280,9 @@ pub struct Machine {
     /// The APR flags 24–31 **[manual]** (M8621-0-DPMB rev B, E159, E158,
     /// E139, E147): bit 7 is flag 24, bit 0 is flag 31.
     pub apr_flags: u8,
+    /// NXM ERR (DPMC E10 R3): a memory cycle that no memory answered
+    /// ([`Machine::nonexistent_memory`]).
+    pub nxm_err: bool,
     /// The DP word of the last `SPEC/LDPI` (DPEB E175, E126, E140). The
     /// registers hold the complement of DP.
     pub pi: W36,
@@ -423,6 +429,7 @@ impl Machine {
             },
             apr_enables: pw,
             apr_flags: all(0o377),
+            nxm_err: p,
             byte_loop: None,
             dp_bounds: None,
             byte_loop_alu: None,
@@ -844,7 +851,11 @@ impl Machine {
             None => self.bus_address(),
         };
         if bus_cycle && !io_cycle && address >= self.memory.len() {
-            return Err(self.unmodelled(format!("nonexistent memory {address:o}")));
+            if spec_en & 1 != 0 && spec_low == 5 {
+                return Err(self.unmodelled("page fail in a word with SPEC/NICOND"));
+            }
+            self.nonexistent_memory(mw);
+            return Ok(());
         }
         // A read gives MB on DBM MEM. For an AC reference, FORCE RAMFILE
         // makes the DBus take the RAM file (DPM5 E14, DPE3 E70).
@@ -1046,6 +1057,8 @@ impl Machine {
             let start = mem_en && !rpw && (self.cycle.read || self.cycle.write);
             self.memory_cycle = start;
             started = start;
+            // CLEAR MEM CYCLE (DPM5 E54) ends the hold of NXM ERR (DPMC E4).
+            self.nxm_err = false;
             self.int_latched = self.interrupt_req;
             self.one_ms_latched = self.one_ms_sync;
         }
@@ -1397,13 +1410,32 @@ impl Machine {
 
     /// INT OR ERR **[manual]** (M8621-0-DPM6 rev C, E15, E9): INT or 1MS
     /// (DPM6 E16, latched at MEM WAIT) in a memory cycle that is virtual
-    /// and not a write, or NXM ERR or BAD DATA EN. The model has neither
-    /// error: it stops on nonexistent memory and has no parity.
+    /// and not a write, or NXM ERR, or BAD DATA EN. Both inputs of the E9
+    /// gate of NXM ERR are NXM ERR H, so a physical reference and a write
+    /// fail too. The model has no parity, so BAD DATA EN is 0.
     fn int_or_err(&self) -> bool {
-        self.memory_cycle
+        (self.memory_cycle
             && !self.vma_flags.physical
             && !self.cycle.write
-            && (self.int_latched || self.one_ms_latched)
+            && (self.int_latched || self.one_ms_latched))
+            || self.nxm_err
+    }
+
+    /// A memory cycle that no memory answers **[manual]**
+    /// (EK-OKS10-TM-002 5.6.5; M8621-0-DPMC rev D, E4, E10). If MEM BUSY
+    /// does not come within three bus cycles of a BUS MEM CYCLE (COM/ADR
+    /// +2), NXM ERR sets. It holds until CLEAR MEM CYCLE (DPM5 E54: MEM
+    /// WAIT AND SYNC). An I/O cycle is no BUS MEM CYCLE (DPMC E39). NXM
+    /// ERR presets APR flag 27 (M8621-0-DPMB rev B, E139) and gives INT
+    /// OR ERR, so the word that waits for the memory page-fails (DPM5
+    /// E21). The microcode dispatches on code 5 (itspag, `PFD`, `HARD`).
+    ///
+    /// The model has no wait cycles: the word takes no time for the
+    /// three bus cycles **[estimate]** (docs/unknowns.md).
+    fn nonexistent_memory(&mut self, mw: Microword) {
+        self.nxm_err = true;
+        self.apr_flags |= APR_NXM;
+        self.page_fail(mw);
     }
 
     /// A page fail in the word that completes a memory cycle **[manual]**.
@@ -1437,8 +1469,10 @@ impl Machine {
     /// low. The codes agree with the
     /// dispatch of the microcode **[microcode]** (itspag, `PFD`: 12
     /// nonexistent page, 13 exec/user mismatch, 10 read-only page, 11 the
-    /// 1 ms timer). NXM ERR and BAD DATA ERR are 0: the model stops on
-    /// nonexistent memory and has no parity.
+    /// 1 ms timer). NXM ERR gives 1 in PF DISP 04 and BAD DATA ERR gives
+    /// 1 in PF DISP 02 (E115). With INT OR ERR, PAGING OK is 0 and E116
+    /// is off, so NXM alone gives code 5 (itspag, `PFD`: "(5) NXM"). BAD
+    /// DATA ERR is 0: the model has no parity.
     fn pf_disp(&self) -> Result<u8, Stop> {
         let f = self.vma_flags;
         let int_or_err = self.int_or_err();
@@ -1464,7 +1498,7 @@ impl Machine {
         let a = !input.unwrap_or(0u8) & 7;
         let d01 = a & 1;
         let d02 = u8::from(a & 2 == 0);
-        let d04 = u8::from(a & 4 == 0);
+        let d04 = u8::from(a & 4 == 0 || self.nxm_err);
         let d10 = u8::from(!int_or_err);
         Ok(d10 << 3 | d04 << 2 | d02 << 1 | d01)
     }
@@ -1568,9 +1602,13 @@ impl Machine {
             // SPEC/APR FLAGS clocks the APR flags from DP 24–31 **[manual]**
             // (DPMB, DPM5 CLK APR FLAGS). Flag 25 presets CSL4 E161, the
             // interrupt of the 8080 (M8616-0-CSL4 rev C): the doorbell.
-            let new = dp.field(24, 31) as u8;
+            // The preset of flag 27 holds it while NXM ERR is 1 (E139).
+            let mut new = dp.field(24, 31) as u8;
             if new & !self.apr_flags & 0o100 != 0 {
                 self.cty.doorbell(self.instructions);
+            }
+            if self.nxm_err {
+                new |= APR_NXM;
             }
             self.apr_flags = new;
         }
@@ -1798,8 +1836,10 @@ impl Machine {
         self.io.reset();
         self.bus = Bus::default();
         // DP RESET (204 bit 2) clears the APR flags **[manual]** (CSL4
-        // E156; M8621-0-DPMA rev B, E23, E87; DPMB).
+        // E156; M8621-0-DPMA rev B, E23, E87; DPMB). RESET A also gives MEM
+        // WAIT (DPM5 E8), so CLEAR MEM CYCLE clears NXM ERR (DPMC E4).
         self.apr_flags = 0;
+        self.nxm_err = false;
         self.memory[0] = W36::ONES;
         self.upc = 0;
         self.last_tick = self.instructions;
@@ -2077,6 +2117,25 @@ mod tests {
         let m = run_cycle(&[3, 5, 8, 14, 16]);
         assert_eq!(m.memory[0o100], W36::wrap(7));
         assert_eq!(m.mb, W36::wrap(7));
+    }
+
+    #[test]
+    fn nxm_err_holds_apr_flag_27() {
+        // SPEC/APR FLAGS (group 20, code 3) with DP 0 clears the flags,
+        // but the preset of flag 27 holds it while NXM ERR is 1 (DPMB
+        // E139).
+        for (nxm, want) in [(true, APR_NXM), (false, 0)] {
+            let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
+            cram[0] = Microword::from_bits(0)
+                .with(u::SPEC, 0o23)
+                .with(u::DISP, 0o70)
+                .with(u::J, 1);
+            let mut m = Machine::new(cram, vec![0; DROM_WORDS], W40::ZERO);
+            m.apr_flags = APR_NXM;
+            m.nxm_err = nxm;
+            m.step().unwrap();
+            assert_eq!(m.apr_flags, want, "NXM ERR {nxm}");
+        }
     }
 
     #[test]
