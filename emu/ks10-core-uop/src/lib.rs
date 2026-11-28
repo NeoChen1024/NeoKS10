@@ -15,6 +15,8 @@
 //! - [`drom`]: the dispatch ROM word.
 //! - [`alu`]: the 40-bit arithmetic unit and its shift mixers.
 //! - [`machine`]: the microsequencer and the rest of the data path.
+//! - [`record`]: the record of a completed instruction, for the
+//!   co-simulation with `rtl/`.
 
 pub mod alu;
 pub mod cram;
@@ -22,5 +24,6 @@ pub mod drom;
 #[rustfmt::skip]
 pub mod fields;
 pub mod machine;
+pub mod record;
 #[rustfmt::skip]
 pub mod ucode;

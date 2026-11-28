@@ -15,6 +15,7 @@ use crate::alu::{self, Alu, Controls, Outputs, W40};
 use crate::cram::Microword;
 use crate::drom::DROM_WORDS;
 use crate::fields::{Field, u};
+use crate::record::{self, Record};
 
 /// The number of words of the RAM file (DPE7, DPE8).
 pub const RAM_FILE_WORDS: usize = 1024;
@@ -310,6 +311,16 @@ pub struct Machine {
     /// completes a read).
     pub cache_hits: u64,
     pub ticks: u64,
+    /// The record of the last completed instruction (`record`). `step`
+    /// sets it at the end of a `NICOND` word; a caller can take it.
+    pub record: Option<Record>,
+    /// A `NICOND` word is in progress: `step` takes the record at its end.
+    record_due: bool,
+    /// The 2901 register PC (ks10, `A/PC`) **[microcode]**.
+    pc_register: usize,
+    /// The memory writes since the last record, and their hash.
+    writes: u64,
+    write_hash: u64,
 }
 
 fn get(mw: Microword, f: Field) -> u32 {
@@ -421,6 +432,11 @@ impl Machine {
             cycles: 0,
             cache_hits: 0,
             ticks: 0,
+            record: None,
+            record_due: false,
+            pc_register: crate::ucode::symbol("A", "PC").expect("the symbol A/PC") as usize,
+            writes: 0,
+            write_hash: record::HASH_START,
         }
     }
 
@@ -641,6 +657,31 @@ impl Machine {
     /// also needs CSL5 FS (1) (E53), which this model takes as 1
     /// (docs/unknowns.md).
     pub fn step(&mut self) -> Result<(), Stop> {
+        let r = self.step_cycle();
+        if self.record_due {
+            self.record_due = false;
+            self.take_record();
+        }
+        r
+    }
+
+    /// The record at the end of a `NICOND` word (`record`).
+    fn take_record(&mut self) {
+        let base = usize::from(self.cur_block & 7) << 4;
+        self.record = Some(Record {
+            count: self.instructions,
+            cycles: self.cycles,
+            pc: alu::word(self.alu.reg[self.pc_register]),
+            flags: record::flag_half(self.flags),
+            ac: std::array::from_fn(|k| self.ram_file[base + k]),
+            writes: self.writes,
+            write_hash: self.write_hash,
+        });
+        self.writes = 0;
+        self.write_hash = record::HASH_START;
+    }
+
+    fn step_cycle(&mut self) -> Result<(), Stop> {
         if let Some(s) = self.pending_stop.take() {
             return Err(s);
         }
@@ -939,6 +980,8 @@ impl Machine {
                         .write_cycle(&mut self.memory, self.instructions, a, dp.get(), byte);
             } else {
                 self.memory[address] = dp;
+                self.writes += 1;
+                self.write_hash = record::hash_write(self.write_hash, address as u64, dp);
             }
         }
         if let Some(s) = scad {
@@ -1581,6 +1624,7 @@ impl Machine {
             self.io.run_events(&mut self.memory, now);
         }
         self.instructions += 1;
+        self.record_due = true;
     }
 
     /// A 1 ms tick of the timer (DPMC E1): E1 takes 1 MSEC EN.

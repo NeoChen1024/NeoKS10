@@ -1222,6 +1222,32 @@ boundary. The PC word thus depends on the microcycle of the tick
   run found this at instruction 4 731 025.
 - Unit test in `machine.rs`: each missing term of E114 gives no hit.
 
+## The instruction record
+
+The logic in `rtl/` gives a record at each completed instruction, and the
+co-simulation compares it with the record of the model ([`AGENTS.md`](../AGENTS.md),
+"Rules for the logic"). `emu/ks10-core-uop/src/record.rs` defines it.
+
+- The model takes the record at the end of each microword with
+  `SPEC/NICOND`, after all writes of that word.
+- `pc` is the 2901 register PC. `INCPC` adds 1 to it at the start of an
+  instruction, so at `NICOND` it holds the address of the next
+  instruction (simple.42, `INCPC`; ks10, `DONE`) **[microcode]**.
+- The record also has the instruction count, the microcycle count, the
+  program flags and the 16 ACs of the current block.
+- `writes` and `write_hash` cover the memory writes of the processor
+  since the record before. The hash is FNV-1a over the address and the
+  word of each write. A BLT can write many words, so the record does not
+  keep the words.
+- The console `JRST` of ST and BT has a record. The halt loop has none.
+  The halt after the `JRST` of ST writes 19 words, which go into the
+  record of the first instruction of the program.
+
+**[measured]** 2026-11-28 (`emu/ks10-core-uop/tests/record.rs`): ST 1000
+of MOVEI, MOVEM, AOS and HALT gives 4 records, with the PC values
+1000 to 1003 and one write for each of MOVEM and AOS. Both fills. A
+mutant that hashes the word before the address fails the test.
+
 ## DEC diagnostics on the model
 
 `emu/ks10-core-uop/tests/diag.rs` runs the programs of SMCPU.CMD on the
