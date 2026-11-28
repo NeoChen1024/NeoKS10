@@ -34,6 +34,10 @@ impl Ks10 for Machine {
             .is_some())
     }
 
+    fn peek(&self, address: u32) -> Option<W36> {
+        self.memory.get(address as usize).copied()
+    }
+
     fn io_read(&mut self, address: u32, byte: bool) -> Result<Reply, &'static str> {
         let now = self.now();
         Ok(match self.io.read_cycle(address, byte, now) {
@@ -131,6 +135,16 @@ impl Ks10 for Machine {
 mod tests {
     use super::*;
     use ks10_core_uop::alu::W40;
+
+    #[test]
+    fn peek_gives_the_memory_word_without_a_cycle() {
+        let mut m = Machine::its(W40::ZERO);
+        m.memory[0o32] = W36::wrap(0o541);
+        let cycles = m.cycles;
+        assert_eq!(m.peek(0o32), Some(W36::wrap(0o541)));
+        assert_eq!(m.peek(m.memory.len() as u32), None);
+        assert_eq!(m.cycles, cycles);
+    }
 
     #[test]
     fn the_device_time_follows_the_8080_clock() {

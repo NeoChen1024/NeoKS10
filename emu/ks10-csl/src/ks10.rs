@@ -100,6 +100,11 @@ pub trait Ks10 {
     fn cram_write(&mut self, _function: u8, _data: u16) -> Result<(), &'static str> {
         Err("the CRAM of the KS10")
     }
+    /// A memory word without a bus cycle, for the typist of a test
+    /// (`crate::typist`). `None` if the KS10 has no memory to look at.
+    fn peek(&self, _address: u32) -> Option<W36> {
+        None
+    }
     /// The inputs of the processor from the console.
     fn inputs(&self) -> Inputs;
     fn set_inputs(&mut self, i: Inputs);

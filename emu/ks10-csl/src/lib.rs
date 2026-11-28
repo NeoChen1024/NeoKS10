@@ -10,6 +10,7 @@
 pub mod board;
 pub mod ks10;
 pub mod rom;
+pub mod typist;
 pub mod uop;
 pub mod usart;
 

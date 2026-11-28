@@ -207,6 +207,11 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   word 32 and does not wait for the KS10 to take the one before
   (`hcore.m80`, `TENCHR`). So a burst of input faster than the KS10
   takes it loses characters, as on the board.
+- The tests type with a typist (`emu/ks10-csl/src/typist.rs`). It
+  answers a prompt of the CTY output with text. It types a character
+  only after the line is free and the KS10 has cleared word 32, and a
+  fixed time after the character before. This is a choice of the tests:
+  a person waits for the echo. The board has no flow control.
 - Each write to a port of the KS10 goes into a log. A port, an address or
   a function without a model stops the run with its reason. The 8080
   does not decode A14 and A15, and only A13 enables the RAM (CSL2 rev E,
@@ -252,9 +257,8 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   to the disk, so the test boots from a copy.
 - **[measured]** 2026-11-28, `make csl KS10_ITS_DISK=<rp0.dsk>`, with a
   character time of 1707 states (9600 baud, a choice of the test): the
-  test types `its` at the prompt, then ESC G. It types each character
-  100 ms after the one before, and only after the KS10 has cleared word
-  32. The 8080 program passes the input to the disk program, and ITS
+  typist types `its` at the prompt, then ESC G, with 100 ms between
+  characters. The 8080 program passes the input to the disk program, and ITS
   prints `IN OPERATION` after 102513470 states (62.6 s) and 12135313
   instructions. The text equals the text of the high-level console,
   except for the place of the bell before `IN OPERATION`. ITS sends ^G

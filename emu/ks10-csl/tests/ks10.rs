@@ -13,6 +13,7 @@ use ks10_core_uop::ucode;
 use ks10_csl::board::{Config, Csl};
 use ks10_csl::ks10::{Function, Reply};
 use ks10_csl::rom;
+use ks10_csl::typist::Typist;
 use pdp10::W36;
 
 fn rom() -> Option<Vec<u8>> {
@@ -333,9 +334,6 @@ const CHAR_STATES: u64 = 1707;
 /// The time between two typed characters: 100 ms, the speed of a person.
 const TYPING_STATES: u64 = 163_840;
 
-/// The CTY input word of the 8080 program (`CTYIN`).
-const CTYIN: usize = 0o32;
-
 /// The CTY output of the boot on `ks10-core-uop` with the high-level
 /// console of `ks10-machine`, typed on like `ks10-core-uop/tests/its_boot.rs`
 /// does, up to `done`.
@@ -363,11 +361,8 @@ fn high_level_its(f: std::fs::File, done: &str) -> String {
 
 /// The 8080 program serves the CTY input of the disk program and of ITS:
 /// `its` at the prompt of the disk program, then ESC G, as
-/// `ks10-core-uop/tests/its_boot.rs` types. The program deposits each
-/// character in word 32 and does not wait for the KS10 to take the one
-/// before (hcore.m80, `TENCHR`); the disk program does not read the CTY
-/// while it loads ITS. So the test types a character only after the KS10
-/// has cleared word 32.
+/// `ks10-core-uop/tests/its_boot.rs` types, with the typist of
+/// `ks10_csl::typist`.
 ///
 /// The CTY output up to `IN OPERATION` is the output of the high-level
 /// console after the banner, except for the place of the bell. ITS sends
@@ -392,35 +387,17 @@ fn the_8080_program_passes_the_cty_input_to_its() {
         char_states: CHAR_STATES,
     };
     let mut c = Csl::new(rom, config, m).unwrap();
-    let mut answers = vec![("DSKDMP", "its\r"), ("\r", "\x1bg")].into_iter();
-    let mut next = answers.next();
-    let mut typing = std::collections::VecDeque::new();
-    let (mut from, mut typed) = (0, 0);
+    let mut typist = Typist::new(TYPING_STATES);
+    typist.answer("DSKDMP", "its\r");
+    typist.answer("\r", "\x1bg");
     let mut out = String::new();
     while c.now() < 400_000_000 && !out.contains(DONE) {
         if let Err(s) = c.run(10_000) {
             panic!("{s}; processor {:?}; CTY {out:?}", c.ks10().pending_stop);
         }
+        typist.tick(&mut c);
         if c.cty_output().len() != out.len() {
             out = String::from_utf8_lossy(c.cty_output()).into_owned();
-        }
-        if typing.is_empty()
-            && let Some((prompt, text)) = next
-            && out[from..].contains(prompt)
-        {
-            typing.extend(text.bytes());
-            next = answers.next();
-        }
-        if c.cty_input_pending() == 0
-            && c.ks10().memory[CTYIN] == W36::ZERO
-            && c.now() >= typed + TYPING_STATES
-            && let Some(b) = typing.pop_front()
-        {
-            c.type_cty(&[b]);
-            typed = c.now();
-            if typing.is_empty() {
-                from = out.len();
-            }
         }
     }
     eprintln!(
