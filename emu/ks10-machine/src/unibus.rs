@@ -225,6 +225,13 @@ impl Io {
 
     /// The PI levels that the adapters request, as a mask ([`level_bit`]).
     pub fn requests(&self) -> u8 {
+        // No device requests: the usual case, without the scan of the
+        // sources. The list is that of `Io::sources`.
+        let (d, z, c, i, t) = (&self.disk, &self.dz, &self.chaos, &self.imp, &self.tape);
+        if !(d.irq || t.irq || i.rx_irq || i.tx_irq || z.rx_irq || z.tx_irq || c.rx_irq || c.tx_irq)
+        {
+            return 0;
+        }
         let mut m = 0;
         for (on, inst, _, _) in self.sources() {
             if on {

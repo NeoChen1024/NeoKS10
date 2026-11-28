@@ -151,6 +151,12 @@ impl Dz11 {
         if self.csr & d::csr::MSE as u16 == 0 {
             return;
         }
+        // No line enabled: the scan finds no line and no wake time. ITS
+        // runs with MSE and no line enabled; this test keeps the scan out
+        // of each instruction.
+        if self.tcr & 0o377 == 0 {
+            return;
+        }
         let mut wake = None;
         for k in 0..8 {
             let n = (self.scan + k) % 8;
