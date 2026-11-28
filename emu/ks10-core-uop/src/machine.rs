@@ -313,6 +313,12 @@ pub struct Machine {
     pub last_tick: u64,
     /// The CTY service of the 8080 (the communication words 32 and 33).
     pub cty: Cty,
+    /// The diagnostic address register of the CRA (CSL4 CRAM ADR LOAD;
+    /// EK-OKS10-TM-002 5.3.8), 12 bits.
+    pub diag_address: u16,
+    /// CRA/M RESET has cleared the microinstruction register, and the
+    /// processor clock has not run since (EK-OKS10-TM-002 5.4.6).
+    pub mir_clear: bool,
     /// A model of the CSL board is the console (`emu/ks10-csl`): the CTY
     /// service above does not run, and the doorbell sets `csl_interrupt`.
     pub csl_model: bool,
@@ -457,6 +463,8 @@ impl Machine {
             instructions: 0,
             last_tick: 0,
             cty: Cty::default(),
+            diag_address: 0,
+            mir_clear: false,
             csl_model: false,
             csl_interrupt: false,
             idle: 0,
@@ -1888,13 +1896,8 @@ impl Machine {
         (c.run, c.cont, c.execute) = (false, false, false);
         (c.one_ms_en, c.cache_en) = (false, false);
         c.halt_loop = false;
-        self.io.reset();
-        self.bus = Bus::default();
-        // DP RESET (204 bit 2) clears the APR flags **[manual]** (CSL4
-        // E156; M8621-0-DPMA rev B, E23, E87; DPMB). RESET A also gives MEM
-        // WAIT (DPM5 E8), so CLEAR MEM CYCLE clears NXM ERR (DPMC E4).
-        self.apr_flags = 0;
-        self.nxm_err = false;
+        self.bus_reset();
+        self.dp_reset();
         self.memory[0] = W36::ONES;
         self.upc = 0;
         self.last_tick = self.now();
@@ -1927,6 +1930,50 @@ impl Machine {
         // 212/5: CONTINUE and RUN, EXECUTE 0.
         let c = &mut self.csl;
         (c.execute, c.cont, c.run) = (false, true, true);
+        Ok(())
+    }
+
+    /// The bus RESET of the console (register 100 bit 7): the Unibus
+    /// adapters and the bus state.
+    pub fn bus_reset(&mut self) {
+        self.io.reset();
+        self.bus = Bus::default();
+    }
+
+    /// DP RESET (register 204 bit 2) clears the APR flags **[manual]**
+    /// (CSL4 E156; M8621-0-DPMA rev B, E23, E87; DPMB). RESET A also gives
+    /// MEM WAIT (DPM5 E8), so CLEAR MEM CYCLE clears NXM ERR (DPMC E4).
+    pub fn dp_reset(&mut self) {
+        self.apr_flags = 0;
+        self.nxm_err = false;
+    }
+
+    /// CRA/M RESET (register 204 bit 0) clears the microinstruction
+    /// register (EK-OKS10-TM-002 5.4.6).
+    pub fn cram_reset(&mut self) {
+        self.mir_clear = true;
+    }
+
+    /// CRAM ADR LOAD: the diagnostic address register takes the 12 bits
+    /// that CRA R CLK latched (EK-OKS10-TM-002 5.3.8).
+    pub fn cram_address_load(&mut self, data: u16) {
+        self.diag_address = data & 0o7777;
+    }
+
+    /// CRAM WRITE with diagnostic function `function`: 12 bits of the
+    /// control RAM word at the diagnostic address (`cram::write_segment`).
+    /// With the microinstruction register clear, the dispatch selects the
+    /// diagnostic address, so it is the address of the control RAM
+    /// (EK-OKS10-TM-002 5.4.6).
+    pub fn cram_write(&mut self, function: u8, data: u16) -> Result<(), &'static str> {
+        if function > 7 {
+            return Err("a CRAM write with DIAG 10");
+        }
+        if !self.mir_clear {
+            return Err("a CRAM write without CRA/M RESET");
+        }
+        let a = usize::from(self.diag_address & 0o3777);
+        self.cram[a] = crate::cram::write_segment(self.cram[a], function, data);
         Ok(())
     }
 

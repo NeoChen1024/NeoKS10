@@ -70,6 +70,22 @@ pub trait Ks10 {
     /// The 8080 time is `now` states since power-up, and the KS10 clock
     /// is stopped: the devices of the KS10 run to that time.
     fn idle_to(&mut self, now: u64);
+    /// The bus RESET (register 100 bit 7) starts.
+    fn bus_reset(&mut self) {}
+    /// DP RESET (register 204 bit 2) starts.
+    fn dp_reset(&mut self) {}
+    /// CRA/M RESET (register 204 bit 0) holds.
+    fn cram_reset(&mut self) {}
+    /// CRAM ADR LOAD (register 204 bit 4) with the 12 bits of the CRA
+    /// latch.
+    fn cram_address_load(&mut self, _data: u16) -> Result<(), &'static str> {
+        Err("the CRAM of the KS10")
+    }
+    /// CRAM WRITE (register 204 bit 5) with the diagnostic function of
+    /// register 205 and the 12 bits of the CRA latch.
+    fn cram_write(&mut self, _function: u8, _data: u16) -> Result<(), &'static str> {
+        Err("the CRAM of the KS10")
+    }
     /// The inputs of the processor from the console.
     fn inputs(&self) -> Inputs;
     fn set_inputs(&mut self, i: Inputs);
@@ -122,6 +138,8 @@ pub enum Function {
     MemoryRead { com_adr: W36, reply: Reply },
     /// Examine bus: the latches take the bus without a transfer.
     ExamineBus { data: W36 },
+    /// CRA R CLK: the 8646 transceivers of the CRA latch bits 24 to 35.
+    CraLatch { data: u16 },
     /// A memory write: the command/address word, the data and if a
     /// memory took it.
     MemoryWrite {
@@ -181,6 +199,8 @@ pub struct Interface {
     /// CSL4 E171: INT 10 to the KS10 (register 116 bit 0), held until the
     /// KS10 clock runs.
     pub int_10: bool,
+    /// The 12 bits that CRA R CLK latched on the CRA (CRA5).
+    pub cra_latch: u16,
     /// Register 210 bits 0 to 5 (CSL4 E121), BUS REQ (E129) and MEM (CSL3
     /// E151).
     pub bus_ctl: u8,
@@ -208,6 +228,7 @@ impl Default for Interface {
             diag: 0,
             ten_int: false,
             int_10: false,
+            cra_latch: 0,
             bus_ctl: 0,
             bus_req: false,
             mem: false,
@@ -248,6 +269,7 @@ impl Interface {
         ks10: &mut dyn Ks10,
     ) -> Result<bool, &'static str> {
         let mut inputs = ks10.inputs();
+        let was_reset = self.bus_reset();
         match port {
             // CSL3 E143: A0 selects 100 or 101; both end RESET (1).
             0o100 => {
@@ -286,7 +308,28 @@ impl Interface {
             // clears when it arrives. The model holds the request while the
             // KS10 clock is stopped.
             0o116 => self.int_10 |= v & 1 != 0,
-            0o204 => self.cram_ctl = v & 0o77,
+            0o204 if self.bus_reset() => {}
+            0o204 => {
+                let rise = v & !self.cram_ctl;
+                self.cram_ctl = v & 0o77;
+                // CSL4 E156: CRA/M RESET, STACK RESET, DP RESET, SS MODE,
+                // CRAM ADR LOAD, CRAM WRITE.
+                if v & 0o1 != 0 {
+                    ks10.cram_reset();
+                }
+                if rise & 0o2 != 0 {
+                    return Err("STACK RESET (register 204 bit 1)");
+                }
+                if rise & 0o4 != 0 {
+                    ks10.dp_reset();
+                }
+                if rise & 0o20 != 0 {
+                    ks10.cram_address_load(self.cra_latch)?;
+                }
+                if rise & 0o40 != 0 {
+                    ks10.cram_write(self.diag, self.cra_latch)?;
+                }
+            }
             0o205 => {
                 if v & 0o100 != 0 {
                     return Err("the maintenance clock of the KS10 (register 205 bit 6)");
@@ -316,6 +359,10 @@ impl Interface {
         }
         if self.bus_reset() {
             self.reset(&mut inputs);
+            // CSL8 E167 drives BUS RESET L from CSL5 RESET H.
+            if !was_reset {
+                ks10.bus_reset();
+            }
         }
         ks10.set_inputs(inputs);
         Ok(true)
@@ -336,6 +383,19 @@ impl Interface {
     /// 5-10).
     fn bus_function(&mut self, now: u64, ks10: &mut dyn Ks10) -> Result<(), &'static str> {
         let c = self.bus_ctl;
+        // CRAM ADR LOAD and CRAM WRITE (CADWR, WFUNC): 144, BUS REQ, XMIT
+        // ADR and CRA R CLK. The 8080 writes the 12 bits into bits 24 to
+        // 35 of the COM/ADR word (ports 103 and 105) **[its]**.
+        if c == XMIT_ADR | CRA_R_CLK && self.bus_req {
+            self.bus_req = false;
+            let data = self.com_adr.0.field(24, 35) as u16;
+            self.cra_latch = data;
+            self.cycles.push(BusCycle {
+                at: now,
+                function: Function::CraLatch { data },
+            });
+            return Ok(());
+        }
         if c & (CRA_R_CLK | CRA_T_CLK) != 0 {
             return Err("a diagnostic function of the CRA (register 210)");
         }
@@ -600,6 +660,100 @@ mod tests {
             reply,
             inputs: Inputs::default(),
         }
+    }
+
+    /// A KS10 that logs the CRA functions.
+    #[derive(Default)]
+    struct Cra(Vec<String>, Inputs);
+
+    impl Ks10 for Cra {
+        fn memory_read(&mut self, _a: u32) -> Result<Reply, &'static str> {
+            Err("no memory")
+        }
+        fn memory_write(&mut self, _a: u32, _v: W36) -> Result<bool, &'static str> {
+            Err("no memory")
+        }
+        fn io_read(&mut self, _a: u32, _byte: bool) -> Result<Reply, &'static str> {
+            Err("no device")
+        }
+        fn io_write(&mut self, _a: u32, _v: W36, _byte: bool) -> Result<bool, &'static str> {
+            Err("no device")
+        }
+        fn idle_to(&mut self, _now: u64) {}
+        fn bus_reset(&mut self) {
+            self.0.push("bus reset".into());
+        }
+        fn dp_reset(&mut self) {
+            self.0.push("dp reset".into());
+        }
+        fn cram_reset(&mut self) {
+            self.0.push("cram reset".into());
+        }
+        fn cram_address_load(&mut self, data: u16) -> Result<(), &'static str> {
+            self.0.push(format!("address {data:o}"));
+            Ok(())
+        }
+        fn cram_write(&mut self, function: u8, data: u16) -> Result<(), &'static str> {
+            self.0.push(format!("write {function} {data:o}"));
+            Ok(())
+        }
+        fn inputs(&self) -> Inputs {
+            self.1
+        }
+        fn set_inputs(&mut self, i: Inputs) {
+            self.1 = i;
+        }
+        fn halt_loop(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn register_204_and_210_load_the_control_ram() {
+        let mut k = Cra::default();
+        let mut i = Interface::default();
+        // MRINT at power-up: the reset holds, so 204/5 is lost.
+        i.write(0o204, 0o5, 0, &mut k).unwrap();
+        assert!(k.0.is_empty());
+        i.write(0o100, 0o174, 0, &mut k).unwrap();
+        // MRINT later: 204/5 (CRA/M and DP RESET), then RESET.
+        i.write(0o204, 0o5, 0, &mut k).unwrap();
+        i.write(0o100, 0o200, 0, &mut k).unwrap();
+        i.write(0o100, 0o174, 0, &mut k).unwrap();
+        // CADWR: 204/1, 204/0, the address 1234 in bits 24 to 35 of the
+        // COM/ADR word (103, 105), 210/144, 204/21, 204/0.
+        i.write(0o204, 0o1, 0, &mut k).unwrap();
+        i.write(0o204, 0o0, 0, &mut k).unwrap();
+        i.write(0o103, 0o234, 0, &mut k).unwrap();
+        i.write(0o105, 0o2, 0, &mut k).unwrap();
+        i.write(0o210, 0o144, 0, &mut k).unwrap();
+        i.write(0o204, 0o21, 0, &mut k).unwrap();
+        i.write(0o204, 0o0, 0, &mut k).unwrap();
+        // WFUNC: the data 5670, 210/144, 205/6, 204/40, 204/40 (no new
+        // edge), 204/0.
+        i.write(0o103, 0o270, 0, &mut k).unwrap();
+        i.write(0o105, 0o13, 0, &mut k).unwrap();
+        i.write(0o210, 0o144, 0, &mut k).unwrap();
+        i.write(0o205, 0o6, 0, &mut k).unwrap();
+        i.write(0o204, 0o40, 0, &mut k).unwrap();
+        i.write(0o204, 0o40, 0, &mut k).unwrap();
+        i.write(0o204, 0o0, 0, &mut k).unwrap();
+        assert_eq!(
+            k.0,
+            [
+                "cram reset",
+                "dp reset",
+                "bus reset",
+                "cram reset",
+                "cram reset",
+                "address 1234",
+                "write 6 5670",
+            ]
+        );
+        assert_eq!(i.cycles.len(), 2);
+        assert_eq!(i.cycles[1].function, Function::CraLatch { data: 0o5670 });
+        // STACK RESET has no model.
+        assert!(i.write(0o204, 0o2, 0, &mut k).is_err());
     }
 
     #[test]

@@ -94,8 +94,8 @@ octal. Bits have DEC numbers.
 ## Comparison
 
 This is the plan of the comparison (design decision 2026-11-28). The
-model of the board (`emu/ks10-csl`) runs the program up to the first
-CRAM write of the boot, with `ks10-core-uop` as the KS10.
+model of the board (`emu/ks10-csl`) runs the program up to the start of
+the KS10 clock in the boot, with `ks10-core-uop` as the KS10.
 
 ### The program
 
@@ -162,6 +162,11 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   the memory read and write, the I/O register read and write, and the
   examine bus. The other functions, the KS10 clock and the maintenance
   clock stop the run.
+- The CRAM load goes through the CRA (EK-OKS10-TM-002 5.3.8): 210/144
+  latches bits 24 to 35 of the COM/ADR word (CRA R CLK). Register 204
+  gives CRA/M RESET, DP RESET, CRAM ADR LOAD and CRAM WRITE, and register
+  205 the diagnostic function. The model sends the edges of 204 to the
+  KS10. It has no STACK RESET and no diagnostic read.
 - INT 10 (register 116 bit 0) sets CSL4 E171. The request reaches the
   KS10 through E170 and E163, which clock on CSL5 ENABLE (0) H
   (MP00540 CSL4 rev C). The model holds it while the KS10 clock is
@@ -210,8 +215,12 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
 - **[measured]** 2026-11-28, `make csl KS10_ITS_DISK=<rp0.dsk>` with the
   disk of the ITS build: the program reads block 1 of cylinder 0, finds
   `HOM` at 1000, reads the page of pointers from word 1103 and the first
-  page of the microcode from word 1002. It stops at the first CRAM write
-  (`CADWR`, 144 to register 210), 35497560 states after power-up.
+  page of the microcode from word 1002. With an empty control RAM in
+  `ks10-core-uop`, `MEM2CRAM` loads all 2048 words. The result equals
+  the control RAM that `spec/micro.py` assembles. `LBINT` reads the
+  pointer to the monitor pre-boot (word 1004). `SM1` deposits all ones in
+  location 0 and loads the CRAM address 0. The run stops when `CSCMD`
+  starts the KS10 clock, 45026145 states (27.5 s) after power-up.
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
   98-153B p. 4-15, with the condition true and false. The other 12

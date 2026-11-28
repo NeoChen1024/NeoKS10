@@ -893,6 +893,15 @@ time in microcycles.
   (`PAGE-CONTINUE`) **[microcode]**. The instruction count is the time
   base of the devices by design ("Stage 4", "Time and the boot of
   ITS").
+- **The CRAM load of the console.** The CRA has a diagnostic address
+  register and the 12-bit latch of its 8646 transceivers (EK-OKS10-TM-002
+  5.3.8, 5.4.6). `cram_address_load` loads the register.
+  `cram_reset` clears the microinstruction register (`mir_clear`).
+  `cram_write` writes 12 bits of the control RAM word at the diagnostic
+  address, with the diagnostic function 0 to 7. The bits of each
+  function come from the 8080 program and `.RAMFILE`
+  (`cram::write_segment`). The model has no CRAM parity, so it drops the
+  parity bits.
 - **Time with the clock stopped.** The device time (`Machine::now`) is
   the instruction count plus `idle`. `Machine::idle` adds time while the
   processor clock is stopped: at each unit, the 1 ms clock and the

@@ -7,7 +7,9 @@
 //! the channel command list `DSKSEQ` (`CHNXCT`).
 
 use ks10_core_uop::alu::W40;
+use ks10_core_uop::cram::{CRAM_WORDS, Microword};
 use ks10_core_uop::machine::Machine;
+use ks10_core_uop::ucode;
 use ks10_csl::board::{Config, Csl, Stop};
 use ks10_csl::ks10::{Function, Reply};
 use ks10_csl::rom;
@@ -124,38 +126,47 @@ fn without_a_disk_the_boot_fails_at_the_drive_check() {
     assert!(c.interface().int_10);
 }
 
-/// The stop: the microcode load writes the CRAM address (`CADWR`) with the
-/// diagnostic clock of the CRA (144 to register 210: BUS REQ, XMIT ADR,
-/// CRA R CLK), which the model does not have.
-const CRAM_STOP: Stop = Stop::Ks10 {
-    pc: 0o6317,
-    port: 0o210,
-    value: 0o144,
-    what: "a diagnostic function of the CRA (register 210)",
+/// The stop: SM1 starts the KS10 clock (`CSCMD`, 3 to register 206),
+/// which the model does not have yet.
+const CLOCK_STOP: Stop = Stop::Ks10 {
+    pc: 0o6173,
+    port: 0o206,
+    value: 0o3,
+    what: "the KS10 clock (register 206)",
 };
 
+/// The boot from the disk of the ITS build, with an empty control RAM:
+/// the 8080 reads the RAM file and loads the control RAM. The expected
+/// control RAM is the one that spec/micro.py assembles from the ITS
+/// microcode sources (`Machine::its`); the RAM file on the disk comes
+/// from the MICRO of the ITS build.
 #[test]
-fn the_boot_reads_the_home_block_and_the_microcode_pointer() {
+fn the_boot_loads_the_control_ram_from_the_disk() {
     let Some(rom) = rom() else { return };
     let Some(disk) = std::env::var_os("KS10_ITS_DISK").filter(|d| !d.is_empty()) else {
         eprintln!("SKIPPED: KS10_ITS_DISK is not set");
         return;
     };
-    let mut m = Machine::its(W40::ZERO);
+    let empty = vec![Microword::default(); CRAM_WORDS];
+    let mut m = Machine::new(empty, ucode::DROM.to_vec(), W40::ZERO);
     let f = std::fs::File::open(disk).expect("the disk image");
     m.io.disk.attach(0, f, true);
     let mut c = board(rom, m);
-    match c.run(100_000_000) {
-        Err(s) if s == CRAM_STOP => {}
-        r => panic!("{:?}, not {CRAM_STOP}", r.map_err(|s| s.to_string())),
+    match c.run(200_000_000) {
+        Err(s) if s == CLOCK_STOP => {}
+        r => panic!("{:?}, not {CLOCK_STOP}", r.map_err(|s| s.to_string())),
     }
     assert_eq!(c.cty_output(), b"\r\nKS10 CSL.V5.2\r\nBT AUTO\r\n");
     let f: Vec<Function> = c.interface().cycles.iter().map(|b| b.function).collect();
-    // Each DSKSEQ writes RPDA, then RPDC; the memory reads between them
-    // are the checks of the program.
+    let first_latch = f
+        .iter()
+        .position(|x| matches!(x, Function::CraLatch { .. }))
+        .expect("a CRAM load");
+    // Before the load: each DSKSEQ writes RPDA, then RPDC; the memory reads
+    // between them are the checks of the program.
     let mut disk = Vec::new();
     let mut reads = Vec::new();
-    for x in &f[2..] {
+    for x in &f[2..first_latch] {
         match *x {
             Function::IoWrite { com_adr, data, .. } if com_adr == io(true, RPDA) => {
                 disk.push((data, W36::ZERO));
@@ -189,10 +200,10 @@ fn the_boot_reads_the_home_block_and_the_microcode_pointer() {
             split(reads[2].1)
         ]
     );
-    // Each transfer of QXFR: 512 words (176000) to address 1000 (Unibus
-    // 4000), with the read command 71.
+    // Each transfer of QXFR before the load: 512 words (176000) to address
+    // 1000 (Unibus 4000), with the read command 71.
     for (register, data) in [(RPWC, 0o176000), (RPBA, 0o4000), (RPCS1, 0o71)] {
-        let n = f
+        let n = f[..first_latch]
             .iter()
             .filter(|x| {
                 matches!(x, Function::IoWrite { com_adr, data: d, .. }
@@ -201,5 +212,42 @@ fn the_boot_reads_the_home_block_and_the_microcode_pointer() {
             .count();
         assert_eq!(n, 3, "register {register:o}");
     }
-    eprintln!("the microcode load starts after {} states", c.now());
+    // MEM2CRAM: CADWR at 0, eight WFUNC and one CADWR for each of the
+    // 2048 words; then SM1 writes the CRAM address 0 (CADWR).
+    let latches = f
+        .iter()
+        .filter(|x| matches!(x, Function::CraLatch { .. }))
+        .count();
+    assert_eq!(latches, 1 + 2048 * 9 + 1);
+    // Three memory words for each control RAM word (RD.EXM), then LBINT
+    // reads the pointer to the monitor pre-boot through FILEINIT: the home
+    // block at 1000, the pointer page from 1103, and word 1004 (1000 plus
+    // RM100, 4 for the monitor, LOAD4).
+    let after: Vec<u64> = f[first_latch..]
+        .iter()
+        .filter_map(|x| match *x {
+            Function::MemoryRead { com_adr, .. } => Some(com_adr.field(16, 35)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(after.len(), 3 * 2048 + 3);
+    let pages = (0..12u64).flat_map(|_| (0..512u64).map(|k| 0o1000 + k));
+    assert!(after[..3 * 2048].iter().copied().eq(pages));
+    assert_eq!(after[3 * 2048..], [0o1000, 0o1103, 0o1004]);
+    let k = c.ks10();
+    let its = Machine::its(W40::ZERO);
+    let wrong: Vec<usize> = (0..CRAM_WORDS)
+        .filter(|&a| k.cram[a] != its.cram[a])
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "{} words differ, first at {:o}",
+        wrong.len(),
+        wrong[0]
+    );
+    // SM1: all ones in location 0 (DMINT), the CRAM address 0 (CADWR) with
+    // the microinstruction register clear.
+    assert_eq!(k.memory[0], W36::ONES);
+    assert_eq!((k.diag_address, k.mir_clear), (0, true));
+    eprintln!("the KS10 clock starts after {} states", c.now());
 }

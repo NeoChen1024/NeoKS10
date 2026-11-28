@@ -61,6 +61,27 @@ impl Ks10 for Machine {
         }
     }
 
+    fn bus_reset(&mut self) {
+        Machine::bus_reset(self);
+    }
+
+    fn dp_reset(&mut self) {
+        Machine::dp_reset(self);
+    }
+
+    fn cram_reset(&mut self) {
+        Machine::cram_reset(self);
+    }
+
+    fn cram_address_load(&mut self, data: u16) -> Result<(), &'static str> {
+        Machine::cram_address_load(self, data);
+        Ok(())
+    }
+
+    fn cram_write(&mut self, function: u8, data: u16) -> Result<(), &'static str> {
+        Machine::cram_write(self, function, data)
+    }
+
     fn inputs(&self) -> Inputs {
         let c = &self.csl;
         Inputs {

@@ -118,6 +118,12 @@ pub fn from_ram_entry(words: [W36; 3]) -> Result<Microword, RamError> {
             return Err(RamError::Parity { dest });
         }
     }
+    Ok(entry_fields(entry))
+}
+
+/// The microword of the fields of a RAM file entry, without a check of
+/// the pads and the parity bits.
+fn entry_fields(entry: u128) -> Microword {
     let mut mw = Microword::default();
     for item in fields::RAMFILE {
         if let RamItem::Field { field, dest } = *item {
@@ -125,7 +131,38 @@ pub fn from_ram_entry(words: [W36; 3]) -> Result<Microword, RamError> {
             mw = Microword(with_bits(mw.0, u32::from(field.first), width(field), v));
         }
     }
-    Ok(mw)
+    mw
+}
+
+/// The first RAM file entry bit of the 12 bits that diagnostic function
+/// `function` (0 to 7) writes. The 8080 takes the RAM file entry of a
+/// control RAM word from three memory words, 12 bits at a time: bits 24
+/// to 35, 12 to 23 and 0 to 11 of the first two words, then bits 24 to 35
+/// and 12 to 23 of the third, with the functions 7 down to 0 **[its]**
+/// (cmds.m80, MEM2CRAM, BBLOOP). It does not send bits 0 to 11 of the
+/// third word, the pad of 12 bits at entry bit 72 (`.RAMFILE`).
+pub fn segment_first(function: u8) -> u32 {
+    let k = 7 - u32::from(function & 7);
+    36 * (k / 3) + 24 - 12 * (k % 3)
+}
+
+/// `mw` after a diagnostic write of `data` (12 bits) with function
+/// `function` (0 to 7). The function selects a group of 12 control RAM
+/// bits (EK-OKS10-TM-002 5.3.8, 5.4.6). The bits of each group are the
+/// fields that `.RAMFILE` puts at the entry bits that the 8080 sends with
+/// that function (`segment_first`) **[microcode]** **[its]**. The CRA4 and
+/// CRM3 drawings give the groups too; the model does not take them from
+/// there (docs/unknowns.md). The parity bits of the entry have no place
+/// in the microword, and the model drops them.
+pub fn write_segment(mw: Microword, function: u8, data: u16) -> Microword {
+    let entry = entry_bits(to_ram_entry(mw));
+    let entry = with_bits(
+        entry,
+        segment_first(function),
+        12,
+        u128::from(data & 0o7777),
+    );
+    entry_fields(entry)
 }
 
 /// The RAM file entry of a microword, as MICRO writes it (micro, PNTB90
@@ -225,6 +262,31 @@ mod tests {
             from_ram_entry(to_ram_entry(Microword::default())),
             Ok(Microword::default())
         );
+    }
+
+    #[test]
+    fn eight_segments_in_the_order_of_mem2cram_give_the_microword() {
+        // MEM2CRAM (cmds.m80): from each memory word, bits 24-35, then
+        // 12-23, then 0-11 (only for the first two words), with the
+        // functions 7, 6, 5, ... 0.
+        let mw = Microword::from_bits(0o765432107654321076543210765432107654 & ram_mask());
+        let words = to_ram_entry(mw);
+        let mut pieces = Vec::new();
+        for (k, w) in words.iter().enumerate() {
+            let slices: &[u32] = if k < 2 { &[24, 12, 0] } else { &[24, 12] };
+            for &first in slices {
+                pieces.push(w.field(first, first + 11) as u16);
+            }
+        }
+        assert_eq!(pieces.len(), 8);
+        let mut got = Microword::default();
+        for (piece, function) in pieces.iter().zip((0..8u8).rev()) {
+            got = write_segment(got, function, *piece);
+        }
+        assert_eq!(got, mw);
+        // One segment changes only its own bits.
+        let one = write_segment(Microword::default(), 0, 0o7777);
+        assert_eq!(one, entry_fields(with_bits(0, 84, 12, 0o7777)));
     }
 
     #[test]

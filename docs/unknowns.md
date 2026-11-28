@@ -152,6 +152,11 @@ then, the model takes each value as a parameter, or stops.
   stopped. If it does, INT 10, RUN, EXECUTE and CONTINUE reach the KS10
   through E170 and E163 at once. The model holds INT 10 until the clock
   runs (MP00540 CSL4 rev C, CSL5 rev D).
+- **Answer not found.** The groups of control RAM bits that each
+  diagnostic write function selects on the drawings (CRA4, CRM3). The
+  model takes them from the 8080 program and `.RAMFILE`
+  (`ks10_core_uop::cram::write_segment`). The CRAM load of the boot gives
+  the control RAM of `spec/micro.py` with them.
 - **Answer not found.** The items of [`csl-registers.md`](csl-registers.md) that
   the drawings do not settle (U1 to U9 there).
 - **Answer not found.** The baud rate of a board. DIP switches set it
