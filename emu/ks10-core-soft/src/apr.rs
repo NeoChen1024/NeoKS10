@@ -155,6 +155,9 @@ impl Pi {
             return None;
         }
         let recognized = (self.requested | other) & self.active;
+        if recognized == 0 {
+            return None;
+        }
         let n = (1..=7).find(|&n| recognized & Self::level_bit(n) != 0)?;
         let busy = (1..=7).find(|&k| self.in_progress & Self::level_bit(k) != 0);
         match busy {
@@ -189,6 +192,7 @@ pub fn op700(m: &mut Machine, i: Inst, e: Half) -> R {
             if m.apr.flags & flag::KS_TO_8080 != 0 {
                 m.apr.flags &= !flag::KS_TO_8080;
                 m.console.doorbell(m.count);
+                m.wake();
             }
         }
         5 => m.write(e, m.apr.word())?,

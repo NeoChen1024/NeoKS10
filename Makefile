@@ -166,7 +166,8 @@ cross:
 # names its rp0.dsk; dskdmp.tape and minsys.tape are in the same
 # directory. The image is a third-party file, so the target uses copies
 # in the build output.
-# 1. The tests of emu/ks10-core-soft that need the image (boot, idle loop, tapes).
+# 1. The tests of emu/ks10-core-soft that need the image (boot, idle loop,
+#    device work between events, tapes).
 # 2. neoks10 runs tests/its-boot/boot.script with a record; a replay of
 #    the record on a fresh copy must give the same CTY output.
 ITS_BOOT_DIR = $(abspath $(BUILD_DIR))/its-boot
@@ -176,7 +177,7 @@ its-boot: its-boot-soft its-boot-neoks10
 its-boot-soft:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }
 	cd emu && KS10_ITS_DISK="$(abspath $(KS10_ITS_DISK))" $(NICE) $(CARGO) test --locked --release -p ks10-core-soft \
-	    --test idle --test tape
+	    --test idle --test next_event --test tape
 
 its-boot-neoks10:
 	@test -n "$(KS10_ITS_DISK)" || { echo "its-boot: KS10_ITS_DISK must name rp0.dsk of the ITS build" >&2; exit 2; }

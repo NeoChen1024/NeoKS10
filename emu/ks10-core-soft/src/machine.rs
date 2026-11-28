@@ -122,6 +122,19 @@ pub struct Machine {
     /// then depends on the host and cannot be repeated (`neoks10 run
     /// --pace normal`).
     pub wall_clock: bool,
+    /// The first count at which the timer, the 8080 or a device can do
+    /// something ([`Machine::device_deadline`]). Before it, a step does not
+    /// run them: the result is the same, since they do nothing until then
+    /// unless the processor or the host changes their state. Each such
+    /// change sets it to 0 ([`Machine::wake`]).
+    next_event: u64,
+    /// For tests: run the timer, the 8080 and the devices before each
+    /// instruction, without [`Machine::next_event`].
+    pub devices_each_step: bool,
+    /// The interrupt requests of the devices (`Io::requests`) when the
+    /// devices last ran. They change only where the devices can change:
+    /// where [`Machine::wake`] is called, and the next step runs them.
+    io_requests: u8,
 }
 
 impl Default for Machine {
@@ -133,6 +146,8 @@ impl Default for Machine {
 /// The 8080 boot commands (`ks10_machine::boot`) on this processor.
 impl ks10_machine::boot::Processor for Machine {
     fn bus(&mut self) -> (&mut [W36], &mut Io, u64) {
+        // The caller can change the state of the devices.
+        self.wake();
         (&mut self.mem, &mut self.io, self.count)
     }
 
@@ -223,6 +238,9 @@ impl Machine {
             oneproc: OneProc::Off,
             io: Io::default(),
             wall_clock: false,
+            next_event: 0,
+            devices_each_step: false,
+            io_requests: 0,
         }
     }
 
@@ -231,6 +249,7 @@ impl Machine {
     /// timers and the Unibus adapters and devices go to their initial
     /// state. Memory, the ACs and the disk attachments stay.
     pub fn reset(&mut self) {
+        self.wake();
         self.pc = Half::ZERO;
         self.flags = Flags::default();
         self.apr = Apr::default();
@@ -446,6 +465,30 @@ impl Machine {
         }
     }
 
+    /// The first count at which the timer, the 8080 or a device can do
+    /// something, if neither the processor nor the host changes their
+    /// state: the next tick of the 1 ms clock (none with the wall clock),
+    /// the next service of the 8080, the next device event.
+    pub fn device_deadline(&self) -> u64 {
+        let tick = if self.wall_clock {
+            u64::MAX
+        } else {
+            self.timer.last_tick + timer::INSTRUCTIONS_PER_MS
+        };
+        tick.min(
+            self.console
+                .deadline(self.mem[ks10_machine::console::CTYIN as usize]),
+        )
+        .min(self.io.deadline())
+    }
+
+    /// The state of the timer, the 8080 or a device changed from outside
+    /// [`Machine::step`] (an I/O instruction, the doorbell, the host): the
+    /// next step runs them.
+    pub fn wake(&mut self) {
+        self.next_event = 0;
+    }
+
     /// The level of the interrupt that the next step takes, if any.
     fn pending_interrupt(&self) -> Option<u8> {
         self.pi.accept(self.requests())
@@ -459,7 +502,7 @@ impl Machine {
         } else {
             0
         };
-        apr | self.io.requests()
+        apr | self.io_requests
     }
 
     /// The PC word to save at an interrupt or a page failure, with the
@@ -569,6 +612,8 @@ impl Machine {
         // device gives a vector; EPT + 100 + adapter points to the table
         // of the adapter, and the instruction is at table + vector / 4 in
         // the executive address space.
+        // The device drops its request.
+        self.wake();
         let vectored = match self.io.acknowledge(n) {
             None => None,
             Some((a, v)) => {
@@ -702,7 +747,26 @@ impl Machine {
     /// Do one instruction, or take an interrupt or a trap. `Ok(())` if the
     /// processor can continue.
     pub fn step(&mut self) -> Result<(), Stop> {
-        self.run_devices();
+        // Input for the CTY: `Console::deadline` depends on word 32, which
+        // the processor writes; and a caller (a script) adds input. While
+        // there is input, the 8080 runs at each step.
+        if self.count >= self.next_event || !self.console.input.is_empty() {
+            self.run_devices();
+            self.io_requests = self.io.requests();
+            self.next_event = if self.devices_each_step {
+                0
+            } else {
+                self.device_deadline()
+            };
+        } else {
+            debug_assert!(
+                self.device_deadline() > self.count,
+                "a device is due at {}, next_event is {}",
+                self.device_deadline(),
+                self.next_event
+            );
+            debug_assert_eq!(self.io_requests, self.io.requests());
+        }
         if let Some(n) = self.pending_interrupt() {
             // An interrupt at the fetch after a one-proceeded instruction
             // takes the one-proceed trap first (itspag.98, CLTRP1, CLTRP2).
@@ -846,18 +910,7 @@ impl Machine {
         if self.count != start + 1 || self.idle_loop() != Some((a, x)) {
             return Ok(0);
         }
-        let tick = if self.wall_clock {
-            u64::MAX
-        } else {
-            self.timer.last_tick + timer::INSTRUCTIONS_PER_MS
-        };
-        let deadline = limit
-            .min(tick)
-            .min(
-                self.console
-                    .deadline(self.mem[ks10_machine::console::CTYIN as usize]),
-            )
-            .min(self.io.deadline());
+        let deadline = limit.min(self.device_deadline());
         let to_flag = |top: u64| top.wrapping_sub(x.get()) & W36::MASK;
         let n = deadline
             .saturating_sub(self.count)
@@ -1353,6 +1406,69 @@ mod tests {
         z.lines[4].lpr = d::rbuf::LPR_RXON as u16;
         z.lines[4].input.extend(b"xyz");
         m
+    }
+
+    /// Run `steps` steps on a machine that runs the devices before each
+    /// step and on one that uses `next_event`, and compare them at each
+    /// step: the state of `idle_state` and the interrupt requests.
+    fn same_as_each_step(make: impl Fn() -> Machine, steps: u64) -> Machine {
+        let mut a = make();
+        let mut b = make();
+        a.devices_each_step = true;
+        for _ in 0..steps {
+            a.step().unwrap();
+            b.step().unwrap();
+            assert_eq!(idle_state(&a), idle_state(&b));
+            assert_eq!(a.requests(), b.requests(), "at {}", a.count);
+        }
+        b
+    }
+
+    // A read of an I/O register can change a request of the device: the
+    // read of RBUF takes the last character of the silo, and the receive
+    // request of the DZ11 (RIE, no SAE) ends with RDONE. The next step
+    // must see it.
+    #[test]
+    fn an_io_read_ends_the_request_at_once() {
+        use ks10_machine::devregs::dz11 as d;
+        let b = same_as_each_step(
+            || {
+                let mut m = Machine::new();
+                put(&mut m, 0o1000, 0o710100_760012); // read DZ11 RBUF into AC 2
+                put(&mut m, 0o1001, 0o254000_001001); // JRST 1001
+                m.pc = Half::wrap(0o1000);
+                m.io.uba[3].status = 3; // PI level 3 for BR5 and BR4
+                let z = &mut m.io.dz;
+                z.csr = (d::csr::MSE | d::csr::RIE) as u16;
+                z.silo.push_back(d::rbuf::VALID as u16 | u16::from(b'x'));
+                m
+            },
+            20,
+        );
+        assert_eq!(b.ac[2].get() & 0o377, u64::from(b'x'));
+        assert_eq!(b.requests(), 0);
+    }
+
+    // The doorbell starts a service of the 8080 OUTPUT_DELAY later. With
+    // the wall clock there is no tick of the timer before it. The DZ11
+    // polls each CHAR_TIME, which is OUTPUT_DELAY too, so with these
+    // values the wake at the doorbell does not change the result: the
+    // test passes without it. It keeps the result if the values change.
+    #[test]
+    fn the_doorbell_brings_the_service_of_the_8080() {
+        let b = same_as_each_step(
+            || {
+                let mut m = Machine::new();
+                m.wall_clock = true;
+                m.mem[ks10_machine::console::CTYOT as usize] = W36::wrap(1 << 8 | 0o101);
+                put(&mut m, 0o1000, 0o700200_012000); // WRAPR: set KS interrupting the 8080
+                put(&mut m, 0o1001, 0o254000_001001); // JRST 1001
+                m.pc = Half::wrap(0o1000);
+                m
+            },
+            3000,
+        );
+        assert_eq!(b.console.output, b"A");
     }
 
     // A skipped pass gives the same state as a step: compare a machine

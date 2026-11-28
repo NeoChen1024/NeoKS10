@@ -36,6 +36,7 @@ fn no_register(m: &Machine, a: u32, byte: bool) -> Fault {
 
 /// Read an I/O register.
 pub fn io_read(m: &mut Machine, a: u32, byte: bool) -> Result<u64, Fault> {
+    m.wake();
     let now = m.count;
     match m.io.read_cycle(a, byte, now) {
         Reply::Value(v) => Ok(v),
@@ -46,6 +47,7 @@ pub fn io_read(m: &mut Machine, a: u32, byte: bool) -> Result<u64, Fault> {
 /// Write an I/O register. A byte write changes the byte that the address
 /// selects: the high byte for an odd address.
 pub fn io_write(m: &mut Machine, a: u32, value: u64, byte: bool) -> Result<(), Fault> {
+    m.wake();
     let Machine { io, mem, count, .. } = m;
     if io.write_cycle(mem, *count, a, value, byte) {
         Ok(())

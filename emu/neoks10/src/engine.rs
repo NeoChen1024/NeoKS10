@@ -423,6 +423,8 @@ impl Engine {
     }
 
     fn apply(&mut self, i: Input) -> Result<String, String> {
+        // An input can change the state of the devices or of the 8080.
+        self.m.wake();
         match i {
             Input::Cty(b) => {
                 self.m.console.input.extend(b);
@@ -587,6 +589,8 @@ impl Engine {
     /// A command of the console. The reply goes to `reply`, at once or,
     /// for `expect`, when the text appears.
     pub fn command(&mut self, cmd: Command, from: usize, reply: Sender<(Reply, usize)>) {
+        // A command can change the state of the machine (a deposit, a boot).
+        self.m.wake();
         if let Some(r) = self.command_now(cmd, from, &reply) {
             let _ = reply.send(r);
         }
@@ -1644,6 +1648,28 @@ mod tests {
             "{text}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // The end of a hold makes the line free for the transmit scanner at
+    // the next step, as when the devices ran before each step: the input
+    // wakes the devices of the machine (`Machine::wake`).
+    #[test]
+    fn the_end_of_a_hold_frees_the_line_at_the_next_step() {
+        use ks10_machine::devregs::dz11 as d;
+        let mut e = Engine::new(options(None, None)).unwrap();
+        e.m.mem[0o1000] = W36::wrap(0o254000_001000); // JRST 1000
+        e.m.pc = Half::wrap(0o1000);
+        let z = &mut e.m.io.dz;
+        z.csr = (d::csr::MSE | d::csr::TIE) as u16;
+        z.tcr = 1 << 2;
+        z.lines[2].hold = true;
+        e.m.step().unwrap();
+        let trdy = |e: &Engine| e.m.io.dz.csr & d::csr::TRDY as u16 != 0;
+        assert!(!trdy(&e));
+        e.input(Input::DzHold { line: 2, on: false }).unwrap();
+        e.m.step().unwrap();
+        assert!(trdy(&e));
+        assert!(e.m.io.dz.tx_irq);
     }
 
     // A client that does not read: above HOLD_HIGH bytes the line holds

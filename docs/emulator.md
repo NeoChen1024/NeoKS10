@@ -359,8 +359,29 @@ guest, and the virtual time does not change.
   is a step.
 - After a step that printed on the CTY, no passes follow. Thus a script
   and `expect` see the text at the same count as with steps.
-- `Machine::step` has no such shortcut. It stays the model for the RTL.
+- `Machine::step` does no passes at once. It stays the model for the RTL.
 - `--no-idle` does steps only. It is for a comparison.
+
+**Device work between events.** The same instruction count bounds the
+work of the timer, the 8080 and the devices in each step. `Machine::step`
+runs them only at that count (`next_event`), and keeps the interrupt
+requests of the devices from that run. Before it they do nothing, unless
+the processor or the host changes their state:
+
+- an I/O instruction (`io_read`, `io_write`) or an interrupt acknowledge;
+- the doorbell to the 8080;
+- the 8080 boot commands (`Processor::bus`) and a reset;
+- each input and command of `neoks10` (`Engine::apply`, `Engine::command`).
+
+Each of them calls `Machine::wake`, and the next step runs the devices.
+While the CTY input has characters, the step runs the 8080 each time: its
+next character depends on word 32, which the processor writes.
+`devices_each_step` runs them before each step, for a comparison:
+`emu/ks10-core-soft/tests/next_event.rs` boots ITS, logs in and assembles
+STINK both ways and compares the state every 1000000 steps. In the dev
+profile, a step that does not run the devices checks that none is due.
+**[measured]** 2026-11-28, `make mips`: 26.29 to 27.25 MIPS before,
+30.21 to 30.71 MIPS after, with the same instructions and CTY output.
 
 Other emulators **[emulator]**: SIMH (`pdp10-ks`, commit 9556eca0,
 `kx10_cpu.c`) takes an `AOJ` in the ACs as idle and waits for the next
@@ -722,7 +743,8 @@ listener on a LAN needs an explicit address.
   (`pdp10-ks`); `dskdmp.tape` and `minsys.tape` are in the same
   directory. The target works on copies in `build/its-boot/`.
   1. The tests of `emu/ks10-core-soft` that need the images: the boot and the
-     listing of `SYS;`, the idle loop, the tapes.
+     listing of `SYS;`, the idle loop, the device work between events
+     (`next_event`), the tapes.
   2. `neoks10` runs `tests/its-boot/boot.script` (boot, login, `:listf
      sys;`) with `--record`. The output must have `FREE BLOCKS`.
   3. A replay of the record on a fresh copy must give the same CTY
