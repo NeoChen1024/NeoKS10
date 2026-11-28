@@ -105,6 +105,11 @@ pub trait Ks10 {
     fn peek(&self, _address: u32) -> Option<W36> {
         None
     }
+    /// The time of the KS10 in the units of its devices, for the typist of
+    /// a test. `None` if the KS10 has no time of its own.
+    fn time(&self) -> Option<u64> {
+        None
+    }
     /// The inputs of the processor from the console.
     fn inputs(&self) -> Inputs;
     fn set_inputs(&mut self, i: Inputs);

@@ -207,11 +207,16 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   word 32 and does not wait for the KS10 to take the one before
   (`hcore.m80`, `TENCHR`). So a burst of input faster than the KS10
   takes it loses characters, as on the board.
-- The tests type with a typist (`emu/ks10-csl/src/typist.rs`). It
-  answers a prompt of the CTY output with text. It types a character
-  only after the line is free and the KS10 has cleared word 32, and a
-  fixed time after the character before. This is a choice of the tests:
-  a person waits for the echo. The board has no flow control.
+- The tests type with a typist (`emu/ks10-csl/src/typist.rs`), with
+  the rules of the high-level console (`Script`). An answer starts after
+  its prompt, when the CTY output has been quiet for `QUIET`, a time of
+  the KS10. In an answer, a character goes when the line is free and the
+  KS10 has cleared word 32; the line gives the speed. These waits are a
+  choice of the tests. The board has no flow control.
+- A character in the transmit buffer starts when the character before
+  ends (98-153B p. 5-139). At the end of a run, the model moves both
+  USARTs to the time of the board, so the CTY output is current also if
+  the program does not read the status.
 - Each write to a port of the KS10 goes into a log. A port, an address or
   a function without a model stops the run with its reason. The 8080
   does not decode A14 and A15, and only A13 enables the RAM (CSL2 rev E,
@@ -257,18 +262,22 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   to the disk, so the test boots from a copy.
 - **[measured]** 2026-11-28, `make csl KS10_ITS_DISK=<rp0.dsk>`, with a
   character time of 1707 states (9600 baud, a choice of the test): the
-  typist types `its` at the prompt, then ESC G, with 100 ms between
-  characters. The 8080 program passes the input to the disk program, and ITS
-  prints `IN OPERATION` after 102513470 states (62.6 s) and 12135313
-  instructions. The text equals the text of the high-level console,
+  typist types `its` at the prompt. It types ESC G after the CRLF that
+  the disk program prints when it reads commands again after the load
+  (`dskdmp`, `READ`) **[its]**. The 8080 program passes the input to the
+  disk program, and ITS prints `IN OPERATION` after 101910387 states
+  (62.2 s) and 12000354 instructions. The text equals the text of the high-level console,
   except for the place of the bell before `IN OPERATION`. ITS sends ^G
   without a cursor motion (`ts3tty`, `TYOBEL`) **[its]**, and the place
   changes with the character time: with 1707 and 3000 states the space
   comes first, and with 17067 states the bell comes first.
 - **[measured]** 2026-11-28, the same test: if the characters arrive
   without waits, characters are lost. One character for each 1707
-  states gave the echo `is` for `its`. ESC typed while the disk program
-  loads ITS is lost under the next character.
+  states gave the echo `is` for `its`. ESC that arrived during the load
+  of ITS, 10000 units of KS10 time after the echo of CR, was lost
+  without an echo. On the high-level console, ESC in word 32 before the
+  load starts is read after the load. The cause of the loss is not known
+  ([`unknowns.md`](unknowns.md)).
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
   98-153B p. 4-15, with the condition true and false. The other 12

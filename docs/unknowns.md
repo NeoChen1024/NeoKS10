@@ -159,6 +159,10 @@ then, the model takes each value as a parameter, or stops.
   the control RAM of `spec/micro.py` with them.
 - **Answer not found.** The items of [`csl-registers.md`](csl-registers.md) that
   the drawings do not settle (U1 to U9 there).
+- **Answer not found.** Why the disk program loses ESC that arrives in
+  word 32 during the load of ITS, without an echo
+  ([`console-interface.md`](console-interface.md)). In `dskdmp`, only
+  `LOADG1` clears word 32 without `TYI`.
 - **Answer not found.** The baud rate of a board. DIP switches set it
   (MP00540 CSL2 rev E, E10 and the 34702 E4; CSL9 rev D, E11), and the
   8080 cannot read it. The model takes the time of one character as a

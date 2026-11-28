@@ -331,9 +331,6 @@ fn the_boot_loads_the_control_ram_and_starts_the_disk_program() {
 /// baud rate (docs/unknowns.md) are choices of the test.
 const CHAR_STATES: u64 = 1707;
 
-/// The time between two typed characters: 100 ms, the speed of a person.
-const TYPING_STATES: u64 = 163_840;
-
 /// The CTY output of the boot on `ks10-core-uop` with the high-level
 /// console of `ks10-machine`, typed on like `ks10-core-uop/tests/its_boot.rs`
 /// does, up to `done`.
@@ -387,12 +384,15 @@ fn the_8080_program_passes_the_cty_input_to_its() {
         char_states: CHAR_STATES,
     };
     let mut c = Csl::new(rom, config, m).unwrap();
-    let mut typist = Typist::new(TYPING_STATES);
+    let mut typist = Typist::new(ks10_machine::console::QUIET);
     typist.answer("DSKDMP", "its\r");
-    typist.answer("\r", "\x1bg");
+    // The disk program prints CRLF when it reads commands again after the
+    // load (dskdmp, `READ`). ESC typed during the load was lost, with no
+    // echo (2026-11-28, this test).
+    typist.answer("\r\n", "\x1bg");
     let mut out = String::new();
     while c.now() < 400_000_000 && !out.contains(DONE) {
-        if let Err(s) = c.run(10_000) {
+        if let Err(s) = c.run(1_000) {
             panic!("{s}; processor {:?}; CTY {out:?}", c.ks10().pending_stop);
         }
         typist.tick(&mut c);

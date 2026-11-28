@@ -34,6 +34,10 @@ impl Ks10 for Machine {
             .is_some())
     }
 
+    fn time(&self) -> Option<u64> {
+        Some(self.now())
+    }
+
     fn peek(&self, address: u32) -> Option<W36> {
         self.memory.get(address as usize).copied()
     }
@@ -144,6 +148,13 @@ mod tests {
         assert_eq!(m.peek(0o32), Some(W36::wrap(0o541)));
         assert_eq!(m.peek(m.memory.len() as u32), None);
         assert_eq!(m.cycles, cycles);
+    }
+
+    #[test]
+    fn the_time_of_the_typist_is_the_device_time() {
+        let mut m = Machine::its(W40::ZERO);
+        m.idle_to(16384);
+        assert_eq!(m.time(), Some(10 * INSTRUCTIONS_PER_MS));
     }
 
     #[test]
