@@ -28,3 +28,11 @@ opt-level = 3
 
 [profile.dev.package.pdp10]
 opt-level = 3
+
+# One code unit and fat LTO, so that the small functions of one crate
+# inline into the inner loop of another (the devices of ks10-machine in
+# the steps of ks10-core-soft). `make mips` before and after are in the
+# commit message that added them.
+[profile.release]
+lto = "fat"
+codegen-units = 1
