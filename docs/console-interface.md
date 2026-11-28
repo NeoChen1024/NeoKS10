@@ -94,7 +94,8 @@ octal. Bits have DEC numbers.
 ## Comparison
 
 This is the plan of the comparison (design decision 2026-11-28). The
-model of the 8080 does not exist yet; `emu/ks10-csl` has its ROM.
+model of the board (`emu/ks10-csl`) runs the program up to its first
+access to the KS10 bus.
 
 ### The program
 
@@ -120,13 +121,40 @@ sources exists.
   becomes expected data, its row is checked against version 5.2; a
   difference goes into [`discrepancies.md`](discrepancies.md).
 
+### The model of the board
+
+Design decision 2026-11-28: the 8080 of the model is the crate
+`x80-core`. It has no dependencies and no `unsafe` code. It gives the
+number of states of each instruction. On an interrupt it reads the
+instruction from the bus, so a model of the board can give an `RST`. An opcode
+without documentation stops it with an error, not with a panic. The
+crate cites Intel 98-153B, but it is not a source of this project:
+statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
+
+- The board has the ROM at 0 to 17777 (octal), 1 KiB of RAM at 20000,
+  and two 8251 USARTs at ports 200 to 203. The USART model has the
+  asynchronous mode, the transmitter and the status (98-153B, p. 5-136 to
+  5-142).
+- A write to a port of the KS10 goes into a log. A read of a port or an
+  access to an address without a model stops the run with its reason.
+- Time counts in 8080 states. The inputs without a source are parameters
+  of the model: port 300, the CTS input and the time of one character
+  ([`unknowns.md`](unknowns.md), "CSL board").
+- **[measured]** 2026-11-28, `make csl` (`emu/ks10-csl/tests/power_up.rs`):
+  from power-up, the program prints `KS10 CSL.V5.2` on the CTY and makes
+  the 22 writes that the listing gives, from `PWRUP` to `EMCONT`. It then
+  stops at the read of port 301 in `BUSRESP`. With port 300 = 157 and a
+  character time of 0, this is after 450978 states. The
+  ROM checksum of `PWRUP` passes. With one changed byte in chip E73, the
+  program prints `?CHK2` first.
+
 ### The ports of the 8080
 
 **[measured]** 2026-11-28, a read of `KNS10.PNT` with a script: the
 `IN` and `OUT` instructions of version 5.2 use these ports (octal, names
 of `CONDEF.M80`). The model of the board needs a source for each one: the
 CSL drawings of MP00540 or EK-OKS10-TM-002. A port without a source goes
-into [`unknowns.md`](unknowns.md), and the model stops at it.
+into [`unknowns.md`](unknowns.md). A read of it stops the model.
 
 | Ports | IN | OUT |
 |---|---|---|
@@ -153,11 +181,6 @@ into [`unknowns.md`](unknowns.md), and the model stops at it.
 - A test runs each operation on the high-level console and compares its
   effects with the recorded data. It leaves out the effects of the rows
   "simpler" and "not done" above, and only these.
-- Open before the model: which program to run. The ITS tree has the
-  sources of version 4.2; `references/` has version 5.2 with its listing
-  ([`emulator.md`](emulator.md), "Documents and tapes"). The ITS build
-  uses the program that the machine has, so the sources of the ITS tree
-  are the first choice if they assemble.
 - With `ks10-core-uop`, the model of the 8080 gives each effect of the
   rows "simpler" and "not done" too. A test of the model compares them
   with the recorded data.

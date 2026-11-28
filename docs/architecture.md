@@ -58,7 +58,7 @@ see the same data without cache maintenance.
 | Device register table | Data file | One definition of each I/O device register |
 | Register map | Data file | One definition of the PS/PL interface. A SystemVerilog package and Rust constants come from it |
 | Emulator | Rust | Console, devices, image formats, and the software processor |
-| Microcode-level model | Rust | `emu/ks10-core-uop`: the data path and the assembled ITS microcode ([`microcode-model.md`](microcode-model.md)). For tests, a model of the 8080 that runs the DEC console program (not written yet) |
+| Microcode-level model | Rust | `emu/ks10-core-uop`: the data path and the assembled ITS microcode ([`microcode-model.md`](microcode-model.md)). For tests, a model of the CSL board that runs the DEC console program (`emu/ks10-csl`; it runs up to its first access to the KS10 bus) |
 | Implementation differences | Data file | `spec/impldef.toml`: one case for each behaviour in which the implementations differ, with the choice of each core ([`impldef.md`](impldef.md)) |
 | Processor core | SystemVerilog | The KS10 data path. It is multi-cycle |
 | Pipelined core | SystemVerilog | Later: a PDP-10 of its own design that runs ITS. It follows levels A and B of [`conformance.md`](conformance.md), not the microcode steps |

@@ -1,7 +1,7 @@
 [package]
 name = "ks10-csl"
 version = "0.1.0"
-description = "The CSL board of the KS10 for tests: the DEC 8080 console program in its ROM images"
+description = "The CSL board of the KS10 for tests: the DEC 8080 console program on a model of the board"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,3 +9,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# The 8080 of the board (docs/console-interface.md, design decision
+# 2026-11-28).
+x80-core = "0.1.0"

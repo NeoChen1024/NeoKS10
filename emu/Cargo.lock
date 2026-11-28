@@ -216,6 +216,9 @@ dependencies = [
 [[package]]
 name = "ks10-csl"
 version = "0.1.0"
+dependencies = [
+ "x80-core",
+]
 
 [[package]]
 name = "ks10-machine"
@@ -764,6 +767,12 @@ name = "winnow"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+
+[[package]]
+name = "x80-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "369f17a5b0c92c23f197d1d814cad7c2626d8e383e6de060389e8b19ea20c325"
 
 [[package]]
 name = "zmij"

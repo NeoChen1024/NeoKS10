@@ -138,6 +138,28 @@ schematics (MP00540):
   clocks the data path at each repeat, as the manual describes
   (EK-OKS10-TM-002 5.4.1, bit 79).
 
+## CSL board
+
+The model of the board in `emu/ks10-csl` needs these answers. The CSL
+drawings (MP00540) and EK-OKS10-TM-002 are the places to look. Until
+then, the model takes each value as a parameter, or stops.
+
+- **Answer not found.** The meaning of each bit of port 300 (`TTYSW`) and its value on
+  a board. `PWRUP` takes the stop bit and the length bit of each line
+  from bits 4 to 7 (KNS10.PNT).
+- **Answer not found.** The level of the CTS input of the two USARTs.
+- **Answer not found.** The USART part of the board. The model follows the 8251 of
+  Intel 98-153B (1975).
+- **Answer not found.** The baud rates and the clock of the 8080: they give the time
+  of one character in 8080 states.
+- **Answer not found.** The source of the INT input of the 8080 and the instruction
+  that the board gives. The code at 70 is the interrupt handler
+  (KNS10.PNT, "BEGIN CODE FOR HANDLING INTERRUPTS"). The model keeps INT
+  inactive.
+- **Answer not found.** The memory map outside the ROM (0 to 17777) and the RAM
+  (20000 to 21777), and the effect of a write to the ROM. The model stops
+  at such an access.
+
 ## AFI: 64-bit writes after 32-bit writes stop the PS
 
 **[measured]** 2026-11-26, Linux 6.18.64-pynq-z2, memprobe build a4249ad7 at

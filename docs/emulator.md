@@ -1060,12 +1060,15 @@ These are in `docs/unknowns.md`:
 
 `third-party.lock` lists the files from bitsavers.org and
 pdp-10.trailing-edge.com, and `make references` copies them into
-`references/`. On 2026-11-26 the list has these documents:
+`references/`. On 2026-11-28 the list has these documents:
 
 - The KS10 technical manual (EK-0KS10-TM-001 and EK-OKS10-TM-002), the KS10
   reference (`ksrefRev2.pdf`, `ksrefRev4.txt`), and the KS10 maintenance
   guide, volumes 1 and 2.
 - The 8080 console program, version 5.2 (`KS10_CSL_V5.2.zip`).
+- The Intel 8080 Microcomputer Systems User's Manual (98-153B, 1975),
+  with the data sheet of the 8251.
+- The Am2900 Family Data Book (1978).
 - The DECsystem-10/DECSYSTEM-20 Processor Reference Manual (1982).
 - The RH11 option description.
 - The DZ11 user's guide and technical manual.
