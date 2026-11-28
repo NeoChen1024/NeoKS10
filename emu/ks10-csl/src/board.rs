@@ -407,6 +407,11 @@ impl<K: Ks10> Csl<K> {
             }
         }
         self.board.ks10.idle_to(self.board.stopped);
+        // The output of the USARTs is current at the end of the run, also if
+        // the program does not look at them.
+        let now = self.board.now;
+        self.board.cty.advance(now);
+        self.board.rem.advance(now);
         match self.board.stop {
             Some(s) => Err(s),
             None => Ok(()),
@@ -655,6 +660,25 @@ mod tests {
         let r = c.run(1000);
         assert!(matches!(r, Err(Stop::Halt { pc: 0o75 })), "{r:?}");
         assert_eq!(c.board.ram[0], b'a');
+    }
+
+    #[test]
+    fn the_output_is_current_after_a_run() {
+        // The program sends `>` and then loops without an access to the
+        // USART: the character is on the line 10 states later.
+        let mut rom = vec![0; rom::SIZE];
+        rom[..16].copy_from_slice(&[
+            OUT, 0o101, MVI_A, 0o116, OUT, 0o201, MVI_A, 0o025, OUT, 0o201, MVI_A, b'>', OUT,
+            0o200, JMP, 14,
+        ]);
+        let config = Config {
+            char_states: 10,
+            ..CONFIG
+        };
+        let mut c = Csl::new(rom, config, Detached::default()).unwrap();
+        c.run(200).unwrap();
+        assert_eq!(c.cty_output(), b">");
+        assert!(c.cty_queued().is_empty());
     }
 
     #[test]

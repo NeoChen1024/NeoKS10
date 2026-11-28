@@ -191,20 +191,25 @@ impl Usart {
         self.command & !ER
     }
 
-    /// Move the transmitter to the time `now`.
-    fn advance(&mut self, now: u64) {
+    /// Move the transmitter to the time `now`. A character in the buffer
+    /// starts when the one before ends, not at the next access: the CPU
+    /// changes TxEN and the buffer only with an access, which advances
+    /// first.
+    pub fn advance(&mut self, now: u64) {
+        let mut free = now;
         loop {
             if let Some((c, end)) = self.shifting
                 && end <= now
             {
                 self.sent.push(c);
                 self.shifting = None;
+                free = end;
             }
             let enabled = !self.expect_mode && self.command & TXEN != 0 && self.cts;
             match (self.shifting, self.holding) {
                 (None, Some(c)) if enabled => {
                     self.holding = None;
-                    self.shifting = Some((c, now + self.char_states));
+                    self.shifting = Some((c, free + self.char_states));
                 }
                 _ => return,
             }
@@ -287,6 +292,22 @@ mod tests {
         assert_eq!(u.sent(), b"A");
         assert_eq!(u.status(2010), TXRDY | TXE);
         assert_eq!(u.sent(), b"AB");
+    }
+
+    #[test]
+    fn the_next_character_starts_when_the_one_before_ends() {
+        // The CPU looks at the USART again only at 5000: B started at
+        // 1010, when A ended, and ended at 2010 (p. 5-139).
+        let mut u = Usart::new(true, 1000);
+        u.write_control(MODE_8, 0).unwrap();
+        u.write_control(RUN, 0).unwrap();
+        u.write_data(b'A', 10);
+        u.write_data(b'B', 20);
+        u.write_data(b'C', 5000);
+        assert_eq!(u.sent(), b"AB");
+        assert_eq!(u.status(5999), TXRDY);
+        assert_eq!(u.status(6000), TXRDY | TXE);
+        assert_eq!(u.sent(), b"ABC");
     }
 
     #[test]
