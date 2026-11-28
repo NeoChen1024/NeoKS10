@@ -2,17 +2,25 @@
 //! writes and reads with `OUT` and `IN`, the 4x4 memories and the 8646
 //! latches of the bus, and the bus functions.
 //!
-//! All bit assignments are **[manual]** MP00540 (KS10 maintenance
+//! The bit assignments are **[manual]** MP00540 (KS10 maintenance
 //! schematics, March 1981), M8616 sheets CSL3 rev D, CSL4 rev C, CSL5 rev D,
-//! CSL6 rev C, CSL7 rev B, CSL8 rev B and CSLA rev C; the element numbers
-//! are in the comments. The bus functions are those of EK-OKS10-TM-002
-//! Table 5-10, and the command/address word is that of 5.3.4.
+//! CSL6 rev C, CSL7 rev B, CSL8 rev B and CSLA rev C (docs/csl-registers.md);
+//! the element numbers are in the comments. The bus functions are those of
+//! EK-OKS10-TM-002 Table 5-10, and the command/address word is that of
+//! 5.3.4.
 //!
-//! The model of a bus function completes at the write to register 210: the
-//! KS10 clock is stopped while the program runs one (it starts only with
-//! the command CS, `CSCMD`), and the program reads the result at once
-//! (`EM`, `BUSRESP`). A function or a register that the model does not have
-//! stops the run.
+//! Choices of the model, not statements of the drawings:
+//! - A bus function completes at the write to register 210. On the path
+//!   from power-up to the boot the KS10 clock is stopped (it starts only
+//!   with the command CS, `CSCMD`), and the program reads the result at
+//!   once (`EM`, `BUSRESP`).
+//! - The levels of the error, parity and PI request inputs of the reads
+//!   100 to 103 are those of a KS10 without errors and requests. The bits
+//!   without a driver read as high (docs/unknowns.md).
+//! - That a write to 101 also ends RESET (1) is derived from the decode
+//!   (docs/csl-registers.md, U3).
+//!
+//! A function or a register that the model does not have stops the run.
 
 use pdp10::W36;
 
@@ -57,7 +65,7 @@ pub struct Detached {
 
 impl Ks10 for Detached {
     fn memory_read(&mut self, _address: u32) -> Result<Reply, &'static str> {
-        Err("a bus function without a KS10")
+        Err("the KS10")
     }
     fn inputs(&self) -> Inputs {
         self.inputs
@@ -236,6 +244,7 @@ impl Interface {
             }
             0o206 if v & 0o3 != 0 => return Err("the KS10 clock (register 206)"),
             0o206 => {}
+            0o210 if self.bus_reset() => self.bus_ctl = 0,
             0o210 => {
                 self.bus_ctl = v & 0o77;
                 self.mem = v & MEM != 0;
@@ -252,8 +261,22 @@ impl Interface {
             }
             _ => return Ok(false),
         }
+        if self.bus_reset() {
+            self.reset(&mut inputs);
+        }
         ks10.set_inputs(inputs);
         Ok(true)
+    }
+
+    /// CSL5 RESET L and RESETB L clear these registers (MP00540 CSL4 rev C:
+    /// E155, E156, E170, E163, E121, E129 through E114; CSL3 rev D: E151
+    /// MEM). A write while the reset holds is lost. CACHE EN, 1 MSEC EN,
+    /// 10 INT and register 101 have no reset (CSL3 E151, E107; CSL4 E142,
+    /// E161).
+    fn reset(&mut self, inputs: &mut Inputs) {
+        (self.cram_ctl, self.diag, self.bus_ctl) = (0, 0, 0);
+        (self.bus_req, self.mem) = (false, false);
+        (inputs.run, inputs.execute, inputs.cont, inputs.trap_en) = (false, false, false, false);
     }
 
     /// The bus function that register 210 starts (EK-OKS10-TM-002 Table
@@ -406,6 +429,14 @@ mod tests {
         }
     }
 
+    /// The board after the power-up reset.
+    fn after_reset() -> Interface {
+        Interface {
+            power_up_reset: false,
+            ..Interface::default()
+        }
+    }
+
     /// The writes of `EM1` and `ADATP` for a memory read of `address`
     /// (KNS10.PNT): the address bytes to 103 to 113, the function 4 to 113,
     /// COM/ADR CYCLE to 115, then 343 to 210.
@@ -430,7 +461,7 @@ mod tests {
     fn a_memory_read_latches_the_word() {
         let w = W36::wrap(0o123456_701234);
         let mut k = Memory(vec![W36::ZERO, w], Inputs::default());
-        let mut i = Interface::default();
+        let mut i = after_reset();
         examine(&mut i, &mut k, 1).unwrap();
         // The command/address: bit 1 (read) and the address.
         assert_eq!(
@@ -455,7 +486,7 @@ mod tests {
     #[test]
     fn a_read_without_memory_sets_nexm() {
         let mut k = Memory(vec![], Inputs::default());
-        let mut i = Interface::default();
+        let mut i = after_reset();
         examine(&mut i, &mut k, 0).unwrap();
         let s = !i.read(0o301, 0, (false, false), &k).unwrap();
         assert_eq!(s & 0o101, 0o100);
@@ -467,7 +498,7 @@ mod tests {
     #[test]
     fn register_212_and_300_are_the_processor_inputs() {
         let mut k = Memory(vec![], Inputs::default());
-        let mut i = Interface::default();
+        let mut i = after_reset();
         i.write(0o212, 0o5, 0, &mut k).unwrap();
         assert_eq!(
             k.1,
@@ -479,6 +510,24 @@ mod tests {
         );
         // Port 300 after CMA: bit 2 RUN and bit 0 CONTINUE are 1.
         assert_eq!(!i.read(0o300, 0o360, (false, false), &k).unwrap(), 0o5);
+    }
+
+    #[test]
+    fn the_reset_clears_the_registers_of_the_cpu_control() {
+        let mut k = Memory(vec![], Inputs::default());
+        let mut i = Interface::default();
+        // MRINT at power-up: 204/5 while RESET (1) holds is lost.
+        i.write(0o204, 0o5, 0, &mut k).unwrap();
+        assert_eq!(i.cram_ctl, 0);
+        i.write(0o100, 0o174, 0, &mut k).unwrap();
+        i.write(0o204, 0o5, 0, &mut k).unwrap();
+        i.write(0o205, 0o20, 0, &mut k).unwrap();
+        i.write(0o212, 0o7, 0, &mut k).unwrap();
+        assert_eq!((i.cram_ctl, k.1.trap_en, k.1.run), (0o5, true, true));
+        // Register 100 bit 7 (CSL3 RESET) clears them, but not CACHE EN.
+        i.write(0o100, 0o210, 0, &mut k).unwrap();
+        assert_eq!((i.cram_ctl, k.1.trap_en, k.1.run), (0, false, false));
+        assert!(k.1.cache_en);
     }
 
     #[test]

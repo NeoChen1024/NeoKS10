@@ -144,8 +144,12 @@ The model of the board in `emu/ks10-csl` needs these answers. Until
 then, the model takes each value as a parameter, or stops.
 
 - **Answer not found.** The level of the bits 4 to 7 of the ports 302 and
-  303. No element of the CSL drawings drives them (MP00540 CSLA rev C,
-  E157). The model reads them as 1.
+  303, and of port 100 bit 5. No element of the CSL drawings drives the
+  first, and the multiplexer input of the second has no connection
+  (MP00540 CSLA rev C, E157, E112). The model reads the bits 4 to 7 as 1,
+  and the input of port 100 bit 5 as high.
+- **Answer not found.** The items of [`csl-registers.md`](csl-registers.md) that
+  the drawings do not settle (U1 to U9 there).
 - **Answer not found.** The baud rate of a board. DIP switches set it
   (MP00540 CSL2 rev E, E10 and the 34702 E4; CSL9 rev D, E11), and the
   8080 cannot read it. The model takes the time of one character as a

@@ -488,11 +488,11 @@ mod tests {
 
     #[test]
     fn a_bus_function_needs_a_ks10() {
-        let mut c = csl(&[MVI_A, 0o343, OUT, 0o210]);
+        let mut c = csl(&[OUT, 0o101, MVI_A, 0o343, OUT, 0o210]);
         assert!(matches!(
             c.run(1000),
             Err(Stop::Ks10 {
-                pc: 2,
+                pc: 4,
                 port: 0o210,
                 value: 0o343,
                 ..

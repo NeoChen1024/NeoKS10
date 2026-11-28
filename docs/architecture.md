@@ -77,7 +77,8 @@ the machine:
   schematics, March 1981). MP00540 has two revisions of several sheets,
   for example DPM5, DPM6, DPMC, MMC5, DPE9 and CRA2. The code and the
   documents cite these revisions: CSL2 rev E, CSL3 rev D, CSL4 rev C,
-  CSL5 rev D, CSL6 rev C, CSL7 and CSL8 rev B, CSLA rev C, DPE1, DPE2,
+  CSL5 rev D, CSL6 rev C, CSL7 and CSL8 rev B, CSL9 rev D, CSLA rev C,
+  DPE1, DPE2,
   DPE5 and DPEA rev A1, DPE3, DPE6 and DPEB rev B, DPM1 to DPM5, DPM7,
   DPM9, DPMA and DPMB rev B, DPM6 rev C, DPMC rev D, CRA1 rev A1, MMC5
   rev B. They cite both revisions of DPE9 and of CRA2. A sheet that they

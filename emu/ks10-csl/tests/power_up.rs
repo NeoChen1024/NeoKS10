@@ -56,7 +56,7 @@ const STOP: Stop = Stop::Ks10 {
     pc: 0o5017,
     port: 0o210,
     value: 0o343,
-    what: "a bus function without a KS10",
+    what: "the KS10",
 };
 
 /// More 8080 states than the power-up needs, at the longest character time
@@ -113,6 +113,9 @@ fn the_rom_prints_its_banner() {
         assert_eq!(cty, BANNER, "character time {char_states}");
         assert_eq!(c.klinik_output(), b"");
         assert_eq!(writes(&c), WRITES);
+        // MRINT writes 204/5 while RESET (1) holds, which clears E156
+        // (MP00540 CSL4 rev C, CSL5 rev D E145): the write is lost.
+        assert_eq!(c.interface().cram_ctl, 0);
         eprintln!(
             "character time {char_states}: the banner and the stop at the bus function after {} states",
             c.now()

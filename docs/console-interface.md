@@ -142,8 +142,11 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   The USARTs stay in reset until the first write to port 100 or 101
   (MP00540 CSL5 rev D, E145; CSL9 rev D, E65).
 - The KS10 side (`emu/ks10-csl/src/ks10.rs`) has the bits of each register
-  from the drawings: MP00540 CSL3 rev D, CSL4 rev C, CSL5 rev D, CSL6
-  rev C, CSL7 and CSL8 rev B, CSLA rev C. The multiplexers of the reads
+  from the drawings ([`csl-registers.md`](csl-registers.md)): MP00540
+  CSL3 rev D, CSL4 rev C, CSL5 rev D, CSL6 rev C, CSL7 and CSL8 rev B,
+  CSLA rev C. CSL5 RESET clears the registers 204, 205, 210 and RUN,
+  EXECUTE and CONTINUE; a write while it holds is lost. At power-up,
+  `MRINT` writes 204 in the reset. The multiplexers of the reads
   invert, so the program complements each read (`CMA`). The program
   writes the KS10 word into the 4x4 memories (ports 102 to 115): an odd
   port writes the word of the command/address cycle, an even port the
@@ -152,9 +155,9 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   functions of EK-OKS10-TM-002 Table 5-10. `Detached` is a board without
   a KS10. The microcode-level model implements the trait: its memory, and
   its inputs RUN, EXECUTE, CONTINUE, TRAP EN, CACHE EN and 1 MSEC EN.
-- A bus function completes at the write to register 210. The KS10 clock
-  is stopped while the program runs one: only the command CS (`CSCMD`)
-  writes 206 to start it. The model has the memory read and the examine
+- A bus function completes at the write to register 210. On the path
+  from power-up to the boot, the KS10 clock is stopped: only the command
+  CS (`CSCMD`, also through `BT.GO`) writes 206 to start it. The model has the memory read and the examine
   bus. The other functions, INT 10, the KS10 clock and the maintenance
   clock stop the run. The USART model has the
   asynchronous mode, the transmitter and the status (98-153B, p. 5-136 to
@@ -180,8 +183,8 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   of 0, after 450916 states.
 - **[measured]** 2026-11-28, `make csl` (`emu/ks10-csl/tests/ks10.rs`): with
   `ks10-core-uop`, `EM1` reads memory location 0 and `EBCMD` examines the
-  bus. `SYSUP` waits 35396146 states (21.6 s), prints `BT AUTO`, and
-  `BTAUT` starts the boot. The run stops at the first bus write: 140001
+  bus. `SYSUP` waits, prints `BT AUTO`, and `BTAUT` starts the boot,
+  35396146 states (21.6 s) after power-up. The run stops at the first bus write: 140001
   to register 763001 of UBA 1, the first element of `DSKSEQ`.
 - **[measured]** 2026-11-28, `emu/ks10-csl/tests/states.rs`: for each of
   the 244 opcodes of the 8080, `x80-core` takes the number of states of
