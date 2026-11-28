@@ -15,4 +15,5 @@ workspace = true
 # 2026-11-28).
 x80-core = "0.1.0"
 ks10-core-uop = { path = "../ks10-core-uop" }
+ks10-machine = { path = "../ks10-machine" }
 pdp10 = { path = "../pdp10" }

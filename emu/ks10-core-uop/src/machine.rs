@@ -304,14 +304,21 @@ pub struct Machine {
     pub bus: Bus,
     /// The Unibus adapters and their devices.
     pub io: Io,
-    /// The completed instructions: the `SPEC/NICOND` words. This is the
-    /// time of the devices, as in `ks10-core-soft` (docs/microcode-model.md,
-    /// "Device time").
+    /// The completed instructions: the `SPEC/NICOND` words.
     pub instructions: u64,
-    /// The instruction count of the last 1 ms tick.
+    /// The time that passed while the processor clock was stopped, in the
+    /// units of the device time (`idle`).
+    pub idle: u64,
+    /// The device time of the last 1 ms tick.
     pub last_tick: u64,
     /// The CTY service of the 8080 (the communication words 32 and 33).
     pub cty: Cty,
+    /// A model of the CSL board is the console (`emu/ks10-csl`): the CTY
+    /// service above does not run, and the doorbell sets `csl_interrupt`.
+    pub csl_model: bool,
+    /// CSL4 10 INT (E161), preset by the doorbell when `csl_model` is set;
+    /// the model of the board takes it.
+    pub csl_interrupt: bool,
     /// A stop of `master_reset` or `start_at`, which the next `step`
     /// returns.
     pub pending_stop: Option<Stop>,
@@ -450,6 +457,9 @@ impl Machine {
             instructions: 0,
             last_tick: 0,
             cty: Cty::default(),
+            csl_model: false,
+            csl_interrupt: false,
+            idle: 0,
             pending_stop: None,
             trap_cycle: p,
             flags,
@@ -1003,9 +1013,10 @@ impl Machine {
                 // data cycle (EK-OKS10-TM-002 5.3.6).
                 let a = address as u32;
                 let byte = self.vma_flags.io_byte;
-                io_written =
-                    self.io
-                        .write_cycle(&mut self.memory, self.instructions, a, dp.get(), byte);
+                let now = self.now();
+                io_written = self
+                    .io
+                    .write_cycle(&mut self.memory, now, a, dp.get(), byte);
                 if self.io.memstat.force != 0 {
                     return Err(self.unmodelled("force check bits: the model has no check bits"));
                 }
@@ -1354,7 +1365,7 @@ impl Machine {
             _ => return Err(self.unmodelled("DBM EXP needs DP 09-17, which depends on the DBus")),
         };
         let exponent = u64::from(scad) & 0o377; // SCAD 02-09
-        let count = ks10_machine::msec_count(self.instructions, self.last_tick);
+        let count = ks10_machine::msec_count(self.now(), self.last_tick);
         let left = exponent << 9 | dp_left;
         Ok(W36::wrap(left << 18 | (count & 0o7774)))
     }
@@ -1614,7 +1625,11 @@ impl Machine {
             // The preset of flag 27 holds it while NXM ERR is 1 (E139).
             let mut new = dp.field(24, 31) as u8;
             if new & !self.apr_flags & 0o100 != 0 {
-                self.cty.doorbell(self.instructions);
+                if self.csl_model {
+                    self.csl_interrupt = true;
+                } else {
+                    self.cty.doorbell(self.now());
+                }
             }
             if self.nxm_err {
                 new |= APR_NXM;
@@ -1666,12 +1681,27 @@ impl Machine {
     /// run to the instruction count before it counts this instruction, in
     /// the order of `ks10-core-soft` (`Machine::step`).
     fn instruction_boundary(&mut self) {
-        let now = self.instructions;
+        self.run_devices();
+        self.instructions += 1;
+        self.record_due = true;
+    }
+
+    /// The device time: the instruction count, and the time that passed
+    /// while the processor clock was stopped (docs/microcode-model.md,
+    /// "Device time").
+    pub fn now(&self) -> u64 {
+        self.instructions + self.idle
+    }
+
+    /// The 1 ms clock, the CTY service of the 8080 and the devices run to
+    /// the device time.
+    fn run_devices(&mut self) {
+        let now = self.now();
         while now >= self.last_tick + INSTRUCTIONS_PER_MS {
             self.last_tick += INSTRUCTIONS_PER_MS;
             self.millisecond();
         }
-        if self.cty.run(now, &mut self.memory) {
+        if !self.csl_model && self.cty.run(now, &mut self.memory) {
             // CSL4 INT 10 L, a pulse of the 8080 write to 116, presets APR
             // flag 31 **[manual]** (M8616-0-CSL4 rev C, E171, E170, E163;
             // DPMB E158).
@@ -1681,8 +1711,17 @@ impl Machine {
         if !self.io.events.is_empty() {
             self.io.run_events(&mut self.memory, now);
         }
-        self.instructions += 1;
-        self.record_due = true;
+    }
+
+    /// `units` of device time while the processor clock is stopped: at
+    /// each unit the 1 ms clock and the devices run, as at an instruction
+    /// boundary, and no instruction counts. A model of the CSL board calls
+    /// it; the processor does not run.
+    pub fn idle(&mut self, units: u64) {
+        for _ in 0..units {
+            self.run_devices();
+            self.idle += 1;
+        }
     }
 
     /// A 1 ms tick of the timer (DPMC E1): E1 takes 1 MSEC EN.
@@ -1788,7 +1827,8 @@ impl Machine {
         // A Unibus adapter asserts I/O BUSY, then sends the word with I/O
         // DATA CYCLE (EK-OKS10-TM-002 5.3.6, 5.9.5). For an address with
         // no device the adapter does not answer (docs/unknowns.md).
-        if let Reply::Value(v) = self.io.read_cycle(a, f.io_byte, self.instructions) {
+        let now = self.now();
+        if let Reply::Value(v) = self.io.read_cycle(a, f.io_byte, now) {
             self.answer(v, UBA_BUSY_CYCLES, true);
         }
         Ok(())
@@ -1857,7 +1897,7 @@ impl Machine {
         self.nxm_err = false;
         self.memory[0] = W36::ONES;
         self.upc = 0;
-        self.last_tick = self.instructions;
+        self.last_tick = self.now();
         if !self.run_until(CONSOLE_WAIT_CYCLES, |m| m.csl.halt_loop)? {
             return Err(self.unmodelled("the microcode does not reach the halt loop"));
         }
@@ -2062,7 +2102,8 @@ impl Machine {
 
 impl boot::Processor for Machine {
     fn bus(&mut self) -> (&mut [W36], &mut Io, u64) {
-        (&mut self.memory, &mut self.io, self.instructions)
+        let now = self.now();
+        (&mut self.memory, &mut self.io, now)
     }
 
     fn master_reset(&mut self) {
@@ -2198,6 +2239,30 @@ mod tests {
         assert_eq!(m.io.events, [(INSTRUCTIONS_PER_MS + 1, Event::Dz)]);
         assert!(m.one_ms);
         assert_eq!(m.instructions, INSTRUCTIONS_PER_MS + 1);
+    }
+
+    #[test]
+    fn idle_time_runs_the_clock_and_the_devices_but_no_instruction() {
+        // The CSL model gives time while the processor clock is stopped:
+        // each unit runs the devices as a boundary does, and no
+        // instruction counts.
+        use ks10_machine::unibus::Event;
+        let mut m = Machine::new(
+            vec![Microword::from_bits(0); CRAM_WORDS],
+            vec![0; DROM_WORDS],
+            W40::ZERO,
+        );
+        m.io.events = vec![
+            (INSTRUCTIONS_PER_MS - 1, Event::Dz),
+            (INSTRUCTIONS_PER_MS + 1, Event::Dz),
+        ];
+        m.csl.one_ms_en = true;
+        m.idle(INSTRUCTIONS_PER_MS);
+        assert_eq!(m.io.events, [(INSTRUCTIONS_PER_MS + 1, Event::Dz)]);
+        assert!(!m.one_ms);
+        m.idle(1);
+        assert!(m.one_ms);
+        assert_eq!((m.instructions, m.now()), (0, INSTRUCTIONS_PER_MS + 1));
     }
 
     #[test]

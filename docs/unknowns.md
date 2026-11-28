@@ -148,6 +148,10 @@ then, the model takes each value as a parameter, or stops.
   first, and the multiplexer input of the second has no connection
   (MP00540 CSLA rev C, E157, E112). The model reads the bits 4 to 7 as 1,
   and the input of port 100 bit 5 as high.
+- **Answer not found.** If CSL5 ENABLE (0) H runs while the KS10 clock is
+  stopped. If it does, INT 10, RUN, EXECUTE and CONTINUE reach the KS10
+  through E170 and E163 at once. The model holds INT 10 until the clock
+  runs (MP00540 CSL4 rev C, CSL5 rev D).
 - **Answer not found.** The items of [`csl-registers.md`](csl-registers.md) that
   the drawings do not settle (U1 to U9 there).
 - **Answer not found.** The baud rate of a board. DIP switches set it

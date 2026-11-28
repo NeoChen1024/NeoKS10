@@ -157,6 +157,13 @@ impl<K: Ks10> Board<K> {
         (address >= RAM_START && i < RAM_SIZE).then_some(i)
     }
 
+    /// A write to a port of the KS10 side, after the devices of the KS10
+    /// run to the time of the write.
+    fn ks10_write(&mut self, port: u8, value: u8) -> Result<bool, &'static str> {
+        self.ks10.idle_to(self.now);
+        self.interface.write(port, value, self.now, &mut self.ks10)
+    }
+
     fn stop(&mut self, s: Stop) {
         self.stop.get_or_insert(s);
     }
@@ -219,6 +226,7 @@ impl<K: Ks10> Bus for Board<K> {
             REMDAT => self.rem.read_data(self.now),
             REMCTL => self.rem.status(self.now),
             _ => {
+                self.ks10.idle_to(self.now);
                 let c = self.config;
                 let carrier = (c.cty_carrier, c.klinik_carrier);
                 match self.interface.read(port, c.switches, carrier, &self.ks10) {
@@ -249,7 +257,7 @@ impl<K: Ks10> Bus for Board<K> {
             CTYDAT => self.cty.write_data(value, self.now),
             REMDAT => self.rem.write_data(value, self.now),
             CTYCTL | REMCTL => self.control(port, value),
-            _ => match self.interface.write(port, value, self.now, &mut self.ks10) {
+            _ => match self.ks10_write(port, value) {
                 Ok(true) => {}
                 Ok(false) => {
                     self.writes.pop();
@@ -286,7 +294,8 @@ impl<K: Ks10> Csl<K> {
     /// The board with the ROM `rom` (`rom::load`), at the power-up state:
     /// the 8080 at address 0 (`HCORE.M80`, "AT POWER UP, ALWAYS BEGIN AT
     /// 0000") and the USARTs in reset.
-    pub fn new(rom: Vec<u8>, config: Config, ks10: K) -> Result<Csl<K>, String> {
+    pub fn new(rom: Vec<u8>, config: Config, mut ks10: K) -> Result<Csl<K>, String> {
+        ks10.attach();
         if rom.len() != rom::SIZE {
             return Err(format!("ROM of {} bytes, not {}", rom.len(), rom::SIZE));
         }
@@ -339,6 +348,7 @@ impl<K: Ks10> Csl<K> {
                 _ => self.board.stop(Stop::Other { pc }),
             }
         }
+        self.board.ks10.idle_to(self.board.now);
         match self.board.stop {
             Some(s) => Err(s),
             None => Ok(()),

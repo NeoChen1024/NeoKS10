@@ -19,6 +19,9 @@
 //!   without a driver read as high (docs/unknowns.md).
 //! - That a write to 101 also ends RESET (1) is derived from the decode
 //!   (docs/csl-registers.md, U3).
+//! - While the KS10 clock is stopped, the devices of the KS10 get their
+//!   time from the board (`Ks10::idle_to`), and INT 10 waits in E171
+//!   (docs/console-interface.md).
 //!
 //! A function or a register that the model does not have stops the run.
 
@@ -47,9 +50,22 @@ pub enum Reply {
 
 /// The KS10 as the console sees it.
 pub trait Ks10 {
+    /// The board becomes the console of this KS10.
+    fn attach(&mut self) {}
     /// A memory read at `address` (EK-OKS10-TM-002 5.3.5). `None` if no
     /// memory answers with MEM BUSY. `Err` if the KS10 has no model of it.
     fn memory_read(&mut self, address: u32) -> Result<Reply, &'static str>;
+    /// An I/O register read at `address`, bits 14 to 35 of the
+    /// command/address word (5.3.6); a byte read if `byte`. `None` if no
+    /// device answers.
+    /// A memory write. `false` if no memory takes it.
+    fn memory_write(&mut self, address: u32, value: W36) -> Result<bool, &'static str>;
+    fn io_read(&mut self, address: u32, byte: bool) -> Result<Reply, &'static str>;
+    /// An I/O register write. `false` if no device takes it.
+    fn io_write(&mut self, address: u32, value: W36, byte: bool) -> Result<bool, &'static str>;
+    /// The 8080 time is `now` states since power-up, and the KS10 clock
+    /// is stopped: the devices of the KS10 run to that time.
+    fn idle_to(&mut self, now: u64);
     /// The inputs of the processor from the console.
     fn inputs(&self) -> Inputs;
     fn set_inputs(&mut self, i: Inputs);
@@ -67,6 +83,16 @@ impl Ks10 for Detached {
     fn memory_read(&mut self, _address: u32) -> Result<Reply, &'static str> {
         Err("the KS10")
     }
+    fn memory_write(&mut self, _address: u32, _value: W36) -> Result<bool, &'static str> {
+        Err("the KS10")
+    }
+    fn io_read(&mut self, _address: u32, _byte: bool) -> Result<Reply, &'static str> {
+        Err("the KS10")
+    }
+    fn io_write(&mut self, _a: u32, _v: W36, _byte: bool) -> Result<bool, &'static str> {
+        Err("the KS10")
+    }
+    fn idle_to(&mut self, _now: u64) {}
     fn inputs(&self) -> Inputs {
         self.inputs
     }
@@ -92,6 +118,22 @@ pub enum Function {
     MemoryRead { com_adr: W36, reply: Reply },
     /// Examine bus: the latches take the bus without a transfer.
     ExamineBus { data: W36 },
+    /// A memory write: the command/address word, the data and if a
+    /// memory took it.
+    MemoryWrite {
+        com_adr: W36,
+        data: W36,
+        taken: bool,
+    },
+    /// An I/O register read: the command/address word and the reply.
+    IoRead { com_adr: W36, reply: Reply },
+    /// An I/O register write: the command/address word, the data and if
+    /// a device took it.
+    IoWrite {
+        com_adr: W36,
+        data: W36,
+        taken: bool,
+    },
 }
 
 /// Register 210 (CSL4 E121, E129; CSL3 E151).
@@ -132,6 +174,9 @@ pub struct Interface {
     /// CSL4 10 INT (E161): register 205 bit 5, preset by DPMB CSL
     /// INTERRUPT.
     pub ten_int: bool,
+    /// CSL4 E171: INT 10 to the KS10 (register 116 bit 0), held until the
+    /// KS10 clock runs.
+    pub int_10: bool,
     /// Register 210 bits 0 to 5 (CSL4 E121), BUS REQ (E129) and MEM (CSL3
     /// E151).
     pub bus_ctl: u8,
@@ -158,6 +203,7 @@ impl Default for Interface {
             cram_ctl: 0,
             diag: 0,
             ten_int: false,
+            int_10: false,
             bus_ctl: 0,
             bus_req: false,
             mem: false,
@@ -231,8 +277,11 @@ impl Interface {
                 // CSL3 E145, E135: the write clears NEXM and the NXM timer.
                 self.nexm = false;
             }
-            0o116 if v & 1 != 0 => return Err("INT 10 to the KS10 (register 116)"),
-            0o116 => {}
+            // CSL4 E171: bit 0 sets INT 10. It reaches the KS10 through
+            // E170 and E163, which clock on CSL5 ENABLE (0) H, and E171
+            // clears when it arrives. The model holds the request while the
+            // KS10 clock is stopped.
+            0o116 => self.int_10 |= v & 1 != 0,
             0o204 => self.cram_ctl = v & 0o77,
             0o205 => {
                 if v & 0o100 != 0 {
@@ -291,31 +340,56 @@ impl Interface {
             // stopped it grants the bus at once, and GRANT clears BUS REQ
             // (CSL4 E114, E129).
             self.bus_req = false;
-            if c & XMIT_DATA != 0 {
-                return Err("a bus write (register 210)");
-            }
-            if c != XMIT_ADR | LATCH_DATA | CLOSE_LATCHES {
-                return Err("a bus function other than a read (register 210)");
-            }
             let com_adr = self.com_adr.0;
-            if com_adr.bit(0) || !com_adr.bit(1) || com_adr.bit(2) {
-                return Err("a bus read other than a memory read");
-            }
-            let address = com_adr.field(16, 35) as u32;
-            let reply = ks10.memory_read(address)?;
-            match reply {
-                Reply::Data(w) => {
-                    self.latch = (w, 1);
-                    self.data_ack = true;
+            // EK-OKS10-TM-002 5.3.4: bit 0 I/O, bit 1 read, bit 2 write,
+            // bit 6 byte; the I/O address is bits 14 to 35, the memory
+            // address bits 16 to 35.
+            let (io, read, write) = (com_adr.bit(0), com_adr.bit(1), com_adr.bit(2));
+            let byte = com_adr.bit(6);
+            let function = match (io, read, write) {
+                (false, true, false) if c == XMIT_ADR | LATCH_DATA | CLOSE_LATCHES => {
+                    let reply = ks10.memory_read(com_adr.field(16, 35) as u32)?;
+                    // CSL3 E135, E134, E145: with MEM, no MEM BUSY within
+                    // four R clocks sets NEXM.
+                    if reply == Reply::None {
+                        self.nexm |= self.mem;
+                    }
+                    Function::MemoryRead { com_adr, reply }
                 }
-                // CSL3 E135, E134, E145: with MEM, no MEM BUSY within four
-                // R clocks sets NEXM.
-                Reply::None => self.nexm |= self.mem,
+                (true, true, false) if c == XMIT_ADR | LATCH_DATA | CLOSE_LATCHES => {
+                    let reply = ks10.io_read(com_adr.field(14, 35) as u32, byte)?;
+                    Function::IoRead { com_adr, reply }
+                }
+                (true, false, true) if c & (XMIT_ADR | XMIT_DATA) == XMIT_ADR | XMIT_DATA => {
+                    let data = self.data.0;
+                    let taken = ks10.io_write(com_adr.field(14, 35) as u32, data, byte)?;
+                    Function::IoWrite {
+                        com_adr,
+                        data,
+                        taken,
+                    }
+                }
+                (false, false, true) if c & (XMIT_ADR | XMIT_DATA) == XMIT_ADR | XMIT_DATA => {
+                    let data = self.data.0;
+                    let taken = ks10.memory_write(com_adr.field(16, 35) as u32, data)?;
+                    if !taken {
+                        self.nexm |= self.mem;
+                    }
+                    Function::MemoryWrite {
+                        com_adr,
+                        data,
+                        taken,
+                    }
+                }
+                _ => return Err("a bus function of this kind (register 210)"),
+            };
+            if let Function::MemoryRead { reply, .. } | Function::IoRead { reply, .. } = function
+                && let Reply::Data(w) = reply
+            {
+                self.latch = (w, 1);
+                self.data_ack = true;
             }
-            self.cycles.push(BusCycle {
-                at: now,
-                function: Function::MemoryRead { com_adr, reply },
-            });
+            self.cycles.push(BusCycle { at: now, function });
             return Ok(());
         }
         match c {
@@ -418,6 +492,16 @@ mod tests {
                 .get(a as usize)
                 .map_or(Reply::None, |&w| Reply::Data(w)))
         }
+        fn memory_write(&mut self, a: u32, v: W36) -> Result<bool, &'static str> {
+            Ok(self.0.get_mut(a as usize).map(|w| *w = v).is_some())
+        }
+        fn io_read(&mut self, _a: u32, _byte: bool) -> Result<Reply, &'static str> {
+            Ok(Reply::None)
+        }
+        fn io_write(&mut self, _a: u32, _v: W36, _byte: bool) -> Result<bool, &'static str> {
+            Ok(false)
+        }
+        fn idle_to(&mut self, _now: u64) {}
         fn inputs(&self) -> Inputs {
             self.1
         }

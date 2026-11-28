@@ -893,6 +893,15 @@ time in microcycles.
   (`PAGE-CONTINUE`) **[microcode]**. The instruction count is the time
   base of the devices by design ("Stage 4", "Time and the boot of
   ITS").
+- **Time with the clock stopped.** The device time (`Machine::now`) is
+  the instruction count plus `idle`. `Machine::idle` adds time while the
+  processor clock is stopped: at each unit, the 1 ms clock and the
+  devices run as at an instruction boundary, and no instruction counts.
+  The model of the CSL board (`emu/ks10-csl`) calls it, because the 8080
+  starts the disk transfers of the boot before the KS10 clock runs
+  ([`console-interface.md`](console-interface.md)). With `csl_model`, the
+  8080 program serves the CTY, and the CTY service of the model does not
+  run.
 
 The controllers:
 

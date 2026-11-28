@@ -64,7 +64,7 @@ fn boot_its_from_disk() {
     while m.instructions < LIMIT {
         if m.instructions != last_progress.0 {
             last_progress = (m.instructions, m.cycles);
-            script.tick(m.instructions, &mut m.cty);
+            script.tick(m.now(), &mut m.cty);
             if m.cty.output.len() > cty.len() {
                 cty.extend_from_slice(&m.cty.output[cty.len()..]);
                 let out = String::from_utf8_lossy(&cty);

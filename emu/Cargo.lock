@@ -218,6 +218,7 @@ name = "ks10-csl"
 version = "0.1.0"
 dependencies = [
  "ks10-core-uop",
+ "ks10-machine",
  "pdp10",
  "x80-core",
 ]

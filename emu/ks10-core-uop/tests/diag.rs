@@ -68,7 +68,7 @@ fn run(
             if m.instructions >= limit {
                 return End::Limit;
             }
-            script.tick(m.instructions, &mut m.cty);
+            script.tick(m.now(), &mut m.cty);
         } else if m.upc == haltlp && m.csl.halt_loop {
             return End::Halt {
                 code: m.memory[0].get(),
