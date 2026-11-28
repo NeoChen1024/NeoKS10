@@ -88,6 +88,6 @@ project agree, that is not a proof that one of them is correct.
 | 1 | The Rust emulator with the software processor passes the diagnostics and boots ITS on a host computer | Done ([`emulator.md`](emulator.md), "Device model" and "Diagnostics") |
 | 2 | The same emulator runs on the PS of the board | It builds for the board and passes its tests in qemu-arm; no run on the board yet |
 | 3 | Measurements of the PS/PL memory path: latency of the HP ports, uncached mapping, write queue | The path is measured (Part B of [`mem-path-experiment.md`](mem-path-experiment.md)); the demand of the guest (Parts A and C) is open |
-| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The microcode of the ITS build loads and is checked; the data path model runs the power-up sequence and single instructions with memory cycles, which agree with the software processor, shifts included; I/O is next |
+| 4 | The microcode-level model, then the processor core, which agrees with it in co-simulation | The model runs the microcode that `spec/micro.py` assembles. It passes the DEC diagnostics that apply to the ITS microcode, and boots ITS to a login. It gives a record at each instruction, through a C interface for the co-simulation. The model of the 8080 and the processor core are next ([`microcode-model.md`](microcode-model.md)) |
 | 5 | The core runs on the board with the devices on the PS | Not started |
 | 6 | Front panel on HDMI, Chaosnet, IMP interface | Not started |

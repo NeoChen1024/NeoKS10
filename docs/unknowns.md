@@ -60,11 +60,6 @@ disagree:
   exponent difference of 61 or more. The KS10 microcode handles them in
   its own way (`flt.5`). SIMH follows the KL10; KLH10 is not yet run
   with such operands.
-- FDV and its forms with normalized operands: `emu/ks10-core-soft` and KLH10 agree,
-  and SIMH differs in bit 35 of 744 of 2075 quotients
-  (docs/discrepancies.md, "FDV: the quotient"). Emulators do not decide
-  the case. Which side follows `flt.5` (FDV6 to SNORM) is not known until
-  the microcode-level model runs it.
 
 ## The microcode-level model
 

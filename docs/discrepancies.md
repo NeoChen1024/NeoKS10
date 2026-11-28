@@ -147,8 +147,12 @@ CIRC cases of the differential run agree with KLH10.
 - **[measured]** 2026-11-27, `oracle.rs` without `skip`: with normalized
   operands, 744 of 2075 FDV cases (all forms) differ in bit 35 of the
   quotient. No DEC vector with normalized operands separates the two
-  emulators. Which one does what the microcode does is open
-  (`docs/unknowns.md`).
+  emulators.
+- **[measured]** 2026-11-28, `emu/ks10-core-uop/tests/instructions.rs`,
+  `fdv_quotients_of_the_microcode`: the microcode-level model runs
+  `flt.5` (FDV to SNORM). In four of these cases (FDV, FDVR twice, FDVRI;
+  seeds 79, 653, 674 and 1192) it gives the quotient of
+  `emu/ks10-core-soft` and KLH10, not the one of SIMH.
 - **[measured]** 2026-11-27: KLH10 6d733f2a agrees with `emu/ks10-core-soft` in
   all 2123 FDV cases of 100000 (both emulators are rank 4; this does not
   decide the case).
@@ -156,8 +160,9 @@ CIRC cases of the differential run agree with KLH10.
   the quotient goes to AC and to E. **[measured]** 2026-11-27: FDVRB with
   a dividend of 0 stores 0 in the AC, but SIMH leaves E unchanged.
 
-The project uses the diagnostic for P7700 and the microcode for the store.
-The differential run does not compare FDV.
+The project uses the diagnostic for P7700, and the microcode for the
+quotient of normalized operands and for the store. The differential run
+does not compare FDV with SIMH.
 
 ## IMUL: a negative product that does not fit
 
@@ -290,8 +295,8 @@ the control RAM.
 - With traps on, the microcode takes the trap at the next instruction, so
   the rule shows only with traps off. The boot loader of ITS runs with
   traps off. An ADD of the loader clears a Trap 1 of an earlier
-  instruction (the lockstep run, `emu/ks10-core-uop/tests/its_boot.rs`,
-  2026-11-27).
+  instruction (a boot of ITS on the model in step with
+  `emu/ks10-core-soft`, 2026-11-27).
 - **[measured]** 2026-11-27, the microcode-level model
   (`emu/ks10-core-uop/tests/instructions.rs`, `flag_cases`). 36 cases
   start with the two trap flags set, and again with all flags of

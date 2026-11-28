@@ -22,9 +22,13 @@ The hardware does not exist yet. The software side works:
 - The memory path between the FPGA and the ARM memory is measured on the
   board ([`docs/mem-path-experiment.md`](docs/mem-path-experiment.md)).
 
-Next is a model of the KS10 data path that runs the ITS microcode. The
-logic in the FPGA will follow that model. The parts, the plan and the
-state of each step are in [`docs/architecture.md`](docs/architecture.md).
+- A model of the KS10 data path runs the ITS microcode. It passes the
+  same diagnostics and boots ITS to a login
+  ([`docs/microcode-model.md`](docs/microcode-model.md)).
+
+Next is the logic in the FPGA, which follows that model. The parts, the
+plan and the state of each step are in
+[`docs/architecture.md`](docs/architecture.md).
 
 ## Quick start
 

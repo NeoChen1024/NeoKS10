@@ -994,7 +994,7 @@ M8621-0-DPMC rev D **[manual]**:
   written and not valid. Both fills. The mutants "PAGE WRITE in the same
   word", "SET SWEEP without the VMA load" and "VMA SWEEP without the
   right half" each fail the test.
-- The lockstep boot (`emu/ks10-core-uop/tests/its_boot.rs`) found a
+- A boot of ITS in step with `emu/ks10-core-soft` (2026-11-27) found a
   difference of Trap 1 after an ADD of the boot loader. The microcode
   and DPE9 decide it ([`discrepancies.md`](discrepancies.md), "Trap 1
   and Trap 2: each flag word loads them"). The result of the boot is in
@@ -1147,14 +1147,12 @@ co-simulation of the model with the logic in `rtl/`.
   `PFD`, and the byte dispatch the codes of `LDB1`.
 - `emu/ks10-core-uop/tests/instructions.rs`: PUSHJ, JSR, JSP and DMUL
   with the flags set agree (DBus input 0).
-- `emu/ks10-core-uop/tests/its_boot.rs`: the 8080 BT command, then "its"
-  and ESC G at the DSKDMP prompt (`tests/its-boot/boot.script`), to
-  both processors at the same instruction. The model agreed up to the
-  first virtual memory cycle with PAGE EN; the boot continues in "Stage
-  5". With the mutant "page fail without the stack push", the first 1 ms
-  page fail does not return, and the model stays in the halt loop after
-  1 002 instructions. The test stops a run that has no instruction for
-  10 million microcycles.
+- A boot of ITS (the 8080 BT command, then "its" and ESC G at the
+  DSKDMP prompt) in step with `emu/ks10-core-soft`: the model agreed up
+  to the first virtual memory cycle with PAGE EN; the boot continues in
+  "Stage 5". With the mutant "page fail without the stack push", the
+  first 1 ms page fail does not return, and the model stays in the halt
+  loop after 1 002 instructions.
 
 ## Stage 5: paging
 
@@ -1197,19 +1195,19 @@ boundary. The PC word thus depends on the microcycle of the tick
 
 **[measured]** 2026-11-27, the ITS listing 262:
 
-- `emu/ks10-core-uop/tests/its_boot.rs`: ITS turns on paging after
-  4 731 024 instructions, and prints "DB ITS 1652 IN OPERATION" on the
-  CTY after 11 012 654 instructions, about 95.9 million microcycles. The
-  model and `emu/ks10-core-soft` agree after each instruction and in main
-  memory at the end. The run has 510 interrupts; the model takes each 1
+- A boot of ITS in step with `emu/ks10-core-soft`: ITS turns on paging
+  after 4 731 024 instructions, and prints "DB ITS 1652 IN OPERATION" on
+  the CTY after 11 012 654 instructions, about 95.9 million microcycles.
+  The two processors agreed after each instruction and in main memory at
+  the end. The run has 510 interrupts; the model takes each 1
   or 2 instructions after `emu/ks10-core-soft` could. The cache answers
   6 185 535 reads, and `emu/ks10-core-soft` has no cache: the cache data
   stays coherent. A longer run, in which ITS logs in its system job,
   first differs at 13 370 188 instructions, in bits 14–17 of a page fail
-  word ([`unknowns.md`](unknowns.md)). With these bits of 7 page fail
+  word ([`emulator.md`](emulator.md), "Differences from the microcode"). With these bits of 7 page fail
   words taken from the model, it agreed to 40 000 000 instructions, with
   3 842 interrupts.
-- On the way, the lockstep run found three errors of
+- On the way, the run in step found three errors of
   `emu/ks10-core-soft` against the schematics and the microcode: GOEXEC
   in executive mode takes PCU from bit 6 of the new flags word (DPE9
   E46; KS10FPGA 5090e7a1, `pcflags.v`, agrees **[emulator]**); `IW`
@@ -1218,9 +1216,16 @@ boundary. The PC word thus depends on the microcycle of the tick
   (DPM2 E165, E188).
 - Before STOP MAIN MEMORY had the page fail term, `ABORT MEM CYCLE`
   wrote a valid tag and a stale word into the cache, and the fetch after
-  the page fail of 146324 read the instruction before it. The lockstep
-  run found this at instruction 4 731 025.
+  the page fail of 146324 read the instruction before it. The run in
+  step found this at instruction 4 731 025.
 - Unit test in `machine.rs`: each missing term of E114 gives no hit.
+
+**[measured]** 2026-11-28 (`emu/ks10-core-uop/tests/its_boot.rs`, a
+release build): the model alone boots ITS with the answers of
+`emu/ks10-core-soft/tests/idle.rs`, logs in and lists `SYS;`. "IN
+OPERATION" comes after 11 110 654 instructions, the login after
+137 351 964, and "FREE BLOCKS" after 137 519 408 instructions, 904 million
+microcycles. The cache answers 13 883 897 reads. The run takes 233 s.
 
 ## The instruction record
 

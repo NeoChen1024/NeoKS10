@@ -892,8 +892,9 @@ have behaviour that is not intended.
   DP 14 to 17 at each VMA load **[manual]** (M8621-0-DPM4 rev B, E183).
   So the bits come from the left half of the word that gave the address,
   for example the stack pointer of PUSH (`simple.42`, `PUSH1`:
-  `[ARX]_AC+1000001, LOAD VMA`). **[measured]** 2026-11-28, the lockstep
-  boot of `emu/ks10-core-uop` without its stop at IN OPERATION: the first
+  `[ARX]_AC+1000001, LOAD VMA`). **[measured]** 2026-11-28, a boot of
+  ITS on `emu/ks10-core-uop` in step with this processor, past IN
+  OPERATION: the first
   difference is at instruction 11 437 018. The page fail word in AC 16
   is 410001,,000637 in the model and 410000,,000637 here. The last VMA
   load before it was `PUSH1` (CRAM 2565), with VMA 777015,,000637.

@@ -992,3 +992,65 @@ fn the_flag_rules_of_the_microcode() {
         assert_eq!(got.flags, want, "{}", c.name);
     }
 }
+
+/// FDV and its forms on normalized operands where SIMH and
+/// `ks10-core-soft` differ in bit 35 of the quotient (docs/discrepancies.md,
+/// "FDV: the quotient"). The operands come from the differential run
+/// (`oracle.rs` with KS10_ORACLE_NOSKIP, the seeds in the comments). The
+/// expected quotient is the one of `ks10-core-soft` and KLH10, which agree
+/// in all FDV cases; the model runs the microcode (flt.5, FDV to SNORM).
+#[test]
+fn fdv_quotients_of_the_microcode() {
+    let e = E as u64;
+    // (opcode, E, AC 1, C(E), quotient of ks10-core-soft and KLH10, of SIMH)
+    let cases: [(u64, u64, u64, u64, u64, u64); 4] = [
+        // Seed 79: FDV.
+        (
+            0o170,
+            e,
+            0o152653_256164,
+            0o631006_651626,
+            0o573116_702671,
+            0o573116_702672,
+        ),
+        // Seeds 653 and 674: FDVR.
+        (
+            0o174,
+            e,
+            0o774366_303164,
+            0o777020_733517,
+            0o203422_547146,
+            0o203422_547147,
+        ),
+        (
+            0o174,
+            e,
+            0o247614_660076,
+            0o566056_311007,
+            0o541113_472655,
+            0o541113_472656,
+        ),
+        // Seed 1192: FDVRI, the operand E,,0.
+        (
+            0o175,
+            0o707117,
+            0o031525_527251,
+            0,
+            0o636153_774040,
+            0o636153_774041,
+        ),
+    ];
+    for (op, ea, dividend, divisor, want, simh) in cases {
+        let mut ac = [0; 16];
+        ac[1] = dividend;
+        let c = Case {
+            name: format!("{op:o} {dividend:012o} {divisor:012o}"),
+            inst: op << 27 | 1 << 23 | ea,
+            ac,
+            mem: [divisor, 0],
+            flags: 0,
+        };
+        let got = model(FILLS[0], &c).expect(&c.name);
+        assert_eq!(got.ac[1], want, "{}: SIMH gives {simh:012o}", c.name);
+    }
+}
