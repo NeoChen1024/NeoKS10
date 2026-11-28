@@ -275,7 +275,7 @@ $(CSL_STAMP): $(wildcard $(CSL_ZIP) $(CSL_TAPE)) $(DIAG_STAMP)
 	touch $@
 
 csl: $(CSL_STAMP)
-	cd emu && KS10_CSL_DIR=$(CSL_DIR) KS10_ITS_DISK=$(KS10_ITS_DISK) $(NICE) $(CARGO) test --locked -p ks10-csl -- --nocapture
+	cd emu && KS10_CSL_DIR=$(CSL_DIR) KS10_ITS_DISK="$(KS10_ITS_DISK)" $(NICE) $(CARGO) test --locked -p ks10-csl -- --nocapture
 
 # The rows of AGENTS.md for a change of the software processor or a
 # device, and before a merge: check, microcode, diag and its-boot. Run it

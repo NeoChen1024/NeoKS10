@@ -83,3 +83,25 @@ impl Ks10 for Machine {
         self.csl.halt_loop
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ks10_core_uop::alu::W40;
+
+    #[test]
+    fn the_device_time_follows_the_8080_clock() {
+        // 1638.4 states in 1 ms: 16384 states are 10 ms.
+        let mut m = Machine::its(W40::ZERO);
+        m.idle_to(16384);
+        assert_eq!(
+            (m.idle, m.now()),
+            (10 * INSTRUCTIONS_PER_MS, 10 * INSTRUCTIONS_PER_MS)
+        );
+        // The time does not go back, and a part of a unit waits.
+        m.idle_to(100);
+        m.idle_to(16385);
+        assert_eq!(m.idle, 10 * INSTRUCTIONS_PER_MS);
+        assert_eq!(m.instructions, 0);
+    }
+}

@@ -468,4 +468,6 @@ The project uses the drawing: a write to 114 or 115 clears NEXM.
 - **[its]** KNS10.PNT, `DMGO`: 362 also sets MEM and LATCH DATA, with the
   comment "LATCH DATA SENT PREVENTS FALSE PAR ERR".
 
-The model has no bus write yet. When it has one, it follows the program.
+The model follows the program for a memory write: it accepts 362 and the
+same bits without MEM. An I/O write is 160, as in Table 5-10 (`DI`,
+`DIFLAG`).

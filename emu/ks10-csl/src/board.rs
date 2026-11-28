@@ -328,8 +328,8 @@ impl<K: Ks10> Csl<K> {
     pub fn run(&mut self, states: u64) -> Result<(), Stop> {
         let end = self.board.now.saturating_add(states);
         while self.board.now < end {
-            if let Some(s) = self.board.stop {
-                return Err(s);
+            if self.board.stop.is_some() {
+                break;
             }
             // The address of the last instruction that started.
             let last = self.board.pc;
@@ -423,6 +423,48 @@ mod tests {
     const LDA: u8 = 0o072;
     const HLT: u8 = 0o166;
     const JMP: u8 = 0o303;
+
+    /// A KS10 that keeps the times of `idle_to`.
+    #[derive(Default)]
+    struct Clock(Vec<u64>, crate::ks10::Inputs);
+
+    impl Ks10 for Clock {
+        fn memory_read(&mut self, _a: u32) -> Result<crate::ks10::Reply, &'static str> {
+            Err("no memory")
+        }
+        fn memory_write(&mut self, _a: u32, _v: pdp10::W36) -> Result<bool, &'static str> {
+            Err("no memory")
+        }
+        fn io_read(&mut self, _a: u32, _b: bool) -> Result<crate::ks10::Reply, &'static str> {
+            Err("no device")
+        }
+        fn io_write(&mut self, _a: u32, _v: pdp10::W36, _b: bool) -> Result<bool, &'static str> {
+            Err("no device")
+        }
+        fn idle_to(&mut self, now: u64) {
+            self.0.push(now);
+        }
+        fn inputs(&self) -> crate::ks10::Inputs {
+            self.1
+        }
+        fn set_inputs(&mut self, i: crate::ks10::Inputs) {
+            self.1 = i;
+        }
+        fn halt_loop(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_ks10_gets_the_time_before_each_access() {
+        // OUT and IN take 10 states, HLT 7 (98-153B p. 4-15): the accesses
+        // start at 0 and 10, and the run ends at 27.
+        let mut rom = vec![0; rom::SIZE];
+        rom[..5].copy_from_slice(&[OUT, 0o101, IN, 0o301, HLT]);
+        let mut c = Csl::new(rom, CONFIG, Clock::default()).unwrap();
+        assert!(matches!(c.run(1000), Err(Stop::Halt { .. })));
+        assert_eq!(c.ks10().0, [0, 10, 27]);
+    }
 
     #[test]
     fn a_ks10_write_goes_into_the_log() {

@@ -153,8 +153,9 @@ statements about the 8080 and the 8251 cite 98-153B (`third-party.lock`).
   word of the data cycle.
 - It reaches the KS10 through the trait `Ks10`, at the level of the bus
   functions of EK-OKS10-TM-002 Table 5-10. `Detached` is a board without
-  a KS10. The microcode-level model implements the trait: its memory, and
-  its inputs RUN, EXECUTE, CONTINUE, TRAP EN, CACHE EN and 1 MSEC EN.
+  a KS10. The microcode-level model implements the trait: its memory,
+  its Unibus adapters and devices, its device time, and its inputs RUN,
+  EXECUTE, CONTINUE, TRAP EN, CACHE EN and 1 MSEC EN.
 - A bus function completes at the write to register 210. On the path
   from power-up to the boot, the KS10 clock is stopped: only the command
   CS (`CSCMD`, also through `BT.GO`) writes 206 to start it. The model has

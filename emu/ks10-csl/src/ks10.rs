@@ -17,6 +17,10 @@
 //! - The levels of the error, parity and PI request inputs of the reads
 //!   100 to 103 are those of a KS10 without errors and requests. The bits
 //!   without a driver read as high (docs/unknowns.md).
+//! - There is no front panel: its inputs are at the level of their
+//!   pull-ups. REMOTE DIAG PROT and ENB (302) are high, so the program
+//!   takes the KLINIK switch as PROTECT; PANEL BOOT and CONSOLE ENABLE
+//!   (301) are not active (docs/csl-registers.md, 2.5).
 //! - That a write to 101 also ends RESET (1) is derived from the decode
 //!   (docs/csl-registers.md, U3).
 //! - While the KS10 clock is stopped, the devices of the KS10 get their
@@ -539,6 +543,132 @@ mod tests {
         i.write(0o115, 4, 0, k)?;
         i.write(0o210, 0o343, 0, k)?;
         Ok(())
+    }
+
+    /// A bus cycle: the COM/ADR word to the odd ports, the data word to
+    /// the even ports (102 to 113), COM/ADR CYCLE (115) and DATA CYCLE
+    /// (114), then `ctl` to register 210.
+    fn cycle(i: &mut Interface, k: &mut dyn Ks10, com_adr: W36, data: W36, ctl: u8) {
+        for p in 0..5u8 {
+            let byte = |w: W36| (w.get() >> (8 * p)) as u8;
+            i.write(0o103 + 2 * p, byte(com_adr), 0, k).unwrap();
+            i.write(0o102 + 2 * p, byte(data), 0, k).unwrap();
+        }
+        i.write(0o115, 4, 0, k).unwrap();
+        i.write(0o114, 1, 0, k).unwrap();
+        i.write(0o210, ctl, 0, k).unwrap();
+    }
+
+    /// A KS10 with one I/O device: its I/O cycles go into a log, and a read
+    /// gets `reply`.
+    struct Device {
+        log: Vec<(u32, bool, Option<W36>)>,
+        reply: Reply,
+        inputs: Inputs,
+    }
+
+    impl Ks10 for Device {
+        fn memory_read(&mut self, _a: u32) -> Result<Reply, &'static str> {
+            Err("no memory")
+        }
+        fn memory_write(&mut self, _a: u32, _v: W36) -> Result<bool, &'static str> {
+            Err("no memory")
+        }
+        fn io_read(&mut self, a: u32, byte: bool) -> Result<Reply, &'static str> {
+            self.log.push((a, byte, None));
+            Ok(self.reply)
+        }
+        fn io_write(&mut self, a: u32, v: W36, byte: bool) -> Result<bool, &'static str> {
+            self.log.push((a, byte, Some(v)));
+            Ok(true)
+        }
+        fn idle_to(&mut self, _now: u64) {}
+        fn inputs(&self) -> Inputs {
+            self.inputs
+        }
+        fn set_inputs(&mut self, i: Inputs) {
+            self.inputs = i;
+        }
+        fn halt_loop(&self) -> bool {
+            false
+        }
+    }
+
+    fn device(reply: Reply) -> Device {
+        Device {
+            log: Vec::new(),
+            reply,
+            inputs: Inputs::default(),
+        }
+    }
+
+    #[test]
+    fn an_io_cycle_passes_the_address_and_the_byte_bit() {
+        // TM-002 5.3.4: bit 0 I/O, bit 2 write, bit 6 byte; the address
+        // in bits 14 to 35 (controller 1, register 763001).
+        let mut k = device(Reply::None);
+        let mut i = after_reset();
+        let data = W36::wrap(0o140001);
+        let byte = 1 << (35 - 6);
+        cycle(
+            &mut i,
+            &mut k,
+            W36::wrap(0o500001_763001 | byte),
+            data,
+            0o160,
+        );
+        cycle(&mut i, &mut k, W36::wrap(0o500001_763001), data, 0o160);
+        // An I/O read, bit 1 (EI: 143).
+        cycle(&mut i, &mut k, W36::wrap(0o600003_000100), W36::ZERO, 0o143);
+        assert_eq!(
+            k.log,
+            [
+                (0o1_763001, true, Some(data)),
+                (0o1_763001, false, Some(data)),
+                (0o3_000100, false, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_io_read_without_a_device_has_no_data_ack() {
+        let mut k = device(Reply::None);
+        let mut i = after_reset();
+        cycle(&mut i, &mut k, W36::wrap(0o600001_776712), W36::ZERO, 0o143);
+        // 301 after CMA: no DATA ACK, and no NEXM without MEM.
+        assert_eq!(!i.read(0o301, 0, (false, false), &k).unwrap() & 0o101, 0);
+        let mut k = device(Reply::Data(W36::wrap(0o14700)));
+        cycle(&mut i, &mut k, W36::wrap(0o600001_776712), W36::ZERO, 0o143);
+        assert_eq!(!i.read(0o301, 0, (false, false), &k).unwrap() & 0o101, 1);
+    }
+
+    #[test]
+    fn a_memory_write_without_memory_sets_nexm_with_mem() {
+        // DMGO: 362 has MEM; the same write without MEM (162) does not
+        // check (CSL3 E135).
+        for (ctl, nexm) in [(0o362, true), (0o162, false)] {
+            let mut k = Memory(vec![], Inputs::default());
+            let mut i = after_reset();
+            cycle(
+                &mut i,
+                &mut k,
+                W36::wrap(0o100000_000034),
+                W36::wrap(3 << 8),
+                ctl,
+            );
+            assert_eq!(i.nexm, nexm, "{ctl:o}");
+        }
+        let mut k = Memory(vec![W36::ZERO; 0o40], Inputs::default());
+        let mut i = after_reset();
+        cycle(
+            &mut i,
+            &mut k,
+            W36::wrap(0o100000_000034),
+            W36::wrap(3 << 8),
+            0o362,
+        );
+        assert!(!i.nexm);
+        assert_eq!(k.0[0o34], W36::wrap(3 << 8));
     }
 
     #[test]
