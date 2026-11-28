@@ -1248,6 +1248,30 @@ of MOVEI, MOVEM, AOS and HALT gives 4 records, with the PC values
 1000 to 1003 and one write for each of MOVEM and AOS. Both fills. A
 mutant that hashes the word before the address fails the test.
 
+### The C interface
+
+`emu/ks10-capi` is the C interface of the model, for the testbench of the
+co-simulation. `spec/capi.toml` defines it; `make gen` writes the header
+`tb/gen/ks10_capi.h` and the Rust types of the crate. Each function of the
+crate has the function type of `spec/capi.toml`, so a function that
+differs does not compile.
+
+- `ks10_uop_new`, `ks10_uop_master_reset`, `ks10_uop_deposit` and
+  `ks10_uop_start` make a model, run its power-up sequence, load a
+  program and start it with ST.
+- `ks10_uop_next_record` runs to the next instruction record, or stops
+  after a number of microcycles (`KS10_LIMIT`, for example in the halt
+  loop).
+- A stop of the model gives `KS10_STOP`, and `ks10_uop_stop_text` gives
+  its reason. A NULL pointer gives `KS10_NULL`. A panic does not cross
+  the interface: it gives `KS10_PANIC`.
+
+**[measured]** 2026-11-28: `tb/capi/smoke.cpp`, which `make check`
+builds and runs, links the static library and runs the program of
+`emu/ks10-core-uop/tests/record.rs` through the interface. It gets the
+same records. A mutant of the library that adds 1 to the PC of the
+record fails it.
+
 ## DEC diagnostics on the model
 
 `emu/ks10-core-uop/tests/diag.rs` runs the programs of SMCPU.CMD on the

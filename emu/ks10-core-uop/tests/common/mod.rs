@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 use ks10_core_uop::alu::W40;
-use ks10_core_uop::cram::{CRAM_WORDS, Microword};
 use ks10_core_uop::machine::{Machine, PcFlags, Stop};
 use ks10_core_uop::ucode;
 
@@ -21,11 +20,7 @@ pub fn label(name: &str) -> u16 {
 /// The model with the control RAM and the dispatch ROM of the ITS
 /// microcode (`ucode`, assembled by spec/micro.py).
 pub fn machine(fill: W40) -> Machine {
-    let mut cram = vec![Microword::from_bits(0); CRAM_WORDS];
-    for &(a, w) in ucode::CRAM {
-        cram[usize::from(a)] = Microword::from_bits(w);
-    }
-    Machine::new(cram, ucode::DROM.to_vec(), fill)
+    Machine::its(fill)
 }
 
 /// The two fills of each test: 0 and a pattern of alternate bits.

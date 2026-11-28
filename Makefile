@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop verify verify-build verify-jobs oracle oracle-sims oracle-klh10
+.PHONY: gen check check-gen check-py check-rust check-rtl check-capi check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop verify verify-build verify-jobs oracle oracle-sims oracle-klh10
 
 # The targets that need these give them to cargo themselves. Without this,
 # a variable on the command line reaches every recipe, and `cargo test` of
@@ -28,11 +28,12 @@ gen:
 	$(PYTHON) spec/gen_instructions.py
 	$(PYTHON) spec/gen_devices.py
 	$(PYTHON) spec/gen_microcode.py --its $(ITS_TREE)
+	$(PYTHON) spec/gen_capi.py
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown > ../docs/console.md
 
 # Format, lint, unit tests, a check that the generated files are current,
 # and a short random differential run against the reference emulator.
-check: check-gen check-py check-rust check-rtl check-oracle
+check: check-gen check-py check-rust check-rtl check-capi check-oracle
 
 # The instruction table is also compared with the ITS sources of the
 # submodule 3rdparty/its (microcode, MIDAS, KSDEFS).
@@ -42,6 +43,7 @@ check-gen:
 	$(PYTHON) spec/gen_instructions.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_devices.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_microcode.py --check --its $(ITS_TREE)
+	$(PYTHON) spec/gen_capi.py --check
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown | diff -u ../docs/console.md -
 
 check-py:
@@ -71,6 +73,18 @@ check-rtl:
 	$(VERILATOR) --lint-only -Wall rtl/gen/regmap_pkg.sv
 	$(VERILATOR) --lint-only -Wall --top-module memprobe_top \
 	    tb/memprobe/lint_stubs.sv $(MEMPROBE_RTL) $(MEMPROBE_TOP)
+
+# A C++ caller of the C interface of the microcode-level model
+# (spec/capi.toml): it links the static library of emu/ks10-capi. The
+# libraries after it are those that `--print native-static-libs` names.
+CAPI_LIB = emu/target/release/libks10_capi.a
+CAPI_SMOKE = $(BUILD_DIR)/tb/capi/smoke
+check-capi:
+	cd emu && $(NICE) $(CARGO) build -q --locked --release -p ks10-capi
+	mkdir -p $(BUILD_DIR)/tb/capi
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -Itb/gen -o $(CAPI_SMOKE) tb/capi/smoke.cpp \
+	    $(CAPI_LIB) -lgcc_s -lutil -lrt -lpthread -lm -ldl
+	$(CAPI_SMOKE)
 
 # Verilator testbenches. Each seed also selects the ratio of the two clocks.
 TB_CORE = $(BUILD_DIR)/tb/memprobe/tb_core

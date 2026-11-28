@@ -1,0 +1,19 @@
+[package]
+name = "ks10-capi"
+version = "0.1.0"
+description = "The C interface of the microcode-level model, for the co-simulation with the logic"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+ks10-core-uop = { path = "../ks10-core-uop" }
+ks10-machine = { path = "../ks10-machine" }
+pdp10 = { path = "../pdp10" }

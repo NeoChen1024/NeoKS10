@@ -245,10 +245,10 @@ with the same `KS10_ITS_DISK`; the tapes come from the same directory):
 | Deterministic; all time input through one layer | Virtual time is the count of completed instructions. Each input from the host (console, DZ11 line, network, wall clock) goes through the host layer. The layer stamps it with the instruction count at which the guest sees it. `--record` writes the stamped inputs; `--replay` feeds them at the same counts |
 | One `Machine` owns all state | `Machine` holds the processor, the memory, the 8080 console state, the two adapters and their devices as fields. Devices get a context (memory, interrupt lines, time) for each call; they keep no references |
 | A word is its own type | A type `Word` (36 bits in a `u64`) in a crate `pdp10`, with the octal text and the field helpers |
-| `unsafe` only in `plio::mmio` | The memory of step 5 is a `plio` mapping. All other code is safe |
+| `unsafe` only in `plio::mmio` and `ks10-capi` | The memory of step 5 is a `plio` mapping. `ks10-capi` is the C interface of the microcode-level model. All other code is safe |
 | Each dependency is a decision | `toml` and `serde` read the configuration file, and `reedline` is the line editor of the operator console (see [Design decisions](#design-decisions)) |
 | Decoders and constants from `spec/` | The instruction table and a device register table in `spec/` generate the Rust constants, as `spec/regmap.toml` does now |
-| C interface for co-simulation and the PL bridge | The `ks10-core-soft` library exports C functions: create a machine, run one instruction, read the instruction record |
+| C interface for co-simulation and the PL bridge | `ks10-capi` exports C functions of the microcode-level model: create a machine, run to the next instruction record, read and write memory ([`microcode-model.md`](microcode-model.md), "The C interface"). `ks10-core-soft` has no C interface |
 | Device I/O with `pread` and `pwrite` | A disk transfer reads or writes the image file directly into the guest memory, when the adapter map gives contiguous memory |
 | Disk image with 8 bytes for each word | The format of step 0 (above). Images of step 0 work without a conversion |
 | Tape image in the format of the ITS tools | The SIMH tape image format with core dump words (above) |
@@ -261,8 +261,9 @@ The crates of `emu/`:
 |---|---|
 | `pdp10` | `Word`, octal text, instruction decode generated from `spec/instructions.*` |
 | `ks10-machine` | The machine around the processor: the Unibus adapters and the devices, the device registers from `spec/devices.*`, the 8080 console words, the 8080 boot commands, the SAV loader, the size of the memory |
-| `ks10-core-soft` | `Machine`: the software processor (interpreter), memory, paging, APR, PI, timers, the host layer. The C interface |
+| `ks10-core-soft` | `Machine`: the software processor (interpreter), memory, paging, APR, PI, timers, the host layer |
 | `ks10-core-uop` | The microcode-level model ([`microcode-model.md`](microcode-model.md)) |
+| `ks10-capi` | The C interface of the microcode-level model, a static library (`spec/capi.toml`) |
 | `neoks10` (the binary `neoks10`) | Command line, configuration, operator console, control socket, scripts, image tools |
 | `plio` | Access to the PL (exists) |
 

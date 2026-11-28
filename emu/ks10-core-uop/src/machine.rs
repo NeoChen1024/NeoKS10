@@ -328,6 +328,17 @@ fn get(mw: Microword, f: Field) -> u32 {
 }
 
 impl Machine {
+    /// The machine with the control RAM and the dispatch ROM of the ITS
+    /// microcode (`ucode`, assembled by spec/micro.py). `fill` as in
+    /// [`Machine::new`].
+    pub fn its(fill: W40) -> Self {
+        let mut cram = vec![Microword::from_bits(0); crate::cram::CRAM_WORDS];
+        for &(a, w) in crate::ucode::CRAM {
+            cram[usize::from(a)] = Microword::from_bits(w);
+        }
+        Machine::new(cram, crate::ucode::DROM.to_vec(), fill)
+    }
+
     /// A machine with the given control RAM and dispatch ROM. `fill` is
     /// the content at power on of the state that no reset defines: the
     /// 2901 registers, the RAM file and main memory get `fill`, and the

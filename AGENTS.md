@@ -47,6 +47,8 @@ source.
    - `spec/instructions.*` is the only definition of the instruction set.
    - `spec/devices.*` is the only definition of the I/O device registers.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
+   - `spec/capi.*` is the only definition of the C interface of the
+     microcode-level model.
    - The microcode-level model in `emu/` is the model for the logic in
      `rtl/`. The instruction-level software processor is compared with it
      one instruction at a time, but it does not copy the internal state
@@ -83,10 +85,10 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 
 | Path | Contents |
 |---|---|
-| `spec/` | Instruction table, register map (`regmap.toml`), and their generators. `micro.py` is the microcode assembler |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
+| `spec/` | Instruction table, register map (`regmap.toml`), the C interface (`capi.toml`), and their generators. `micro.py` is the microcode assembler |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
-| `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/gen/` has generated files |
+| `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/capi/` is a C++ caller of the C interface. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
 | `oracle/` | Pinned commits and patch files for the reference emulators |
 | `3rdparty/` | Git submodules: `its` is the PDP-10/its fork with the build changes, `PYNQ-Z2` is the board data, `KS10FPGA` is the FPGA KS10 that is a reference for the data path (shallow) |
@@ -104,7 +106,9 @@ directory that `.gitignore` excludes.
 `emu/ks10-machine/src/devregs.rs`, `docs/regmap.md`, `docs/instructions.md` and
 `docs/devices.md`. It also writes `emu/ks10-core-uop/src/fields.rs` from the
 field definitions of the ITS microcode, and `emu/ks10-core-uop/src/ucode.rs`
-from the microcode that `spec/micro.py` assembles. It also writes `docs/console.md` from the command table
+from the microcode that `spec/micro.py` assembles. It writes
+`tb/gen/ks10_capi.h` and `emu/ks10-capi/src/capi.rs` from `spec/capi.toml`.
+It also writes `docs/console.md` from the command table
 of `emu/neoks10`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
 fails.
@@ -122,7 +126,8 @@ fails.
 | A file in `fpga/`, or a timing claim | `make synth` (100 MHz; other clocks optional), and read the timing report |
 
 - `make check` is: format, lint, unit tests, a check that the generated
-  files are current, and a short random differential run.
+  files are current, a C++ caller of the C interface (`tb/capi/`), and a
+  short random differential run.
 - `make oracle` builds the reference emulators (SIMH `pdp10-ks` and KLH10
   `kn10-ks-its`, pinned in `oracle/*.pin`) with the trace patches of
   `oracle/` into `build/`. The short differential run of `make check`
@@ -185,14 +190,17 @@ fails.
   repeatable. Tests do not use it.
 - One `Machine` structure owns all state. Do not use `Rc<RefCell<_>>`.
 - A 36-bit word is its own type. Do not pass guest words as a bare `u64`.
-- `unsafe` is permitted in one module only: the module for `mmap` and for
-  the PL registers.
+- `unsafe` is permitted in two places only: the module for `mmap` and for
+  the PL registers (`plio::mmio`), and the crate of the C interface
+  (`ks10-capi`).
 - Do not add a dependency without the approval of the owner. Do not use an
   asynchronous runtime.
 - Decoders and constants come from `spec/`. Do not write a second copy by
   hand.
-- The microcode-level model and the software processor have a C interface
-  for the co-simulation and for the PL bridge.
+- The microcode-level model has a C interface (`ks10-capi`) for the
+  co-simulation and for the PL bridge. The software processor has none.
+  The C interface passes guest words as `uint64_t`; the Rust side converts
+  them to the word type at once.
 - Device I/O reads and writes the guest memory directly with `pread` and
   `pwrite`. Do not use `O_DIRECT`.
 - The disk image keeps 8 bytes for each word. The tape image keeps the

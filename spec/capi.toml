@@ -1,0 +1,123 @@
+# The C interface of the microcode-level model (emu/ks10-capi), for the
+# co-simulation with the logic in rtl/ (AGENTS.md, "Rules for the
+# emulator"). spec/gen_capi.py writes from this file:
+#   tb/gen/ks10_capi.h        the C header
+#   emu/ks10-capi/src/capi.rs  the record, the status codes, and a function
+#                             pointer type for each function; the crate
+#                             checks its functions against these types.
+#
+# A type is one of: void, int, uint32_t, uint64_t, size_t, and pointers
+# to uint64_t, char, ks10_uop and ks10_record ("T *" or "const T *").
+
+prefix = "ks10"
+
+# The status of a function that returns int. 0 is success.
+[[status]]
+name = "OK"
+value = 0
+doc = "Success."
+
+[[status]]
+name = "LIMIT"
+value = 1
+doc = "ks10_uop_next_record: no record within the given microcycles, for example in the halt loop."
+
+[[status]]
+name = "STOP"
+value = 2
+doc = "The model stopped on a function that it does not have. ks10_uop_stop_text gives the reason. The machine stays stopped."
+
+[[status]]
+name = "NULL"
+value = -1
+doc = "A pointer argument is NULL."
+
+[[status]]
+name = "BAD_ARG"
+value = -2
+doc = "An address outside memory, or a word with bits above bit 0 (more than 36 bits)."
+
+[[status]]
+name = "PANIC"
+value = -3
+doc = "An error of the model. The machine is not usable after it; free it."
+
+# The record of a completed instruction (docs/microcode-model.md, "The
+# instruction record"). Each field is a uint64_t; a guest word has its
+# 36 bits in the low bits.
+[[record]]
+name = "count"
+doc = "The completed instructions, this one included."
+
+[[record]]
+name = "cycles"
+doc = "The microcycles from power on to the end of the NICOND word."
+
+[[record]]
+name = "pc"
+doc = "The 2901 register PC: the address of the next instruction."
+
+[[record]]
+name = "flags"
+doc = "The program flags, as the left half of a PC word."
+
+[[record]]
+name = "ac"
+count = 16
+doc = "The 16 ACs of the current block."
+
+[[record]]
+name = "writes"
+doc = "The memory writes of the processor since the record before."
+
+[[record]]
+name = "write_hash"
+doc = "FNV-1a (64 bits) of the address and the word of each such write, 8 bytes each, little endian."
+
+[[function]]
+name = "uop_new"
+returns = "ks10_uop *"
+args = [["uint64_t", "fill"]]
+doc = "A model with the ITS microcode, at power on. The low 40 bits of fill are the content of the state that no reset defines. NULL after an error of the model."
+
+[[function]]
+name = "uop_free"
+returns = "void"
+args = [["ks10_uop *", "m"]]
+doc = "Free a model. NULL is allowed."
+
+[[function]]
+name = "uop_master_reset"
+returns = "int"
+args = [["ks10_uop *", "m"]]
+doc = "The master reset of the 8080 (MRCMD): the power-up sequence of the microcode, to the halt loop."
+
+[[function]]
+name = "uop_deposit"
+returns = "int"
+args = [["ks10_uop *", "m"], ["uint32_t", "address"], ["uint64_t", "word"]]
+doc = "Write a word of main memory."
+
+[[function]]
+name = "uop_examine"
+returns = "int"
+args = [["const ks10_uop *", "m"], ["uint32_t", "address"], ["uint64_t *", "word"]]
+doc = "Read a word of main memory."
+
+[[function]]
+name = "uop_start"
+returns = "int"
+args = [["ks10_uop *", "m"], ["uint32_t", "address"]]
+doc = "The console command ST: the program starts at address when the model runs."
+
+[[function]]
+name = "uop_next_record"
+returns = "int"
+args = [["ks10_uop *", "m"], ["uint64_t", "max_cycles"], ["ks10_record *", "record"]]
+doc = "Run to the next completed instruction, for at most max_cycles microcycles, and write its record."
+
+[[function]]
+name = "uop_stop_text"
+returns = "size_t"
+args = [["const ks10_uop *", "m"], ["char *", "text"], ["size_t", "size"]]
+doc = "The reason of the last STOP, as text with a final 0, cut to size bytes. Returns the length of the whole text without the 0; 0 if there was no stop."
