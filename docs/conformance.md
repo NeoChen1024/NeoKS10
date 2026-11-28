@@ -82,14 +82,14 @@ for its restart.
 - The flag cases of the design decision of 2026-11-28 against this rule:
   - `trap-flags-clear` and `dmul-carry` meet it, and have level B.
   - `ash-trap-last-step` and `dmul-trap-old-overflow` do not: the PRM
-    defines them (PRM 1982, p. 2-41 and p. 2-78). They have level A and
-    the state open.
+    defines them (PRM 1982, p. 2-41 and p. 2-78). They have level A. By
+    the order of the sources, `ks10-core-soft` follows the microcode in
+    them (design decision 2026-11-28).
   - `dmovn-carry` is not checked against the rule yet.
 - If the PRM and a KS10 source differ in a case of level A, the order of
   the sources decides the behaviour of the KS10
-  ([`AGENTS.md`](../AGENTS.md), "Sources of truth"). The first core
-  follows it. For the other cores, such a case stays open until a
-  decision.
+  ([`AGENTS.md`](../AGENTS.md), "Sources of truth"). Each core follows
+  it. A reference emulator that follows the PRM gets a mask in its run.
 - After each change of the levels, run the full ITS build (`make
   its-build`). The target and the `its/` directory do not exist yet
   ([`AGENTS.md`](../AGENTS.md), "Layout"). Until they exist, the check

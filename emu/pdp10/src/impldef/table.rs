@@ -145,9 +145,9 @@ pub const CASES: &[Case] = &[
         ops: Ops::Codes(&[Op { code: 0o240, ac: None }, Op { code: 0o244, ac: None }]),
         pred: Pred::LostBitBeforeLastStep,
         differs: &[Field::Flags(&[10])],
-        simh: Exact,
-        klh10: Exact,
-        uop_soft: Mask,
+        simh: Mask,
+        klh10: Mask,
+        uop_soft: Exact,
     },
     Case {
         name: "dmul-trap-old-overflow",
@@ -156,7 +156,7 @@ pub const CASES: &[Case] = &[
         differs: &[Field::Flags(&[10])],
         simh: NotGenerated,
         klh10: NotGenerated,
-        uop_soft: Mask,
+        uop_soft: Exact,
     },
     Case {
         name: "dmovn-carry",

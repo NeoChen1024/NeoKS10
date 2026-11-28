@@ -184,6 +184,12 @@ fn dmul(m: &mut Machine, i: Inst, e: Half) -> R {
     for (k, w) in quad_words(sign, q).into_iter().enumerate() {
         m.ac[ac(i, k)] = w;
     }
+    // DMTRAP: Trap 1 if Overflow is set, also from an earlier instruction
+    // (simple.42, DMTRAP; design decision 2026-11-28, case
+    // dmul-trap-old-overflow of spec/impldef.toml).
+    if m.flags.has(Flags::AROV) {
+        m.flags.set(Flags::TRAP1);
+    }
     Ok(Next::Step)
 }
 
@@ -312,6 +318,13 @@ mod tests {
         let mut m = machine(&[N, 2], &[0o377777_777777, 0o123456_654321]);
         run(&mut m, 0o116);
         assert_eq!(m.flags.0, 0);
+        // DMUL ends with DMTRAP: Trap 1 if Overflow is set, also from an
+        // earlier instruction (simple.42, DMTRAP; docs/discrepancies.md,
+        // "Trap 1 and Trap 2: each flag word loads them").
+        let mut m = machine(&[0, 2], &[0, 3]);
+        m.flags = Flags(Flags::AROV);
+        run(&mut m, 0o116);
+        assert_eq!(m.flags.0, Flags::AROV | Flags::TRAP1);
     }
 
     #[test]

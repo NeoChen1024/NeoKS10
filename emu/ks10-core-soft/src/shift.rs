@@ -128,14 +128,23 @@ struct Ash {
     value: u128,
     /// A step lost a bit that differs from the sign.
     overflow: bool,
+    /// The last step lost such a bit.
+    last: bool,
 }
 
 impl Ash {
-    /// If a left shift loses a bit of significance, Overflow and Trap 1
-    /// (PRM 2.5, ASH).
+    /// A left shift that loses a bit of significance sets Overflow (PRM
+    /// 2.5, ASH). Trap 1 is the overflow of the last step: each step of
+    /// the microcode loads it (M8620-0-DPE9 rev B, E85, E78; simple.42,
+    /// ASHL, ASHCL), so an earlier overflow does not set it (design
+    /// decision 2026-11-28, case ash-trap-last-step of spec/impldef.toml).
+    /// A Trap 1 from before stays (case trap-flags-clear).
     fn set_flags(&self, f: &mut Flags) {
         if self.overflow {
-            f.set(Flags::AROV | Flags::TRAP1);
+            f.set(Flags::AROV);
+        }
+        if self.last {
+            f.set(Flags::TRAP1);
         }
     }
 }
@@ -166,9 +175,17 @@ fn ash(x: u128, bits: u32, n: i32) -> Ash {
         // After mag_bits places, the zeros that came in at the right leave
         // bit 1 too: they differ from the sign of a negative number.
         let zeros_lost = sign == 1 && k > mag_bits;
+        // The bit that leaves bit 1 in the last step: bit k of the
+        // magnitude from the top, or a 0 that came in.
+        let last_bit = if k > mag_bits {
+            0
+        } else {
+            (mag >> (mag_bits - k)) & 1
+        };
         Ash {
             value: (sign << mag_bits) | shifted,
             overflow: lost != all || zeros_lost,
+            last: last_bit != sign,
         }
     } else {
         // Right: the sign comes in at bit 1.
@@ -181,6 +198,7 @@ fn ash(x: u128, bits: u32, n: i32) -> Ash {
         Ash {
             value: (sign << mag_bits) | shifted,
             overflow: false,
+            last: false,
         }
     }
 }
@@ -284,16 +302,38 @@ mod tests {
         assert_eq!(ash2(0o000000000100, 36, -3), (0o10, false));
     }
 
-    // PRM 2.5, ASH: a lost bit of significance sets Overflow and Trap 1,
-    // also if a later step loses none; a flag that is set stays.
+    // The microcode (M8620-0-DPE9 rev B, E85, E78; simple.42, ASHL): each
+    // step loads Trap 1 with its own overflow, so Trap 1 is the overflow of
+    // the last step; Overflow holds (E68). docs/discrepancies.md, "Trap 1
+    // and Trap 2: each flag word loads them": ASH 1,2 of 200000,,1 gives
+    // OV 1 and TRAP 1 0. A Trap 1 from before stays (case
+    // trap-flags-clear of spec/impldef.toml).
     #[test]
-    fn an_overflow_sets_overflow_and_trap_1() {
-        let mut f = Flags(0);
-        ash(0o200000_000001, 36, 2).set_flags(&mut f);
-        assert_eq!(f, Flags(Flags::AROV | Flags::TRAP1));
-        let mut f = Flags(Flags::TRAP1);
-        ash(0o000000_000001, 36, 2).set_flags(&mut f);
-        assert_eq!(f, Flags(Flags::TRAP1));
+    fn trap_1_is_the_overflow_of_the_last_step() {
+        let flags = |x: u128, bits: u32, n: i32, before: u32| {
+            let mut f = Flags(before);
+            ash(x, bits, n).set_flags(&mut f);
+            f
+        };
+        assert_eq!(flags(0o200000_000001, 36, 2, 0), Flags(Flags::AROV));
+        assert_eq!(
+            flags(0o200000_000001, 36, 1, 0),
+            Flags(Flags::AROV | Flags::TRAP1)
+        );
+        // 500000,,0: the first step loses bit 1 (0), the second keeps bit 2.
+        assert_eq!(flags(0o500000_000000, 36, 2, 0), Flags(Flags::AROV));
+        // -1 left 36 places: the last step shifts out a 0 of the zeros
+        // that came in, so the last step overflows.
+        assert_eq!(
+            flags(0o777777_777777, 36, 36, 0),
+            Flags(Flags::AROV | Flags::TRAP1)
+        );
+        // ASHC: 200000,,0 and 0, two places: only the first step overflows.
+        assert_eq!(flags(1 << 69, 71, 2, 0), Flags(Flags::AROV));
+        assert_eq!(
+            flags(0o000000_000001, 36, 2, Flags::TRAP1),
+            Flags(Flags::TRAP1)
+        );
     }
 
     #[test]

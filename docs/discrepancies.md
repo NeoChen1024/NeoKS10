@@ -338,12 +338,17 @@ the control RAM.
   DSKCFT, "DMUL - TEST E"), so it does not test an Overflow from before.
 
 The microcode-level model uses the microcode and the schematics (rank
-1). `emu/ks10-core-soft` follows the PRM, as SIMH and KLH10 do: an
-instruction only sets a trap flag, and ASH sets Trap 1 for an overflow in
-any step. This is a design decision of 2026-11-28. Only the first of the
-three cases meets the rule for level B of
-[`conformance.md`](conformance.md)
-([`emulator.md`](emulator.md), "Differences from the microcode"). The
+1). `emu/ks10-core-soft` follows the PRM, as SIMH and KLH10 do, in the
+first rule only: an instruction only sets a trap flag (case
+`trap-flags-clear`, level B; [`emulator.md`](emulator.md), "Differences
+from the microcode"). The other two rules do not meet the rule for level
+B of [`conformance.md`](conformance.md): the PRM defines them. So by the
+order of the sources, `emu/ks10-core-soft` follows the microcode there:
+Trap 1 is the overflow of the last step of ASH and ASHC, and DMUL sets
+Trap 1 if Overflow is set (design decision 2026-11-28). The runs against
+SIMH and KLH10 mask Trap 1 for the ASH case. **[measured]** 2026-11-28:
+without that mask, SIMH differs in 3 cases and KLH10 in 6, all ASH and
+ASHC. The
 single-instruction test of the model masks the cases by the table
 ([`impldef.md`](impldef.md)), and `the_flag_rules_of_the_microcode`
 checks the rule on the model

@@ -417,7 +417,7 @@ name = "ash-trap-last-step"
 title = "ASH and ASHC: Trap 1 from the last step only"
 area = "processor"
 level = "A"
-state = "open"
+state = "decided"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
 instructions = ["ASH", "ASHC"]
 when = { pred = "lost_bit_before_last_step" }
@@ -429,22 +429,22 @@ sources = [
   { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, x_ashflg", does = "as the PRM" },
   { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "Trap 1 as the microcode; Overflow not held" },
 ]
-choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
-compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "mask", klh10 = "mask", uop_soft = "exact" }
 program = """
 	MOVE 1,[200000,,1]
 	ASH 1,2			; the first step overflows, the second does not
 	JSP 2,.+1		; with traps on: no trap in the microcode, a trap in the PRM
 	HALT .
 """
-note = "With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open."
+note = "With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). By the order of the sources, the KS10 does what the microcode does, and ks10-core-soft follows it (design decision 2026-11-28). SIMH and KLH10 follow the PRM, so their runs mask Trap 1."
 
 [[case]]
 name = "dmul-trap-old-overflow"
 title = "DMUL: Trap 1 from an Overflow that was set before"
 area = "processor"
 level = "A"
-state = "open"
+state = "decided"
 discrepancy = "Trap 1 and Trap 2: each flag word loads them"
 instructions = ["DMUL"]
 when = { pred = "start_flags", flags = ["AROV"] }
@@ -455,8 +455,8 @@ sources = [
   { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, DMUL", does = "Trap 1 only for (-2^70)^2" },
   { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, op10dmul", does = "as SIMH" },
 ]
-choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
-compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "mask" }
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "exact" }
 program = """
 	JRST 2,@[400000,,.+1]	; Overflow set, Trap 1 clear
 	DMOVE 1,[EXP 0,2]
@@ -464,7 +464,7 @@ program = """
 	JSP 5,.+1		; with traps on: a trap in the microcode, none in the PRM
 	HALT .
 """
-note = "With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open."
+note = "With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). By the order of the sources, the KS10 does what the microcode does, and ks10-core-soft follows it (design decision 2026-11-28)."
 
 [[case]]
 name = "dmovn-carry"

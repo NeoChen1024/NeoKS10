@@ -928,10 +928,6 @@ of [`impldef.md`](impldef.md) or an item of level C of
   (design decision 2026-11-28):
   - An instruction only sets Trap 1 and Trap 2. The microcode loads both
     at each flag word. Level B, case `trap-flags-clear`.
-  - ASH sets Trap 1 for an overflow in any step; DMUL sets Trap 1 only
-    for its own overflow. Level A with the state open, cases
-    `ash-trap-last-step` and `dmul-trap-old-overflow`: the PRM defines
-    them, and the microcode differs with traps on too.
   - DMOVN and DMOVNM set no carry flag for a low word not 0 (case
     `dmovn-carry`, level B).
   - DMUL sets no carry flag; (-2^70)^2 sets Overflow and Trap 1 (case

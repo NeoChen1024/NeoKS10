@@ -33,8 +33,8 @@ The programs are not assembled or run yet.
 | [hlle-klh10](#hlle-klh10) | A | decided | microcode | microcode | microcode | exact | skip | not-generated |
 | [div-high-equals-divisor](#div-high-equals-divisor) | A | decided | microcode | microcode | microcode | exact | skip | exact |
 | [trap-flags-clear](#trap-flags-clear) | B | decided | microcode | PRM (design decision 2026-11-28) | open | not-generated | not-generated | mask |
-| [ash-trap-last-step](#ash-trap-last-step) | A | open | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
-| [dmul-trap-old-overflow](#dmul-trap-old-overflow) | A | open | microcode | PRM (design decision 2026-11-28) | open | not-generated | not-generated | mask |
+| [ash-trap-last-step](#ash-trap-last-step) | A | decided | microcode | microcode | open | mask | mask | exact |
+| [dmul-trap-old-overflow](#dmul-trap-old-overflow) | A | decided | microcode | microcode | open | not-generated | not-generated | exact |
 | [dmovn-carry](#dmovn-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [dmul-carry](#dmul-carry) | B | decided | microcode | PRM (design decision 2026-11-28) | open | exact | exact | mask |
 | [float-unnormalized](#float-unnormalized) | open | open | microcode | open | open | not-generated | not-generated | not-generated |
@@ -443,7 +443,7 @@ Sources:
 - KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c, x_ashflg): as the PRM.
 - KS10FPGA **[emulator]** (KS10FPGA 5090e7a1, pcflags.v): Trap 1 as the microcode; Overflow not held.
 
-With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open.
+With traps on, the difference is a trap that the microcode does not take ([measured] 2026-11-28, discrepancies.md). The PRM defines the case, and no DEC diagnostic tests it, so it does not meet the rule for level B (conformance.md). By the order of the sources, the KS10 does what the microcode does, and ks10-core-soft follows it (design decision 2026-11-28). SIMH and KLH10 follow the PRM, so their runs mask Trap 1.
 
 Program:
 
@@ -469,7 +469,7 @@ Sources:
 - SIMH **[emulator]** (sims 9556eca0, kx10_cpu.c, DMUL): Trap 1 only for (-2^70)^2.
 - KLH10 **[emulator]** (KLH10 6d733f2, kn10ops.c, op10dmul): as SIMH.
 
-With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). The choice of ks10-core-soft is open.
+With traps on, the difference is a trap that the microcode takes ([measured] 2026-11-28, discrepancies.md). The PRM defines the case. DSKCF clears the flags with JFCL 17 before each of its two DMUL instructions (DSKCFM, MSUBR; DSKCFT, DMUL - TEST E), so no DEC diagnostic tests it. It does not meet the rule for level B (conformance.md). By the order of the sources, the KS10 does what the microcode does, and ks10-core-soft follows it (design decision 2026-11-28).
 
 Program:
 
