@@ -189,6 +189,11 @@ the files with a Python script):
 The emulator implements the microcode behaviour in software, so it skips
 the microcode file.
 
+This console is a high-level model of the 8080 program.
+[`console-interface.md`](console-interface.md) lists each effect that
+the KS10 side can see, with its source in the 8080 program, and marks
+each difference.
+
 ### Device model in `emu/ks10-machine`
 
 - The adapters: the paging RAM, the status register with the PI levels
@@ -565,8 +570,7 @@ guest:
 - While an `expect` waits, the thread looks at the CTY output after each
   instruction that prints. The match has the count of that instruction.
 - A `send` comes 100000 instructions (`ks10_machine::console::ANSWER_DELAY`)
-  after the previous step of the script. The DEC diagnostic monitor
-  loses characters that come while it prints (`ks10-machine`, `console.rs`).
+  after the previous step of the script ("Input without loss").
 - Other commands run at once, at the count of the previous step.
 - If a step of a `run --script` script fails, `run` ends with exit
   status 1 and names the file and the line. If a step of a `script run`
@@ -574,6 +578,35 @@ guest:
   of the system go on.
 - `cpu halt` ends the `expect` commands that wait: the instruction count
   does not move while the processor is stopped.
+
+#### Input without loss
+
+This is a design. The code changes only after a decision on it.
+
+- **The queue.** Host input to the CTY goes into a queue. The next
+  character goes to the guest only when the guest took the previous one.
+  The queue exists: `console.rs`, `poll`, with a gap of `INPUT_GAP`
+  instructions.
+- **The rule for "taken".** The guest writes 0 into word 32 (`8CTYIN`).
+  All readers do this **[its]**: ITS (`its.1652`, `CLKBKS`), DSKDMP
+  (`dskdmp.217`), NSALV (`nsalv.261`) and MTBOOT (`mtboot.177`). So does
+  the DEC diagnostic monitor (KLAD sources, `SUBSMM.MAC`, `$CYTYI`)
+  **[manual]**. The 8080 itself does not wait: it overwrites word 32
+  (`hcore.m80`, `TENCHR`) **[its]**. The queue is a host policy.
+- **ITS.** With the queue, a `send` to ITS needs no fixed delay.
+- **The DEC diagnostic monitor still needs one.** Before each output
+  character, `$TOUTB` reads word 32, clears it, and drops a character that
+  is not a control character (`SUBSMM.MAC`, `$TOUTB`, `$CYTYI`, `$TOUB2`)
+  **[manual]**. A character that arrives while the monitor prints is
+  taken and lost, so the queue alone does not keep it. An answer must
+  come after the monitor ends its output and waits for input (`$HEAR`).
+  The scripts match the start of a prompt, so the wait must also cover
+  the rest of the line.
+- **The change.** A `send` waits until the CTY output stops: word 33 is
+  0, and no character came for a number of instructions. That number
+  replaces `ANSWER_DELAY`. A reading of `$TOUTB` gives a few instructions
+  from the last character to `$HEAR` **[estimate]**; a measurement on
+  the diagnostics sets the number.
 
 The ITS build of `its/` and `make its-boot` use scripts. The waits count
 instructions, so a script gives the same result on a slow host.
@@ -860,8 +893,9 @@ other programs, a difference that comes from the ITS microcode goes into
 
 ### Processor model
 
-The software processor in `emu/ks10-core-soft` follows the ITS microcode. These
-parts are modelled as hardware state, not as microcode steps:
+The software processor in `emu/ks10-core-soft` follows the contract of
+[`conformance.md`](conformance.md): levels A and B. These parts are
+modelled as hardware state, not as microcode steps:
 
 - The page table of the pager (512 entries, one for each DEC page). The
   microcode refills an entry from the ITS page tables and clears the age
@@ -876,25 +910,26 @@ parts are modelled as hardware state, not as microcode steps:
 
 Differences from the microcode. Design decision 2026-11-28:
 `emu/ks10-core-soft` does not copy the microcode-level model. Its sources
-are the manuals, the DEC diagnostics and the needs of ITS. A difference
-from the model is an entry here, and in the table of known differences
-of `emu/ks10-core-uop/tests/instructions.rs` if that test shows it. The
-reason: this processor does not run the microcode, and the microcode can
-have behaviour that is not intended.
+are the manuals, the DEC diagnostics and the needs of ITS. The reason:
+this processor does not run the microcode, and the microcode can have
+behaviour that is not intended. Each difference from the model is a case
+of [`impldef.md`](impldef.md) or an item of level C of
+[`conformance.md`](conformance.md):
 
-- EXTEND runs to the end in one step. After a page failure inside it,
-  the ACs go back to their values at the start. The microcode keeps the
-  work done (`extend.4`, "PAGE FAIL CLEANUP"). The second try gives the
-  same result, because the strings must not overlap (PRM 2.12).
-- The halt status block has 0 in the words of microcode temporaries
-  (`docs/unknowns.md`).
-- The program flags follow the PRM where the microcode differs only in
-  its internal steps ([`discrepancies.md`](discrepancies.md)):
+- Level C: EXTEND runs to the end in one step. After a page failure
+  inside it, the ACs go back to their values at the start. The microcode
+  keeps the work done (`extend.4`, "PAGE FAIL CLEANUP"). The second try
+  gives the same result, because the strings must not overlap (PRM 2.12).
+- Level C: the halt status block has 0 in the words of microcode
+  temporaries ([`conformance.md`](conformance.md)).
+- Level B: the program flags follow the PRM where the microcode differs
+  only in its internal steps (the cases `trap-flags`, `dmovn-carry` and
+  `dmul-carry`):
   - An instruction only sets Trap 1 and Trap 2; ASH sets Trap 1 for an
     overflow in any step. The microcode loads both at each flag word.
   - DMOVN and DMOVNM set no carry flag for a low word not 0.
   - DMUL sets no carry flag; (-2^70)^2 sets Overflow and Trap 1.
-- Bits 16 and 17 of the page fail word of a memory reference are 0. The
+- The case `pfw-address-high`: bits 16 and 17 of the page fail word of a memory reference are 0. The
   microcode keeps VMA 16 and 17 there **[microcode]** (`itspag.98`,
   `PFMAP`, `ADDRESS HIGH/MEMORY`). The hardware loads VMA 14 to 17 from
   DP 14 to 17 at each VMA load **[manual]** (M8621-0-DPM4 rev B, E183).
@@ -963,13 +998,17 @@ Decided on 2026-11-27:
 16. The order of the sources (AGENTS.md, "Sources of truth"): the
    microcode with the data path first, then the expected values of the
    DEC diagnostics, the manuals, and the emulators.
-17. A microcode-level model of the KS10 comes next (choice B of
-   2026-11-27): a model of the data path runs the microcode that the ITS
-   build assembles (`KSHACK; MCR 262`, copied to `RAM RAM`), and the
-   real 8080 console program. The first core in the PL has the same
-   goal. The 8080 program runs in a software model of the 8080 on the PS
-   (ARM); the PL does not need an 8080. It reaches the PL processor
-   through the console registers of the PS/PL interface.
+17. A microcode-level model of the KS10 (choice B of 2026-11-27): a
+   model of the data path runs the microcode that the ITS build assembles
+   (`KSHACK; MCR 262`, copied to `RAM RAM`). The first core in the PL has
+   the same goal.
+   The console in daily use is a high-level model of the 8080 console,
+   on the PS (design decision 2026-11-28). It does not run the 8080
+   program, and it has no time base of its own: its delays count the
+   instructions of the processor. A model of the 8080 that runs the real
+   program is for tests only, with the microcode-level model. It records
+   the effects that the high-level console must give
+   ([`console-interface.md`](console-interface.md)).
 18. KLH10 is a second reference emulator, next to SIMH.
 19. KS10FPGA is a reference for the data path, as the submodule
    `3rdparty/KS10FPGA`.
@@ -990,12 +1029,12 @@ Open:
   model in wall time can replace them in `normal`; the modes for tests
   keep the times in instructions.
 
-- The microcode-level model (decision 17), `emu/ks10-core-uop`
-  ([`microcode-model.md`](microcode-model.md)). The microcode of the ITS
-  build loads and is checked. Next is its first stage: the data path and
-  the microcode without paging and I/O, on a flat memory. It decides the
-  cases of `docs/unknowns.md` that no DEC vector decides; the first one is
-  FDV with normalized operands.
+- The model of the 8080 for tests, after a decision on the plan of
+  [`console-interface.md`](console-interface.md), "Comparison".
+- A continue after a halt. The microcode turns off the PI system at a
+  halt (`inout.50`, WRTHSB: "TURN OFF PI SYSTEM"), and the 8080 CO does
+  not turn it on (`cmds.m80`, `COCMD`) **[its]**. `emu/ks10-core-soft`
+  does not model a continue after a halt.
 
 ## Open items
 

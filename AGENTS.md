@@ -49,12 +49,22 @@ source.
    - `spec/regmap.*` is the only definition of the PS/PL interface.
    - `spec/capi.*` is the only definition of the C interface of the
      microcode-level model.
-   - The microcode-level model in `emu/` is the model for the logic in
-     `rtl/`. The instruction-level software processor is compared with it
-     one instruction at a time, but it does not copy the internal state
-     of the microcode. A difference is a recorded difference with a
-     reason (`docs/emulator.md`, "Differences from the microcode"), or an
-     error of one of the two. The two do not run in step.
+   - `spec/impldef.*` is the only list of the behaviours in which the
+     implementations differ, with the choice of each core
+     (`docs/conformance.md` gives the levels A, B and C).
+   - `ks10-core-uop` is the reference of the core with the KS10 data
+     path in `rtl/`: the two are compared at each microcycle, exactly.
+   - `ks10-core-soft` is the reference of the pipelined core: the two are
+     compared at each instruction, by the contract of
+     `docs/conformance.md`. It does not copy the internal state of the
+     microcode.
+   - `ks10-core-uop` and `ks10-core-soft` are compared at each
+     instruction. Each difference is a case of level B in
+     `spec/impldef.toml`, an item of level C, or an error of one of the
+     two. The masks of each comparison come from `spec/impldef.toml`
+     through a generator. Do not write a new mask by hand. The masks of
+     today stay until the generator writes them (`docs/conformance.md`,
+     "Masks of the differential runs").
 
 The data of the board is in <https://github.com/NeoChen1024/PYNQ-Z2>. The
 submodule `3rdparty/PYNQ-Z2` pins the commit that this repository uses. Do not
@@ -85,7 +95,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 
 | Path | Contents |
 |---|---|
-| `spec/` | Instruction table, register map (`regmap.toml`), the C interface (`capi.toml`), and their generators. `micro.py` is the microcode assembler |
+| `spec/` | Instruction table, register map (`regmap.toml`), the C interface (`capi.toml`), the implementation differences (`impldef.toml`), and their generators. `micro.py` is the microcode assembler |
 | `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type and the instruction tables from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/capi/` is a C++ caller of the C interface. `tb/gen/` has generated files |
@@ -107,7 +117,8 @@ directory that `.gitignore` excludes.
 `docs/devices.md`. It also writes `emu/ks10-core-uop/src/fields.rs` from the
 field definitions of the ITS microcode, and `emu/ks10-core-uop/src/ucode.rs`
 from the microcode that `spec/micro.py` assembles. It writes
-`tb/gen/ks10_capi.h` and `emu/ks10-capi/src/capi.rs` from `spec/capi.toml`.
+`tb/gen/ks10_capi.h` and `emu/ks10-capi/src/capi.rs` from `spec/capi.toml`,
+and `docs/impldef.md` from `spec/impldef.toml`.
 It also writes `docs/console.md` from the command table
 of `emu/neoks10`. These files are in git, so that a build does not need
 the generators. Do not edit them. If they are not current, `make check`
@@ -209,12 +220,14 @@ fails.
 
 ## Rules for the logic (SystemVerilog)
 
-- The first core runs the assembled ITS microcode on the KS10 data path,
-  with the real 8080 console program. The 8080 program runs in a model of
-  the 8080 on the PS, not in the PL. The core is multi-cycle. Do not add a
-  pipeline before the first core runs ITS.
-- The core gives a record at each completed instruction. The co-simulation
-  compares this record with the microcode-level model.
+- The first core runs the assembled ITS microcode on the KS10 data path.
+  The console is the high-level console on the PS
+  (`docs/console-interface.md`). The DEC 8080 program runs only in a model
+  of the 8080, in tests. The core is multi-cycle. Do not add a pipeline to
+  it. The pipelined core is a second core, after the first core runs ITS.
+- The co-simulation compares the first core with the microcode-level model
+  at each microcycle. The core also gives a record at each completed
+  instruction.
 - The register map comes from `spec/regmap.*`.
 - The PS maps the guest memory without the CPU cache. If you change this,
   you must show how the PS and the PL see the same data.

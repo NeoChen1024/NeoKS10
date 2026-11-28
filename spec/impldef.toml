@@ -1,0 +1,570 @@
+# Implementation differences of the KS10 with the ITS microcode: one case
+# for each behaviour in which the implementations differ. This file is the
+# only list of these cases (AGENTS.md, "Sources of truth"). spec/gen_impldef.py
+# checks it and writes docs/impldef.md. docs/conformance.md gives the levels.
+#
+# A case comes from a section of docs/discrepancies.md (`discrepancy`, the
+# heading), from an item of docs/unknowns.md (`unknown`, a part of its
+# text), or from docs/emulator.md, "Differences from the microcode"
+# (`difference`, a part of its text). Do not add a case without one of them.
+# A case never takes a value from the code under test: each `does` comes
+# from its source.
+#
+# case:
+#   name          a short name (lower case, digits, "-")
+#   title         one line
+#   area          "processor" or "device"
+#   level         "A": the PRM or a DEC diagnostic defines the behaviour, or
+#                 ITS relies on it; a case is here because an implementation
+#                 differs from it. "B": implementation-defined; each core
+#                 selects a behaviour. "open": not classified yet.
+#   level_b       for level "B": why the PRM does not define the behaviour
+#                 and no DEC diagnostic checks it (docs/conformance.md)
+#   state         "open", "decided", or "confirmed" (on a real KS10)
+#   instructions  mnemonics of spec/instructions.toml (processor cases)
+#   when          the operands of the case: a predicate of the vocabulary of
+#                 gen_impldef.py (PREDICATES) and its parameters
+#   differs       the state that differs: "ac", "mem", "pc", "flags:N,N",
+#                 "pfw:B-B" (bits of the page fail word), "register"
+#   sources       what each source does: who, mark (an evidence mark of
+#                 AGENTS.md), ref (file and label; a schematic with "rev"),
+#                 does
+#   choice        processor: uop, soft, pipelined; device: machine
+#   compare       each differential run: simh, klh10 (against
+#                 ks10-core-soft), uop_soft. "exact", "mask" (the fields of
+#                 `differs` are not compared), "skip" (the case is not
+#                 compared), or "not-generated" (the run makes no such case)
+#   program       a minimal guest program in MIDAS syntax that separates
+#                 the behaviours (docs/conformance.md, "A test on a real
+#                 KS10"). The programs are not assembled or run yet.
+#   note          optional
+
+format = 1
+
+[[case]]
+name = "aprid"
+title = "The APRID word"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "APRID of the ITS microcode"
+instructions = ["APRID"]
+when = { pred = "any" }
+differs = ["mem"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "inout.50, APRID; its.15 UCV, HWOPT, HWSER; ks10.47 OPT", does = "020406,,003301" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, pdp10-ks, set cpu its", does = "DSKCA prints CPU#=4097, MCV=416, MCO=570" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	APRID 100		; C(100) <- the processor ID
+	HALT .
+"""
+
+[[case]]
+name = "pi-request-off-level"
+title = "A program interrupt request on a level that is off"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "Program interrupt requests on levels that are off"
+instructions = ["WRPI"]
+when = { pred = "any" }
+differs = ["pc"]
+sources = [
+  { who = "PRM", mark = "manual", ref = "PRM 1982, 4.1, WRPI bits 24 and 26", does = "the request counts also on a level that is off" },
+  { who = "microcode", mark = "microcode", ref = "inout.50, LOADPI", does = "a program request counts only on a level that is on" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	MOVE 1,[JSR INT]
+	MOVEM 1,42		; the instruction of level 1 (EPT at 0)
+	MOVEI 2,1
+	WRPI 4300		; PI on, a request on level 1; level 1 stays off
+	JFCL
+	HALT .			; AC 2 = 1: no interrupt
+INT:	0
+	MOVEI 2,2		; AC 2 = 2: the interrupt came
+	HALT .
+"""
+
+[[case]]
+name = "rdubr-bits-0-2"
+title = "Bits 0 and 2 of the RDUBR word before a WRUBR sets them"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "Bits 0 and 2 of the RDUBR word"
+instructions = ["RDUBR"]
+when = { pred = "any" }
+differs = ["mem"]
+sources = [
+  { who = "KSDEFS", mark = "its", ref = "ksdefs.194, RDUBR", does = "always returns 4.9 and 4.7 set" },
+  { who = "microcode", mark = "microcode", ref = "inout.50, WRUBR, RDUBR", does = "UBR AND 507703,,777777: the bits are 0 until a WRUBR sets them" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	RDUBR 100		; after a reset, before any WRUBR
+	HALT .
+"""
+note = "ITS sets both bits with each WRUBR, so the sources agree for ITS."
+
+[[case]]
+name = "movsrj-ac"
+title = "EXTEND MOVSRJ: the AC at the end"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "The AC of MOVSRJ at the end"
+instructions = ["EXTEND"]
+when = { pred = "any" }
+differs = ["ac"]
+sources = [
+  { who = "PRM", mark = "manual", ref = "PRM 1982, 2.12, MOVSRJ", does = "AC bits 9-35 hold the number of source bytes skipped" },
+  { who = "microcode", mark = "microcode", ref = "extend.4, MVSKP, MOVST3", does = "AC bits 9-35 are 0" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	MOVEI 1,5		; source: 5 bytes
+	MOVE 2,[440700,,SRC]
+	MOVEI 4,3		; destination: 3 bytes
+	MOVE 5,[440700,,DST]
+	EXTEND 1,[017000,,0	; MOVSRJ
+		  0]		; fill
+	HALT .			; AC 1: 2 skipped bytes, or 0
+SRC:	ASCII /ABCDE/
+DST:	0
+"""
+
+[[case]]
+name = "fad-large-exponent-difference"
+title = "FAD with an exponent difference of 54 or more"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "FAD with a large exponent difference"
+instructions = ["FAD"]
+when = { pred = "exponent_difference_over", n = 60 }
+differs = ["ac"]
+sources = [
+  { who = "PRM", mark = "manual", ref = "PRM 1982, 2.3, footnote to FAD", does = "0 for the smaller operand above 72; from 54 to 72 a negative operand becomes all ones" },
+  { who = "microcode", mark = "microcode", ref = "flt.5, FAD to FAS4", does = "the full shift; a negative operand always becomes all ones" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, FAD", does = "0 for a difference of 65 or more" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	MOVE 1,[201400,,0]	; 1.0
+	FAD 1,[700400,,0]	; -2^-66: an exponent difference of 66
+	HALT .
+"""
+note = "The differential run makes exponent differences of 60 or less for all floating point instructions (oracle.rs, near)."
+
+[[case]]
+name = "ash-left-many"
+title = "ASH and ASHC: a left shift of many places"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "ASH and ASHC: a left shift of many places"
+instructions = ["ASH", "ASHC"]
+when = { pred = "left_shift_over", ASH = 28, ASHC = 29 }
+differs = ["ac", "flags:AROV,TRAP1"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, ASHL, ASHC", does = "one place for each step, up to 255 places" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, ASH, ASHC", does = "a shift of a 64-bit integer; 140 places give the shift by 12" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "exact" }
+program = """
+	MOVE 13,[717711,,575334]
+	ASH 13,214		; 140 places
+	JSP 2,.+1		; the flags in AC 2
+	HALT .
+"""
+
+[[case]]
+name = "shift-count-minus-256"
+title = "A shift count of -256"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "Shift count -256"
+instructions = ["ASH", "ASHC", "LSH", "LSHC"]
+when = { pred = "count_minus_256" }
+differs = ["ac"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "ks10.47, SCADB SHIFT", does = "bits 18 and 28-35 of E: -256 places" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, ASH, LSH, ASHC, LSHC", does = "0 places; ROT and ROTC use 256" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "not-generated" }
+program = """
+	MOVEI 1,1
+	ASH 1,400000		; bit 18 set, bits 28-35 clear
+	JSP 2,.+1
+	HALT .
+"""
+
+[[case]]
+name = "circ"
+title = "CIRC"
+area = "processor"
+level = "open"
+state = "decided"
+discrepancy = "CIRC"
+instructions = ["CIRC"]
+when = { pred = "any" }
+differs = ["ac"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "its.15 CIRC=1; simple.42, CIRC", does = "the instruction exists (opcode 247)" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, case 0247", does = "not compiled for the KS10: nothing changes" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2a, KLH10_I_CIRC", does = "the instruction exists; 318 cases agree with ks10-core-soft" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "not-generated" }
+program = """
+	MOVEI 3,1
+	SETZ 4,
+	CIRC 3,3
+	HALT .
+"""
+note = "The ITS microcode has CIRC; the PRM does not define it."
+
+[[case]]
+name = "fdv-quotient"
+title = "FDV with normalized operands: bit 35 of the quotient"
+area = "processor"
+level = "A"
+state = "open"
+discrepancy = "FDV: the quotient"
+instructions = ["FDV", "FDVL", "FDVM", "FDVB", "FDVR", "FDVRI", "FDVRM", "FDVRB"]
+when = { pred = "any" }
+differs = ["ac", "mem"]
+sources = [
+  { who = "DSKCB", mark = "manual", ref = "DSKCB.SEQ page 32, test P7700", does = "an unnormalized divisor: 777375,,773771" },
+  { who = "uop", mark = "measured", ref = "2026-11-28, ks10-core-uop, tests/instructions.rs, fdv_quotients_of_the_microcode", does = "the quotient of ks10-core-soft and KLH10 in four cases" },
+  { who = "SIMH", mark = "measured", ref = "2026-11-27, sims 9556eca0, oracle.rs without skip", does = "744 of 2075 cases differ in bit 35; FDVRB with a dividend of 0 leaves E unchanged" },
+  { who = "KLH10", mark = "measured", ref = "2026-11-27, KLH10 6d733f2a", does = "agrees with ks10-core-soft in 2123 cases" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "open" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "exact" }
+program = """
+	MOVE 1,[152653,,256164]
+	FDV 1,[631006,,651626]	; 573116,,702671 or 573116,,702672
+	HALT .
+"""
+note = "Level A, open until a source decides it (docs/conformance.md). The SIMH skip covers all FDV cases, not only those that differ."
+
+[[case]]
+name = "imul-negative-overflow"
+title = "IMUL: a negative product that does not fit"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "IMUL: a negative product that does not fit"
+instructions = ["IMUL", "IMULI", "IMULM", "IMULB"]
+when = { pred = "imul_negative_product_over_word" }
+differs = ["flags:AROV,TRAP1"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, IMUL to IMUL3", does = "Overflow if the high word is not 0 or all sign bits" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, IMUL", does = "no Overflow for a magnitude from 2^35 + 1 to 2^36 - 1" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "not-generated" }
+program = """
+	MOVEI 5,17
+	MOVE 2,[750330,,434634]
+	IMULB 5,2
+	JSP 3,.+1
+	HALT .
+"""
+
+[[case]]
+name = "idiv-min-by-unit"
+title = "IDIV of -2^35 by 1 or -1"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "IDIV of -2^35 by 1 or -1"
+instructions = ["IDIV", "IDIVI", "IDIVM", "IDIVB"]
+when = { pred = "idiv_min_by_unit" }
+differs = ["ac", "flags:AROV,TRAP1,NODIV"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, IDIV, DIV1", does = "only a divisor of 0 is tested" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, page 2-14", does = "on the KS10, -2^35 by -1 gives -2^35 without an error" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, IDIV", does = "No Divide" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "not-generated" }
+program = """
+	MOVSI 1,400000
+	IDIV 1,[-1]
+	JSP 3,.+1
+	HALT .
+"""
+
+[[case]]
+name = "div-min-by-zero"
+title = "DIV of -2^70 by 0"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "DIV of -2^70 by 0"
+instructions = ["DIV", "DIVI", "DIVM", "DIVB"]
+when = { pred = "div_min70_by_zero" }
+differs = ["ac", "mem", "flags:AROV,TRAP1,NODIV"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, DIV1", does = "No Divide; nothing is stored" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, DIV", does = "no flag; DIVB stores 400000,,1" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "skip", klh10 = "exact", uop_soft = "not-generated" }
+program = """
+	MOVSI 14,400000
+	SETZ 15,
+	DIVB 14,ZERO
+	JSP 3,.+1
+	HALT .
+ZERO:	0
+"""
+
+[[case]]
+name = "hlle-klh10"
+title = "HLLE of a positive word with a bit of 1 to 3 set"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "HLLE in KLH10"
+instructions = ["HLLE", "HLLEM", "HLLES"]
+when = { pred = "hlle_positive_bits_1_3" }
+differs = ["ac", "mem"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, HLLE", does = "the left half does not change" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2a, inhalf.c, kn10ops.h op10m_trz", does = "bits 1 to 3 are cleared" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "exact", klh10 = "skip", uop_soft = "not-generated" }
+program = """
+	HLLE 1,[100000,,123456]	; 100000,,0 or 0
+	HALT .
+"""
+
+[[case]]
+name = "div-high-equals-divisor"
+title = "DIV: the high word of the dividend equals the divisor in magnitude"
+area = "processor"
+level = "A"
+state = "decided"
+discrepancy = "DIV in KLH10: a high word equal to the divisor"
+instructions = ["DIV", "DIVI", "DIVM", "DIVB"]
+when = { pred = "div_high_equals_divisor" }
+differs = ["ac", "mem", "flags:AROV,TRAP1,NODIV"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, DIVB, DIVC, NODIV", does = "No Divide" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, page 2-14, DIV", does = "No Divide if the high word is greater than or equal to the divisor" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2a, kn10ops.c, ddivstep", does = "400000,,0 without an error for a negative quotient" },
+]
+choice = { uop = "microcode", soft = "microcode", pipelined = "microcode" }
+compare = { simh = "exact", klh10 = "skip", uop_soft = "exact" }
+program = """
+	MOVE 7,[777777,,777750]
+	SETZ 10,
+	DIV 7,[30]
+	JSP 3,.+1
+	HALT .
+"""
+note = "The KLH10 skip does not test the sign of the quotient."
+
+[[case]]
+name = "trap-flags"
+title = "Trap 1 and Trap 2: each flag word loads them"
+area = "processor"
+level = "B"
+level_b = "Design decision 2026-11-28. No DEC KS10 diagnostic tests the case (a reading of the KLAD sources, 2026-11-27). The PRM defines Trap 1 for an ASH that loses a bit in any step (PRM 2.5), so the case does not meet the rule for level B of docs/conformance.md."
+state = "decided"
+discrepancy = "Trap 1 and Trap 2: each flag word loads them"
+instructions = ["ASH", "ASHC", "DMUL"]
+when = { pred = "or_start_flags", flags = ["TRAP1", "TRAP2"] }
+differs = ["flags:TRAP1,TRAP2"]
+sources = [
+  { who = "DPE9", mark = "microcode", ref = "M8620-0-DPE9 rev B, E60, E85, E78; ks10.47, MACROS -- PC FLAGS", does = "each flag word loads Trap 1 and Trap 2; ASH gives Trap 1 the overflow of the last step" },
+  { who = "PRM", mark = "manual", ref = "PRM 1982, 2.5, ASH", does = "Overflow and Trap 1 if a bit of significance is lost" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, ASH", does = "as the PRM" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, x_ashflg", does = "as the PRM" },
+  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, pcflags.v", does = "Trap 1 as the microcode; OV not held" },
+]
+choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
+compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+program = """
+	MOVE 1,[200000,,1]
+	ASH 1,2			; the first step overflows, the second does not
+	JSP 2,.+1		; Trap 1 is 0 in the microcode, 1 in the PRM
+	HALT .
+"""
+note = "Run with paging off, so that traps are off (ksdefs, WREBR 2.5). The uop_soft mask applies to ASH, ASHC and DMUL, and to each case that starts with a trap flag set."
+
+[[case]]
+name = "dmovn-carry"
+title = "DMOVN: the carry flags of the complement"
+area = "processor"
+level = "B"
+level_b = "Design decision 2026-11-28. The DEC diagnostics do not test the case: DSKCC tests the low words 0 and 400000,,0 (DMVNF, DMVNMF)."
+state = "decided"
+discrepancy = "DMOVN: the carry flags of the complement"
+instructions = ["DMOVN", "DMOVNM"]
+when = { pred = "any" }
+differs = ["flags:CRY0,CRY1"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, DBLNGA", does = "the complement with AD FLAGS sets Carry 0 and Carry 1" },
+  { who = "uop", mark = "measured", ref = "2026-11-27, ks10-core-uop, tests/instructions.rs, flag_cases", does = "Carry 0 and Carry 1" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, DMOVN", does = "no flag" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, inmove.c, i_dmovn", does = "no flag" },
+  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, alu.v", does = "no flag" },
+]
+choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
+compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+program = """
+	DMOVN 1,[EXP 0,5]
+	JSP 3,.+1
+	HALT .
+"""
+note = "The uop_soft mask covers every DMOVN and DMOVNM, not only a low word that is not 0."
+
+[[case]]
+name = "dmul-carry"
+title = "DMUL: the carry flags of QMULT"
+area = "processor"
+level = "B"
+level_b = "Design decision 2026-11-28. No reading of the DEC diagnostics for the carry flags of DMUL is recorded yet."
+state = "decided"
+discrepancy = "DMUL: the carry flags of QMULT"
+instructions = ["DMUL"]
+when = { pred = "any" }
+differs = ["flags:CRY0,CRY1"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "simple.42, DMUL, DMUL2, QMULT; M8620-0-DPE9 rev A1, E305", does = "Carry 0 and Carry 1 if a high part is negative" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_cpu.c, DMUL", does = "Overflow and Trap 1 for (-2^70)^2; no carry flag" },
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, kn10ops.c, op10dmul", does = "as SIMH" },
+]
+choice = { uop = "microcode", soft = "PRM (design decision 2026-11-28)", pipelined = "open" }
+compare = { simh = "exact", klh10 = "exact", uop_soft = "mask" }
+program = """
+	DMOVE 1,[EXP 400000000000,0]
+	DMUL 1,[EXP 400000000000,0]	; (-2^70)^2
+	JSP 5,.+1
+	HALT .
+"""
+
+[[case]]
+name = "float-unnormalized"
+title = "Floating point instructions with unnormalized operands"
+area = "processor"
+level = "open"
+state = "open"
+unknown = "Floating point instructions with unnormalized operands"
+instructions = ["FAD", "FSB", "FMP", "FDV"]
+when = { pred = "unnormalized_operand" }
+differs = ["ac", "mem"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "flt.5", does = "its own handling" },
+  { who = "DSKCB", mark = "manual", ref = "DSKCB.SEQ page 32, test P7700", does = "FDV of 377400,,777777 by 577400,,777777 gives 777375,,773771" },
+  { who = "SIMH", mark = "emulator", ref = "docs/unknowns.md", does = "follows the KL10" },
+]
+choice = { uop = "microcode", soft = "open", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	MOVE 1,[377400,,777777]
+	FDV 1,[577400,,777777]	; DSKCB P7700: 777375,,773771
+	HALT .
+"""
+note = "The diagnostic vector is level A; the other unnormalized operands are not classified."
+
+[[case]]
+name = "pfw-address-high"
+title = "The page fail word of a memory reference: the address bits above bit 18"
+area = "processor"
+level = "open"
+state = "open"
+difference = "bits 16 and 17 of the page fail word"
+instructions = ["PUSH"]
+when = { pred = "page_fail" }
+differs = ["pfw:16-17"]
+sources = [
+  { who = "microcode", mark = "microcode", ref = "itspag.98, PFMAP, ADDRESS HIGH/MEMORY", does = "VMA 16 and 17, from the left half of the word that gave the address" },
+  { who = "DPM4", mark = "manual", ref = "M8621-0-DPM4 rev B, E183", does = "VMA 14 to 17 load from DP 14 to 17 at each VMA load" },
+  { who = "uop", mark = "measured", ref = "2026-11-28, ITS boot in step, instruction 11 437 018", does = "410001,,000637 (ks10-core-soft: 410000,,000637)" },
+]
+choice = { uop = "microcode", soft = "0", pipelined = "open" }
+compare = { simh = "not-generated", klh10 = "not-generated", uop_soft = "not-generated" }
+program = """
+	; With ITS paging on and no access to the page of 10000:
+	MOVE 17,[777014,,7777]
+	PUSH 17,1		; the page fail word, bits 16-17: 0 or VMA 16-17
+	HALT .
+"""
+note = "The models differ, and the case has no level: whether ITS reads bits 14 to 17 of the page fail word of a memory reference is not checked."
+
+[[case]]
+name = "tm03-space-tape-mark"
+title = "TM03: a space that stops at a tape mark"
+area = "device"
+level = "open"
+state = "decided"
+discrepancy = "TM03: a space that stops at a tape mark"
+differs = ["register"]
+sources = [
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, dvtm03.c, tm_cmddon", does = "no error bit" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_tu.c, FNC_SPACEF", does = "frame count error (FCE)" },
+  { who = "8080", mark = "its", ref = "cmds.m80, MBINT; nmtape.30, MGSPCF", does = "expects FCE after a space" },
+]
+choice = { machine = "8080 source: FCE" }
+program = """
+	; Space Forward of 2 records over a tape mark after the first record;
+	; read the TM03 status and error registers.
+"""
+
+[[case]]
+name = "tm03-read-tape-mark"
+title = "TM03: a read of a tape mark"
+area = "device"
+level = "open"
+state = "decided"
+discrepancy = "TM03: a read of a tape mark"
+differs = ["register"]
+sources = [
+  { who = "KLH10", mark = "emulator", ref = "KLH10 6d733f2, dvtm03.c, tm_flsbuf", does = "FC 0 and TM; no error bit" },
+  { who = "SIMH", mark = "emulator", ref = "sims 9556eca0, kx10_tu.c, FNC_READ", does = "FCE and the controller transfer error" },
+  { who = "ITS", mark = "its", ref = "nmtape.30, MGRD1A", does = "the TM03 gives no FC error on READ" },
+]
+choice = { machine = "KLH10, as the ITS comment" }
+program = """
+	; Read Forward at a tape mark; read the TM03 status and error
+	; registers.
+"""
+
+[[case]]
+name = "memstat-power-fail-write"
+title = "Memory status register: the write of POWER FAIL"
+area = "device"
+level = "open"
+state = "decided"
+discrepancy = "Memory status register: the write of POWER FAIL"
+differs = ["register"]
+sources = [
+  { who = "KSDEFS", mark = "its", ref = "ksdefs.194, %KEPWR [R/C]", does = "a write of 1 clears the bit" },
+  { who = "reference card", mark = "manual", ref = "KS10 reference card, memory status register, bit 12", does = "a write of 1 clears the bit" },
+  { who = "MMC5", mark = "manual", ref = "EK-OKS10-TM-002 figure 5-30; M8618-0-MMC5 rev B, E61, E51, E58", does = "a write of 0 clears the bit" },
+  { who = "KS10FPGA", mark = "emulator", ref = "KS10FPGA 5090e7a1, memstat.sv, statPF", does = "a write of 0 clears the bit" },
+]
+choice = { machine = "KSDEFS" }
+program = """
+	SETZ 1,
+	IOWR 1,[100000]		; write 0 to the memory status register
+	IORD 2,[100000]		; bit 12: POWER FAIL
+	HALT .
+"""

@@ -29,6 +29,7 @@ gen:
 	$(PYTHON) spec/gen_devices.py
 	$(PYTHON) spec/gen_microcode.py --its $(ITS_TREE)
 	$(PYTHON) spec/gen_capi.py
+	$(PYTHON) spec/gen_impldef.py
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown > ../docs/console.md
 
 # Format, lint, unit tests, a check that the generated files are current,
@@ -44,6 +45,7 @@ check-gen:
 	$(PYTHON) spec/gen_devices.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_microcode.py --check --its $(ITS_TREE)
 	$(PYTHON) spec/gen_capi.py --check
+	$(PYTHON) spec/gen_impldef.py --check
 	cd emu && $(CARGO) run -q --locked -p neoks10 -- help --markdown | diff -u ../docs/console.md -
 
 check-py:

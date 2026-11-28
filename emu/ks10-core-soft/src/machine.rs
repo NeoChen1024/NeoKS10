@@ -498,7 +498,7 @@ impl Machine {
         if a.signed() > 0 {
             // The 2901 registers that are temporaries of the microcode (AR,
             // ARX, BR, BRX, FLG, T0, VMA) are not modelled; they are 0
-            // here (docs/unknowns.md).
+            // here (level C of docs/conformance.md).
             let block = [
                 W36::wrap(0o377777_777777), // MAG
                 W36::from_halves(Half::ZERO, self.pc),

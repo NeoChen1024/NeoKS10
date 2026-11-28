@@ -5,8 +5,10 @@ A KS10-compatible PDP-10 processor in the programmable logic of a
 [ITS](https://github.com/PDP-10/its), the Incompatible Timesharing System.
 
 The processor is the KS10 data path in the FPGA, and it runs the real ITS
-microcode. Memory, disks, tapes, terminals and the 8080 console are
-software on the ARM cores of the same chip.
+microcode. Memory, disks, tapes, terminals and a model of the 8080
+console are software on the ARM cores of the same chip. A second core,
+a pipelined PDP-10 of its own design, comes later; it follows the
+contract of [`docs/conformance.md`](docs/conformance.md).
 
 ## Status
 

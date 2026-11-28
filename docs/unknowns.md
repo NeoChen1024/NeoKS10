@@ -1,55 +1,65 @@
 # Open items
 
-Values and causes that have no source yet. When an item gets a source,
-move the value to its place and remove the item here.
+Values and causes that have no source yet. Each item has one of two
+kinds:
+
+- **Answer not found:** the machine has an answer, and no source of this
+  project gives it yet. When an item gets a source, move the value to its
+  place and remove the item here.
+- **Implementation-defined:** the PRM and the DEC diagnostics do not
+  define it, and this project selects a behaviour
+  ([`conformance.md`](conformance.md)). When the selection is made, the
+  item moves to `spec/impldef.toml`.
 
 ## DEC KS10 diagnostics
 
 The diagnostics are on two tapes (docs/emulator.md, "Documents and
 tapes"). Not known yet:
 
-- Which of them apply to the ITS microcode behaviour. They are for the DEC
+- **Answer not found.** Which of them apply to the ITS microcode behaviour. They are for the DEC
   microcode. `DSKEA` and `DSKEC` test DEC paging, which the ITS microcode
   does not have.
 
 ## KS10 processor and devices
 
-- The register address of the `SSIMP` IMP interface (`%LHVEC`,
+- **Answer not found.** The register address of the `SSIMP` IMP interface (`%LHVEC`,
   `src/system/lhdh.defs`, not read yet). docs/emulator.md.
-- The instruction times of the KS10, for the virtual time of the emulator.
+- **Answer not found.** The instruction times of the KS10, for the virtual time of the emulator.
   docs/emulator.md.
-- The halt status block (`inout.50`, DUMP) has the 2901 registers AR,
-  ARX, BR, BRX, FLG, T0 and the VMA. Their values at a halt come from the
-  microcode steps before the halt. `emu/ks10-core-soft` writes 0 for them.
-- The time of a reference to nonexistent memory. NXM ERR sets three
+- **Answer not found.** The time of a reference to nonexistent memory. NXM ERR sets three
   bus cycles after COM/ADR (EK-OKS10-TM-002 5.6.5; M8621-0-DPMC rev
   D, E4). The microcode-level model adds no time for the wait.
-- The halt turns off the PI system in the hardware (`inout.50`, WRTHSB:
-  "TURN OFF PI SYSTEM"). `emu/ks10-core-soft` does not model a continue after a
-  halt.
-- Device times in `emu/ks10-machine`, all estimates in instructions at 1 µs each:
+- **Implementation-defined.** Device times in `emu/ks10-machine`, all estimates in instructions at 1 µs each:
   the RP06 seek and transfer time (`rh11.rs`, DELAY = 100), the DZ11
   character time (`dz11.rs`, 9600 baud), the CH11 transmission time
   (`ch11.rs`), the TM03 command time and rewind time (`tm03.rs`, DELAY =
   100, REWIND_TIME = 1000).
-- What the TM03 does at the end of the recorded data of a tape image. A
+- **Answer not found.** What the TM03 does at the end of the recorded data of a tape image. A
   real drive reads blank tape. `emu/ks10-machine` stops the command with
   "operation incomplete" (OPI) and attention.
-- How the TM03 packs a record in reverse order if its frame count is not
+- **Answer not found.** How the TM03 packs a record in reverse order if its frame count is not
   a multiple of the frames of a word. `emu/ks10-machine` reverses the order of
   the words only. ITS does not use Read Reverse (`nmtape.30`).
-- The serial number of the TM03 and the TM03 check character. `emu/ks10-machine`
+- **Answer not found.** The serial number of the TM03 and the TM03 check character. `emu/ks10-machine`
   gives 0.
-- The parity bits of the UBA paging RAM as read (%UPPAR, %UPPVL), the
+- **Answer not found.** The parity bits of the UBA paging RAM as read (%UPPAR, %UPPVL), the
   serial number of the RP06, the CH11 check word, and how the IMP
   interface counts its address register in 32-bit mode. `emu/ks10-machine` gives
   0 or leaves the register as it is.
-- The time of the SHA-256 of a disk image on the board (`--record`,
+- **Answer not found.** The time of the SHA-256 of a disk image on the board (`--record`,
   `--replay`). On the x86-64 host, 317 MB take about 0.25 s
   **[measured]**; the Cortex-A9 has no SHA instructions.
-- The line speed of the CTY, and the time of the 8080 for one character.
+- **Answer not found.** The line speed of the CTY, and the time of the 8080 for one character.
   `emu/ks10-machine/src/console.rs` uses 1000 instructions (an estimate: 9600 baud
-  at 1 µs for each instruction).
+  at 1 µs for each instruction). The 8080 program sets the mode of its
+  UART from switches but gives no baud rate (`hcore.m80`, `PWRUP`). For
+  each output character it waits for the transmitter before it clears
+  word 33 (`CTYPCHR`) **[its]**.
+- **Answer not found.** Whether the bus RESET (register 100 ← 200)
+  clears the UBA paging RAM. The 8080 writes map entry 1 for the boot,
+  then resets the bus again before the start (`dr.m80`, `DSKSEQ`;
+  `cmds.m80`, `BT.GO`, `MRCMD`) **[its]**. The high-level console resets
+  once, before the boot ([`console-interface.md`](console-interface.md)).
 
 ## Instructions that the differential run does not check
 
@@ -57,10 +67,12 @@ The differential run (docs/emulator.md, "Differential runs") does not
 compare these with a reference emulator, or the two reference emulators
 disagree:
 
-- Floating point instructions with unnormalized operands, and FAD with an
+- **Implementation-defined.** Floating point instructions with unnormalized operands, and FAD with an
   exponent difference of 61 or more. The KS10 microcode handles them in
   its own way (`flt.5`). SIMH follows the KL10; KLH10 is not yet run
-  with such operands.
+  with such operands. The cases `float-unnormalized` and
+  `fad-large-exponent-difference` of [`impldef.md`](impldef.md) hold
+  them; the level of each is open.
 
 ## The microcode-level model
 
@@ -68,7 +80,7 @@ disagree:
 the manual and the field definitions give. These connections need the
 schematics (MP00540):
 
-- Backplane inputs of the microsequencer that the CRA sheets do not
+- **Answer not found.** Backplane inputs of the microsequencer that the CRA sheets do not
   trace: NICOND inputs 0, 4 and 6 (EA1, EF1, EK1), the MUL dispatch input
   FK2, and the page fail dispatch inputs EU1, FE2, FL2, FS2. The ITS
   microcode depends on EA1, EF1 and EK1 being inactive, and does not read
@@ -77,7 +89,7 @@ schematics (MP00540):
   77, and the assembler put other words at 60, 64, 66, 70, 74 and 76;
   every `DISP/MUL` word has `J` bit 10 set; no word uses `DISP/PAGE
   FAIL`. The model takes EA1, EF1 and EK1 as inactive.
-- The I/O cycles of the model in microcycles
+- **Answer not found.** The I/O cycles of the model in microcycles
   ([`microcode-model.md`](microcode-model.md), "I/O cycles"): how long a
   Unibus adapter asserts I/O BUSY before its data cycle, and after a
   write. The model uses 4 microcycles **[estimate]**. This value and the
@@ -86,35 +98,42 @@ schematics (MP00540):
   comparison with `emu/ks10-core-soft` cannot
   ([`microcode-model.md`](microcode-model.md), "Time and the boot of
   ITS").
-- What a Unibus adapter does on a read or a write of an address with no
+- **Answer not found.** What a Unibus adapter does on a read or a write of an address with no
   device. The model gives no I/O BUSY and no data cycle, so IOWAIT ends
   in the page fail "nonexistent I/O register" (inout, IOW5; ksdefs,
   `%PFNXI`), as `emu/ks10-core-soft` does.
-- The correction code bits of the memory status register after a
+- **Answer not found.** The correction code bits of the memory status register after a
   correct word. MMC4 E104 loads the syndrome at each data strobe. The
   emulator gives 0 **[estimate]**: the syndrome of a correct word.
-- The time from the command/address of a status read to its data cycle.
+- **Answer not found.** The time from the command/address of a status read to its data cycle.
   The microcode-level model takes 2 microcycles, as for the console.
-- Which registers DP RESET and CRAM RESET clear (hcore.m80, MRINT). DP
+- **Answer not found.** Which registers DP RESET and CRAM RESET clear (hcore.m80, MRINT). DP
   RESET clears the APR flags (DPMA E23, E87; DPMB). The model also sets
   the CRAM address to 0 and leaves the rest; the power-up sequence sets
   the state that the microcode uses.
-- The inputs 0 of DBM bits 33–35 (DPM2 E187, E165, E188, pin 12) have
+- **Answer not found.** The inputs 0 of DBM bits 33–35 (DPM2 E187, E165, E188, pin 12) have
   no connection on the drawing. The model takes them as 1, as an open
   TTL input **[estimate]**. The ITS microcode masks these bits in each
   use of `DBM/APR FLAGS` (inout, `RDAPR`, `APRSZ`, `APRSO`; `WRAPR` and
   `TOCK` load only bits 24–31) **[microcode]**.
-- The tick at which CSL5 E32 takes PAGE FAIL DELAY. VMA JUST LOADED is 1
+- **Answer not found.** The tick at which CSL5 E32 takes PAGE FAIL DELAY. VMA JUST LOADED is 1
   for one tick after a word that loads VMA (DPMC E10). The model takes it
   as 0 in the word that completes the cycle, so a page fail takes place
   in that word also if the word before it loaded VMA **[estimate]**. The
   same holds for CACHE HIT (DPM7 E41), which needs VMA JUST LOADED 0.
-- The content of the page table and the cache directory at power on,
+- **Implementation-defined.** The content of the page table and the cache directory at power on,
   and its parity (DPM6, DPM7, DPM9). The model keeps no parity bits and
   marks an entry that nothing wrote. The ITS boot loader sweeps both
   tables with `WRUBR` at 1004, its fifth instruction **[measured]**
   2026-11-27 (`emu/ks10-core-uop/tests/its_boot.rs`).
-- The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
+- **Answer not found.** MP00540 has DPE9 at rev B and rev A1, and CRA2
+  at rev A1 and rev B. The code cites both revisions of each
+  ([`architecture.md`](architecture.md), "Target"): DPE9 rev A1 for the
+  flags in `emu/ks10-core-uop`, rev B for PCU in `emu/ks10-core-soft`.
+  Whether the cited gates differ between the revisions is not checked.
+  The code cites CRA1 rev A1; the CRA1 sheet on page 172 of MP00540 is
+  rev B, and a sheet of rev A1 was not looked for.
+- **Answer not found.** The D input of CSL5 E53 (FS (1)). While `MULTI SHIFT` and FE SIGN are
   both 1, the DPE/M clock needs FS (1) (CSL5 rev D, E52, E45). The model
   clocks the data path at each repeat, as the manual describes
   (EK-OKS10-TM-002 5.4.1, bit 79).

@@ -12,7 +12,9 @@ The work has three stages:
    and I/O. Random instructions compare it with `emu/ks10-core-soft`.
 2. ITS paging, the I/O cycles to the devices of `emu/ks10-machine`, interrupts,
    page fail. Then the diagnostics and an ITS boot.
-3. A model of the 8080 runs the real console program.
+3. For tests only: a model of the 8080 runs the real console program,
+   and records the effects that the high-level console must give
+   ([`console-interface.md`](console-interface.md)).
 
 ## The microcode of the ITS build
 
@@ -761,12 +763,12 @@ halt code there.
 
 **Known differences.** Design decision 2026-11-28: the two processors
 can differ by a decision ("Time and the boot of ITS"). Each such case is
-an entry of the table `KNOWN` of the test, with its section of
-[`emulator.md`](emulator.md), "Differences from the microcode". For a
-case of the table, the test leaves out the parts of the state that the
-entry names; the other parts must agree. The table has three entries:
-"Trap 1 and Trap 2", "DMOVN carry flags" and "DMUL carry flags"
-([`discrepancies.md`](discrepancies.md)). **[measured]** 2026-11-28: 480
+a case of level B in [`impldef.md`](impldef.md) ([`conformance.md`](conformance.md)).
+The test has the table `KNOWN` for them. For a case of the table, the
+test leaves out the parts of the state that the entry names; the other
+parts must agree. The table has three entries, for the cases
+`trap-flags`, `dmovn-carry` and `dmul-carry`. The table is written by
+hand until the generator of `spec/impldef.toml` writes it. **[measured]** 2026-11-28: 480
 of the 712 runs agree, and 232 differ only in the flags of these entries.
 The test `the_flag_rules_of_the_microcode` checks these flag rules on
 the model alone, with values from the reading of DPE9 and the microcode.
@@ -1120,8 +1122,8 @@ run in step. `emu/ks10-core-soft` does not run the microcode, and the
 microcode can have behaviour that is not intended. So the instruction
 semantics of `emu/ks10-core-soft` do not follow each detail of the model.
 Each processor boots ITS in its own test. The single-instruction test
-compares them, with a table of known differences ("Single
-instructions").
+compares them at each instruction, with the cases of
+[`impldef.md`](impldef.md) ("Single instructions").
 
 The time base:
 
@@ -1241,9 +1243,11 @@ microcycles. The cache answers 13 883 897 reads. The run takes 233 s.
 
 ## The instruction record
 
-The logic in `rtl/` gives a record at each completed instruction, and the
-co-simulation compares it with the record of the model ([`AGENTS.md`](../AGENTS.md),
-"Rules for the logic"). `emu/ks10-core-uop/src/record.rs` defines it.
+The co-simulation compares the logic in `rtl/` with the model at each
+microcycle ([`AGENTS.md`](../AGENTS.md), "Rules for the logic"). The
+logic also gives a record at each completed instruction, and the model
+gives the same record. `emu/ks10-core-uop/src/record.rs` defines it. A
+record of each microcycle for the co-simulation is not written yet.
 
 - The model takes the record at the end of each microword with
   `SPEC/NICOND`, after all writes of that word.
