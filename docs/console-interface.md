@@ -94,7 +94,48 @@ octal. Bits have DEC numbers.
 ## Comparison
 
 This is the plan of the comparison (design decision 2026-11-28). The
-model of the 8080 does not exist yet.
+model of the 8080 does not exist yet; `emu/ks10-csl` has its ROM.
+
+### The program
+
+Design decision 2026-11-28: the model runs version 5.2 first, from its ROM
+images. Version 4.2 of the ITS tree follows, when an assembler for its
+sources exists.
+
+- Version 5.2: `KS10_CSL_V5.2.zip` has the four 2 KiB images of the board.
+  The tape `ks10_8080_microcode` has the listing `KNS10.PNT`, the sources
+  in one file (`KS.MAS`; `SEP.TEC` splits it into the files of version
+  4.2), the build file `M80.CTL` and the notes `V5-2.NOT` (both files in
+  `third-party.lock`; `make csl` extracts them).
+- **[measured]** 2026-11-28, `make csl` (`emu/ks10-csl/tests/rom.rs`):
+  the 7016 bytes of the listing are the bytes of the images at these
+  addresses (octal): E81 at 0, E73 at 4000, E58 at 10000, E18 at 14000.
+  The RAM starts at 20000 (`KNS10.PNT`, `PWRUP`: `LXI SP,RAMST+^O2000`).
+- Version 4.2: the sources are in the syntax of the DEC cross assembler
+  (`CROSS.EXE` on the tape, a TOPS-10 program). An assembler of this
+  project has an exact check: the sources of version 5.2 must give the
+  four images.
+- The rows of this document cite version 4.2. `V5-2.NOT` lists changes
+  in `CHRRDY`, `TTOCOM` and the KLINIK code. Before a recorded effect
+  becomes expected data, its row is checked against version 5.2; a
+  difference goes into [`discrepancies.md`](discrepancies.md).
+
+### The ports of the 8080
+
+**[measured]** 2026-11-28, a read of `KNS10.PNT` with a script: the
+`IN` and `OUT` instructions of version 5.2 use these ports (octal, names
+of `CONDEF.M80`). The model of the board needs a source for each one: the
+CSL drawings of MP00540 or EK-OKS10-TM-002. A port without a source goes
+into [`unknowns.md`](unknowns.md), and the model stops at it.
+
+| Ports | IN | OUT |
+|---|---|---|
+| 0 to 3 | bus data `D2835` to `D0411` | |
+| 100 to 103 | `SMPAR`, `REFERR`, `R.BUSY`, `D0003` | `RESET`, `LIGHTS`/`DTR`, bus data `W2835` to `W0003` and addresses `A2835` to `A0003` |
+| 104 to 116 | | bus data and addresses, `DTARB`, `BUSARB`, `INT2KS` |
+| 200 to 203 | UARTs: `CTYDAT`, `CTYCTL`, `REMDAT`, `REMCTL` | the same |
+| 204 to 212 | | `CRMCTL`, `DIAG`, `CLKCTL`, `BUSCTL`, `CPUCTL` |
+| 300 to 303 | `RUNFP`/`TTYSW`, `SMSTS`/`BOOTSW`, `CARRIER`, 303 | |
 
 - The model of the 8080 runs the DEC console program with
   `ks10-core-uop`. It records each effect on the KS10 side, for each

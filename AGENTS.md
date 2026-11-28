@@ -94,7 +94,7 @@ Each statement about the machine in `docs/` or in a code comment has a mark.
 | Path | Contents |
 |---|---|
 | `spec/` | Instruction table, register map (`regmap.toml`), the C interface (`capi.toml`), the implementation differences (`impldef.toml`), and their generators. `micro.py` is the microcode assembler |
-| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type, the instruction tables and the implementation differences from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
+| `emu/` | The Rust workspace: emulator, software processor, image tools. `pdp10` has the word type, the instruction tables and the implementation differences from `spec/`. `ks10-machine` is the machine around the processor: the memory size, the Unibus adapters, the devices, the 8080 console and boot commands. `ks10-core-soft` is the software processor. `ks10-core-uop` is the microcode-level model. `ks10-capi` is its C interface, a static library. `ks10-csl` is the CSL board with the DEC 8080 console program, for tests only. `plio` is the access to the PL. `memprobe` is the program of the memory path test. `neoks10` is the program `neoks10`: configuration, operator console, control socket, scripts |
 | `rtl/` | SystemVerilog: core, memory bridge, panel. `rtl/memprobe/` is the test design of the memory path. `rtl/gen/` has generated files |
 | `tb/` | Verilator co-simulation, mutation scripts (`mutate.py`), SymbiYosys proofs. `tb/memprobe/` tests `rtl/memprobe/`. `tb/capi/` is a C++ caller of the C interface. `tb/gen/` has generated files |
 | `fpga/` | Vivado scripts and constraints for the PYNQ-Z2. `fpga/memprobe/` builds `rtl/memprobe/` |
@@ -129,6 +129,7 @@ fails.
 |---|---|
 | A file in `spec/` | `make gen`, then all rows below |
 | The software processor or a device | `make check` |
+| The model of the CSL board (`emu/ks10-csl`) | `make check`, `make csl` |
 | A file in `rtl/` | `make check`, `make cosim`, and `make formal` for the changed module |
 | A new behaviour in `rtl/` | Also `make mutate` for the changed module |
 | Before a merge | `make diag` and `make its-boot` |
@@ -158,6 +159,9 @@ fails.
   output of each job together. A commit message can name it in place of
   these four rows. `make diag` and `make its-boot` are also `diag-soft`,
   `diag-uop`, `its-boot-soft` and `its-boot-neoks10`.
+- `make csl` extracts the DEC 8080 console program (the ROM images of
+  version 5.2 and the tape with its listing) from `references/` and runs
+  the tests of `emu/ks10-csl`. Without the files, the tests print SKIPPED.
 - `make cross` builds the programs of `emu/` for the board (armv7, musl,
   static), and runs their lint and unit tests for that target (qemu-arm).
 - `make formal MODULE=<name>` runs `tb/memprobe/<name>.sby`, for example

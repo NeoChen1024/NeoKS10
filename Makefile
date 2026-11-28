@@ -6,7 +6,7 @@ CARGO     ?= cargo
 VERILATOR ?= verilator
 NICE      ?= nice -n 19
 
-.PHONY: gen check check-gen check-py check-rust check-rtl check-capi check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop verify verify-build verify-jobs oracle oracle-sims oracle-klh10
+.PHONY: gen check check-gen check-py check-rust check-rtl check-capi check-oracle cosim formal mutate synth cross references its-boot its-boot-soft its-boot-neoks10 microcode microcode-test diag diag-soft diag-uop csl verify verify-build verify-jobs oracle oracle-sims oracle-klh10
 
 # The targets that need these give them to cargo themselves. Without this,
 # a variable on the command line reaches every recipe, and `cargo test` of
@@ -254,6 +254,28 @@ diag-soft: $(DIAG_STAMP)
 diag-uop: $(DIAG_STAMP)
 	cd emu && KS10_DIAG_DIR=$(DIAG_DIR)/files $(NICE) $(CARGO) test --locked --release -p ks10-core-uop \
 	    --test diag -- --nocapture
+
+# The DEC 8080 console program for the model of the CSL board
+# (emu/ks10-csl, docs/console-interface.md, "Comparison"): the ROM images
+# of version 5.2 and the tape with its listing and sources, both from
+# `make references`. The zipfile module of Python unpacks the images;
+# t10backup (built for the diagnostics) extracts the tape. The files are
+# extracted again only if a source is newer than the stamp.
+CSL_DIR = $(abspath $(BUILD_DIR))/csl
+CSL_ZIP = references/bitsavers/pdf/dec/pdp10/KS10/firmware/KS10_CSL_V5.2.zip
+CSL_TAPE = references/trailing-edge/tapes/ks10_8080_microcode.tap.bz2
+CSL_STAMP = $(CSL_DIR)/extracted
+
+$(CSL_STAMP): $(wildcard $(CSL_ZIP) $(CSL_TAPE)) $(DIAG_STAMP)
+	@test -f $(CSL_ZIP) && test -f $(CSL_TAPE) || { echo "csl: $(CSL_ZIP) or $(CSL_TAPE) is missing; run make references" >&2; exit 2; }
+	rm -rf $(CSL_DIR) && mkdir -p $(CSL_DIR)/rom $(CSL_DIR)/tape
+	$(PYTHON) -m zipfile -e $(CSL_ZIP) $(CSL_DIR)/rom
+	bunzip2 -c $(CSL_TAPE) > $(CSL_DIR)/ks10_8080_microcode.tap
+	cd $(CSL_DIR)/tape && $(DIAG_DIR)/t10backup -x -f ../ks10_8080_microcode.tap '*' > ../t10backup.log
+	touch $@
+
+csl: $(CSL_STAMP)
+	cd emu && KS10_CSL_DIR=$(CSL_DIR) $(NICE) $(CARGO) test --locked -p ks10-csl -- --nocapture
 
 # The rows of AGENTS.md for a change of the software processor or a
 # device, and before a merge: check, microcode, diag and its-boot. Run it

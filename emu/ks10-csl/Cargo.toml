@@ -1,0 +1,11 @@
+[package]
+name = "ks10-csl"
+version = "0.1.0"
+description = "The CSL board of the KS10 for tests: the DEC 8080 console program in its ROM images"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
