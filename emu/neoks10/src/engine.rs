@@ -1075,7 +1075,10 @@ impl Engine {
                     }
                 }
                 Command::CtySend(b) => {
-                    if self.m.count < r.at + ks10_machine::console::ANSWER_DELAY {
+                    // The answer comes when the CTY output is quiet
+                    // (docs/emulator.md, "Input without loss").
+                    let quiet = self.m.console.quiet_at();
+                    if !quiet.is_some_and(|t| self.m.count >= t.max(r.at)) {
                         return;
                     }
                     r.s.steps.pop_front();
@@ -1130,7 +1133,7 @@ impl Engine {
             match (&r.wait, r.s.steps.front()) {
                 (Some((_, until, _)), _) => end = end.min(*until),
                 (None, Some((_, Command::CtySend(_)))) => {
-                    end = end.min(r.at + ks10_machine::console::ANSWER_DELAY);
+                    end = end.min(self.m.console.quiet_bound().max(r.at));
                 }
                 _ => {}
             }

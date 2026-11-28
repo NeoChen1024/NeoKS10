@@ -10,7 +10,8 @@
 //! --deposit OCTAL=OCTAL writes a word into memory after the loading.
 //! --answer PROMPT=TEXT types TEXT on the CTY when PROMPT appears in the
 //! CTY output; "\r" in TEXT is a carriage return. The answers are used in
-//! order, each one `console::ANSWER_DELAY` instructions after its prompt.
+//! order, each one when the CTY output is quiet after its prompt
+//! (`console::QUIET`).
 //! The CTY output is printed at the end.
 
 use ks10_core_soft::{Machine, Stop};

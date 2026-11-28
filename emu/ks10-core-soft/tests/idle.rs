@@ -64,7 +64,10 @@ fn idle_skip_boots_its_the_same() {
     let mut seen = false;
     while b.count < 800_000_000 && !seen {
         sb.tick(b.count, &mut b.console);
-        let limit = sb.due().unwrap_or(u64::MAX).min(b.count + 100_000);
+        let limit = sb
+            .due(&b.console)
+            .unwrap_or(u64::MAX)
+            .min(b.count + 100_000);
         skipped += b.step_idle(limit).expect("step_idle");
         while a.count < b.count {
             sa.tick(a.count, &mut a.console);

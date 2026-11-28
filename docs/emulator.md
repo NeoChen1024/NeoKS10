@@ -569,8 +569,8 @@ guest:
 
 - While an `expect` waits, the thread looks at the CTY output after each
   instruction that prints. The match has the count of that instruction.
-- A `send` comes 100000 instructions (`ks10_machine::console::ANSWER_DELAY`)
-  after the previous step of the script ("Input without loss").
+- A `send` comes after the previous step of the script, when the CTY
+  output is quiet ("Input without loss").
 - Other commands run at once, at the count of the previous step.
 - If a step of a `run --script` script fails, `run` ends with exit
   status 1 and names the file and the line. If a step of a `script run`
@@ -581,8 +581,7 @@ guest:
 
 #### Input without loss
 
-This is a design (design decision 2026-11-28). The change below is not
-written yet.
+Design decision 2026-11-28.
 
 - **The queue.** Host input to the CTY goes into a queue. The next
   character goes to the guest only when the guest took the previous one.
@@ -603,11 +602,18 @@ written yet.
   come after the monitor ends its output and waits for input (`$HEAR`).
   The scripts match the start of a prompt, so the wait must also cover
   the rest of the line.
-- **The change.** A `send` waits until the CTY output stops: word 33 is
-  0, and no character came for a number of instructions. That number
-  replaces `ANSWER_DELAY`. A reading of `$TOUTB` gives a few instructions
-  from the last character to `$HEAR` **[estimate]**; a measurement on
-  the diagnostics sets the number.
+- **The wait.** An answer waits until the CTY output is quiet: no
+  service of the 8080 is due, and no character came for
+  `ks10_machine::console::QUIET` instructions (`Console::quiet_at`). A
+  `send` of a script and `Script::answer` of the tests use it.
+- **The number.** **[measured]** 2026-11-28, `make diag-soft` with other
+  values of `QUIET`: with 53 or less, the monitor loses the answer of
+  DSKAI and prints the prompt again; with 56 or more, all programs pass.
+  So the monitor reaches `$HEAR` about 55 instructions after the last
+  character of a prompt. Between two characters of a line, the service
+  of the 8080 is due, so the output is not quiet there. `QUIET` is 10000
+  instructions (10 times `OUTPUT_DELAY`), a margin over the measured
+  value **[estimate]**.
 
 The ITS build of `its/` and `make its-boot` use scripts. The waits count
 instructions, so a script gives the same result on a slow host.
@@ -843,10 +849,11 @@ submodule update --init tools/tapeutils`). The files stay in
    switch questions are `Y`, the left half (`000100`, `INHPAG`; `000110`
    for `DSKBA`) and the right half of the run file. `DSKBA` needs
    `OPRSEL` (000010) too: without it, the program limits memory to 32K,
-   and with `INHPAG` it gets too little memory. Each answer comes 100
-   ms of virtual time after its prompt: a character that comes while
+   and with `INHPAG` it gets too little memory. Each answer comes when
+   the CTY output is quiet after its prompt: a character that comes while
    `SUBSM` prints is read as a control character and lost **[measured]**
-   (2026-11-27, trace of the CTY output loop of `SUBSM`). Such a program
+   (2026-11-27, trace of the CTY output loop of `SUBSM`; "Input without
+   loss" has the number). Such a program
    passes if it does not halt, prints `END PASS n.` for n = the
    iterations, and prints no `ERROR`.
 5. A program of the run file without a decision in `diag.rs` fails the

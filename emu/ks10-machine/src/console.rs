@@ -48,6 +48,8 @@ pub struct Console {
     service_at: Option<u64>,
     /// The earliest instruction count for the next input character.
     next_input_at: u64,
+    /// The instruction count of the last character of `output`.
+    last_output_at: u64,
 }
 
 /// What the 8080 does to the KS10 in one service.
@@ -72,6 +74,23 @@ impl Console {
         if self.service_at.is_none() {
             self.service_at = Some(now + OUTPUT_DELAY);
         }
+    }
+
+    /// The instruction count at which the CTY output is quiet: no service
+    /// is due, and no character came for [`QUIET`] instructions. `None`
+    /// while a service is due.
+    pub fn quiet_at(&self) -> Option<u64> {
+        match self.service_at {
+            Some(_) => None,
+            None => Some(self.last_output_at + QUIET),
+        }
+    }
+
+    /// The earliest instruction count at which the CTY output can be
+    /// quiet: a bound for a caller that waits for [`Console::quiet_at`].
+    pub fn quiet_bound(&self) -> u64 {
+        let q = self.last_output_at + QUIET;
+        self.service_at.map_or(q, |t| t.max(q))
     }
 
     /// The first instruction count at which [`Console::poll`] can do
@@ -106,7 +125,12 @@ impl Console {
     fn poll(&mut self, now: u64, word: impl Fn(u32) -> W36) -> Option<Effect> {
         if self.service_at.is_some_and(|t| now >= t) {
             self.service_at = None;
-            return Some(self.serve(&word));
+            let n = self.output.len();
+            let e = self.serve(&word);
+            if self.output.len() != n {
+                self.last_output_at = now;
+            }
+            return Some(e);
         }
         // A host policy, not a rule of the 8080 (TENCHR does not test
         // word 32): give the next character when the KS10 has taken the
@@ -153,12 +177,14 @@ impl Console {
     }
 }
 
-/// The time from a prompt to its answer in a [`Script`], in instructions:
-/// 100 ms at 1 µs for each instruction **[estimate]**, the time a person
-/// needs to start to type. A character that comes while the program still
-/// prints can be lost: the DEC diagnostic monitor reads it as a control
-/// character (SUBSM, the CTY output loop).
-pub const ANSWER_DELAY: u64 = 100_000;
+/// The CTY output is quiet after this many instructions without a
+/// character and with no service due (docs/emulator.md, "Input without
+/// loss"). An answer of a script comes only then: the DEC diagnostic
+/// monitor takes and drops a character that comes while it prints (KLAD
+/// sources, SUBSMM.MAC, `$TOUTB`, `$CYTYI`). **[measured]** 2026-11-28,
+/// `make diag-soft`: with 53 the monitor loses the answer of DSKAI, with
+/// 56 all programs pass. The value is a margin over that **[estimate]**.
+pub const QUIET: u64 = 10 * OUTPUT_DELAY;
 
 /// Host input for tests: answers that are typed when their prompts appear
 /// in the CTY output, in order.
@@ -169,7 +195,8 @@ pub struct Script {
     from: usize,
     /// The output length at the last search.
     seen: usize,
-    due: Option<u64>,
+    /// The prompt of the next answer has come.
+    prompted: bool,
 }
 
 impl Script {
@@ -179,25 +206,27 @@ impl Script {
             .push_back((prompt.as_bytes().to_vec(), text.as_bytes().to_vec()));
     }
 
-    /// The instruction count of the next answer, if a prompt has come.
-    pub fn due(&self) -> Option<u64> {
-        self.due
+    /// If the prompt of the next answer has come: the earliest
+    /// instruction count of the answer. The answer comes when the CTY
+    /// output is quiet ([`Console::quiet_at`]).
+    pub fn due(&self, con: &Console) -> Option<u64> {
+        self.prompted.then(|| con.quiet_bound())
     }
 
     /// Call between instructions, at instruction count `now`.
     pub fn tick(&mut self, now: u64, con: &mut Console) {
-        if self.due.is_none() && con.output.len() != self.seen {
+        if !self.prompted && con.output.len() != self.seen {
             self.seen = con.output.len();
             if let Some((p, _)) = self.answers.front() {
                 let out = &con.output[self.from..];
                 if out.windows(p.len()).any(|w| w == p.as_slice()) {
-                    self.due = Some(now + ANSWER_DELAY);
+                    self.prompted = true;
                     self.from = self.seen;
                 }
             }
         }
-        if self.due.is_some_and(|t| now >= t) {
-            self.due = None;
+        if self.prompted && con.quiet_at().is_some_and(|t| now >= t) {
+            self.prompted = false;
             if let Some((_, t)) = self.answers.pop_front() {
                 con.input.extend(t);
             }
@@ -247,6 +276,33 @@ mod tests {
             .unwrap();
         assert_eq!(e.clear, Some(KLKOT));
         assert!(c.output.is_empty());
+    }
+
+    // docs/emulator.md, "Input without loss": an answer comes only when
+    // no CTY service is due and no character came for QUIET instructions.
+    #[test]
+    fn an_answer_waits_for_quiet_output() {
+        let mut c = Console::default();
+        let mut s = Script::default();
+        s.answer("A", "x");
+        // The KS10 prints "AB": the prompt matches at "A", and "B" is
+        // still to come.
+        c.doorbell(0);
+        c.poll(OUTPUT_DELAY, words(0o400 | 0o101, 0));
+        s.tick(OUTPUT_DELAY, &mut c);
+        assert_eq!(s.due(&c), Some(OUTPUT_DELAY + QUIET));
+        c.doorbell(OUTPUT_DELAY + 10);
+        assert!(s.due(&c).is_some_and(|t| t >= 2 * OUTPUT_DELAY + 10));
+        s.tick(2 * OUTPUT_DELAY, &mut c);
+        c.poll(2 * OUTPUT_DELAY + 10, words(0o400 | 0o102, 0));
+        assert_eq!(c.output, b"AB");
+        // The quiet time starts again at "B".
+        let b = 2 * OUTPUT_DELAY + 10;
+        s.tick(b + QUIET - 1, &mut c);
+        assert!(c.input.is_empty());
+        s.tick(b + QUIET, &mut c);
+        assert_eq!(c.input, b"x");
+        assert_eq!(s.due(&c), None);
     }
 
     #[test]
